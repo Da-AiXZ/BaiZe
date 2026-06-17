@@ -54,6 +54,27 @@ else
     ((FAIL++))
 fi
 
+# 3b. Check binary minimum OS version (must be <= 16.x for iOS 16.6 compatibility)
+echo ""
+echo "=== Binary Deployment Target ==="
+if [ -f "$EXECUTABLE" ]; then
+    MIN_OS=$(vtool -show-build "$EXECUTABLE" 2>/dev/null | grep "minos" | head -1 | sed 's/.*minos //' || echo "unknown")
+    echo "  Baize binary minimum OS version: $MIN_OS"
+    if [ "$MIN_OS" != "unknown" ]; then
+        if [[ "$MIN_OS" == 16.* ]]; then
+            echo "  ✅ Binary target iOS $MIN_OS — compatible with iOS 16.6"
+            ((PASS++))
+        else
+            echo "  ❌ CRITICAL: Binary requires iOS $MIN_OS — will crash on iOS 16.6!"
+            echo "     This means Xcode auto-raised the deployment target due to SPM packages."
+            echo "     Fix: ensure IPHONEOS_DEPLOYMENT_TARGET=16.0 is set and no xcframework requires >16.0"
+            ((FAIL++))
+        fi
+    else
+        echo "  ⚠️ Could not determine minimum OS version (vtool not available?)"
+    fi
+fi
+
 # 4. Check entitlements
 echo ""
 echo "=== Entitlements ==="

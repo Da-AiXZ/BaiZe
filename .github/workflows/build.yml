@@ -18,7 +18,7 @@ env:
 jobs:
   build:
     name: Build & Package IPA (XcodeGen)
-    runs-on: macos-14
+    runs-on: macos-13
     timeout-minutes: 45
 
     steps:
@@ -37,8 +37,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: SourcePackages
-          key: ${{ runner.os }}-spm-xcode15-${{ hashFiles('project.yml') }}
-          restore-keys: ${{ runner.os }}-spm-xcode15-
+          key: ${{ runner.os }}-spm-xcode14-${{ hashFiles('project.yml') }}
+          restore-keys: ${{ runner.os }}-spm-xcode14-
 
       - name: Configure git to use HTTPS instead of SSH
         run: git config --global url."https://github.com/".insteadOf "git@github.com:"
@@ -47,9 +47,9 @@ jobs:
         run: |
           xcodegen generate
           # Patch project format: XcodeGen 2.45 generates objectVersion 77 (Xcode 16),
-          # but macos-14 has Xcode 15.4 which requires objectVersion 60.
-          sed -i '' 's/objectVersion = [0-9]*/objectVersion = 60/' Baize.xcodeproj/project.pbxproj
-          echo "✅ Baize.xcodeproj generated (objectVersion patched to 60 for Xcode 15.4)"
+          # but macos-13 has Xcode 14.3 which requires objectVersion 56.
+          sed -i '' 's/objectVersion = [0-9]*/objectVersion = 56/' Baize.xcodeproj/project.pbxproj
+          echo "✅ Baize.xcodeproj generated (objectVersion patched to 56 for Xcode 14.3)"
 
       - name: Resolve SPM dependencies
         run: |
@@ -80,6 +80,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             DEVELOPMENT_TEAM="" \
             PRODUCT_BUNDLE_IDENTIFIER=com.baize.app \
+            IPHONEOS_DEPLOYMENT_TARGET=16.0 \
             | tee build.log | xcpretty --color
 
       - name: Build IPA from Archive
@@ -117,7 +118,7 @@ jobs:
           echo "- **Build Date**: $(date -u +"%Y-%m-%d %H:%M UTC")" >> build-report.md
           echo "- **Target**: iOS 16+ arm64 (iPad Pro M1)" >> build-report.md
           echo "- **TrollStore**: Compatible (ldid fakesigned)" >> build-report.md
-          echo "- **Build System**: XcodeGen + xcodebuild (Xcode 15.4 / iOS 17.5 SDK)" >> build-report.md
+          echo "- **Build System**: XcodeGen + xcodebuild (Xcode 14.3 / iOS 16.4 SDK)" >> build-report.md
           echo "- **Runtime Binaries**: Placeholder (Phase 2B)" >> build-report.md
           echo "- **Monaco Editor**: v0.52.2 (Phase 2D)" >> build-report.md
           cat build-report.md
