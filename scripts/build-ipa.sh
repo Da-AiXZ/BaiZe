@@ -89,9 +89,12 @@ embed_xcframework() {
     echo "  Found xcframework: $(basename "$xcframework_dir")"
 
     # Dynamically find the arm64-ios slice directory inside the xcframework.
-    # Directory names vary: ios-arm64, ios-arm64_arm64e, etc.
+    # Prefer pure arm64 slice over arm64e for compatibility with main binary.
     local slice_dir=""
-    slice_dir=$(find "$xcframework_dir" -maxdepth 1 -type d -name 'ios-arm64*' | head -n 1)
+    slice_dir=$(find "$xcframework_dir" -maxdepth 1 -type d -name 'ios-arm64' | head -n 1)
+    if [ -z "$slice_dir" ]; then
+        slice_dir=$(find "$xcframework_dir" -maxdepth 1 -type d -name 'ios-arm64*' | head -n 1)
+    fi
 
     if [ -z "$slice_dir" ]; then
         echo "  ERROR: Could not find ios-arm64 slice in $(basename "$xcframework_dir")"

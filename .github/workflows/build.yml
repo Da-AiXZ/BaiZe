@@ -18,7 +18,7 @@ env:
 jobs:
   build:
     name: Build & Package IPA (XcodeGen)
-    runs-on: macos-15
+    runs-on: macos-14
     timeout-minutes: 45
 
     steps:
@@ -114,7 +114,7 @@ jobs:
           echo "- **Build Date**: $(date -u +"%Y-%m-%d %H:%M UTC")" >> build-report.md
           echo "- **Target**: iOS 16+ arm64 (iPad Pro M1)" >> build-report.md
           echo "- **TrollStore**: Compatible (ldid fakesigned)" >> build-report.md
-          echo "- **Build System**: XcodeGen + xcodebuild" >> build-report.md
+          echo "- **Build System**: XcodeGen + xcodebuild (Xcode 15.4 / iOS 17.5 SDK)" >> build-report.md
           echo "- **Runtime Binaries**: Placeholder (Phase 2B)" >> build-report.md
           echo "- **Monaco Editor**: v0.52.2 (Phase 2D)" >> build-report.md
           cat build-report.md
