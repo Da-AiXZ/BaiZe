@@ -32,7 +32,8 @@ jobs:
 
       - name: Install build tools
         run: |
-          brew install ldid xcodegen xcpretty
+          brew install ldid xcodegen
+          gem install xcpretty
 
       - name: Cache SPM packages
         uses: actions/cache@v4
