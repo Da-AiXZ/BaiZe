@@ -9,6 +9,11 @@ OUTPUT_DIR="${2:?Usage: build-ipa.sh <xcarchive-path> <output-dir>}"
 PRODUCT_NAME="Baize"
 ENTITLEMENTS="Baize/Baize/Baize.entitlements"
 
+# Prebuilt xcframework URLs for ios_system runtime dependencies
+# (holzschu's GitHub releases — curl_ios needs libssh2, ssh_cmd needs openssl)
+LIBSSH2_XCFRAMEWORK_URL="https://github.com/holzschu/libssh2-apple/releases/download/v1.11.0/libssh2-dynamic.xcframework.zip"
+OPENSSL_XCFRAMEWORK_URL="https://github.com/holzschu/openssl-apple/releases/download/v1.1.1w/openssl-dynamic.xcframework.zip"
+
 echo "📦 Building IPA from: $ARCHIVE_PATH"
 
 # 1. Extract .app from xcarchive
@@ -37,6 +42,63 @@ for binary in node python3; do
     fi
 done
 
+# 3b. Download and embed missing ios_system runtime dependencies (libssh2, openssl)
+# These are dynamic frameworks required by curl_ios.framework and ssh_cmd.framework at runtime,
+# but SPM does not automatically embed them into the IPA.
+FRAMEWORKS_DIR="$OUTPUT_DIR/ipa/Payload/$PRODUCT_NAME.app/Frameworks"
+XCFW_TMPDIR=$(mktemp -d)
+trap 'rm -rf "$XCFW_TMPDIR"' EXIT
+
+echo ""
+echo "📦 Downloading prebuilt xcframeworks for ios_system dependencies..."
+
+# Helper: download, unzip, extract arm64-ios slice, copy .framework to Frameworks/
+embed_xcframework() {
+    local name="$1"  # e.g. libssh2 or openssl
+    local url="$2"  # download URL
+    local zip_name="$3"  # e.g. libssh2-dynamic.xcframework.zip
+
+    echo "⬇️  Downloading $name xcframework..."
+    curl -L -o "$XCFW_TMPDIR/$zip_name" "$url"
+
+    echo "📂 Unzipping $name xcframework..."
+    unzip -q "$XCFW_TMPDIR/$zip_name" -d "$XCFW_TMPDIR"
+
+    # Dynamically find the arm64-ios slice directory inside the xcframework.
+    # Directory names vary: ios-arm64, ios-arm64_arm64e, etc.
+    local xcframework_dir="$XCFW_TMPDIR/${zip_name%.zip}"
+    local slice_dir=""
+    slice_dir=$(find "$xcframework_dir" -maxdepth 1 -type d -name 'ios-arm64*' | head -n 1)
+
+    if [ -z "$slice_dir" ]; then
+        echo "❌ Could not find ios-arm64 slice in $xcframework_dir"
+        echo "   Available slices:"
+        ls -1 "$xcframework_dir" 2>/dev/null || true
+        exit 1
+    fi
+
+    local framework_dir="$slice_dir/$name.framework"
+    if [ ! -d "$framework_dir" ]; then
+        echo "❌ $name.framework not found at $framework_dir"
+        echo "   Contents of slice:"
+        ls -1 "$slice_dir" 2>/dev/null || true
+        exit 1
+    fi
+
+    echo "✅ Found $name.framework in $(basename "$slice_dir") slice"
+    cp -r "$framework_dir" "$FRAMEWORKS_DIR/"
+    echo "✅ Copied $name.framework to Frameworks/"
+}
+
+embed_xcframework "libssh2" "$LIBSSH2_XCFRAMEWORK_URL" "libssh2-dynamic.xcframework.zip"
+embed_xcframework "openssl"  "$OPENSSL_XCFRAMEWORK_URL"  "openssl-dynamic.xcframework.zip"
+
+# Cleanup xcframework temp files
+rm -rf "$XCFW_TMPDIR"
+trap - EXIT
+
+echo "✅ All ios_system runtime dependencies embedded"
+
 # 4. Fakesign main executable WITH entitlements (W14 fix: sign executable, not IPA)
 # ldid 2.1.5+ assertion fix: strip Xcode's signature first, then fakesign
 EXECUTABLE="$OUTPUT_DIR/ipa/Payload/$PRODUCT_NAME.app/$PRODUCT_NAME"
@@ -51,7 +113,11 @@ fi
 
 # 5. Fakesign runtime binaries (ad-hoc, no entitlements)
 # Only sign actual Mach-O binaries — skip placeholder shell scripts
-for binary in "$OUTPUT_DIR/ipa/Payload/$PRODUCT_NAME.app/Frameworks/"*; do
+# Covers both standalone binaries (node, python3) and .framework bundles (libssh2, openssl)
+FW_BASE="$OUTPUT_DIR/ipa/Payload/$PRODUCT_NAME.app/Frameworks"
+
+# 5a. Standalone binaries in Frameworks/
+for binary in "$FW_BASE/"*; do
     if [ -f "$binary" ] && [ -x "$binary" ]; then
         if file "$binary" | grep -q "Mach-O"; then
             ldid -S "$binary"
@@ -59,6 +125,21 @@ for binary in "$OUTPUT_DIR/ipa/Payload/$PRODUCT_NAME.app/Frameworks/"*; do
         else
             echo "⚠️ Skipping $(basename "$binary") — not a Mach-O binary (placeholder)"
         fi
+    fi
+done
+
+# 5b. Framework bundle binaries (e.g. libssh2.framework/libssh2)
+for fw_bundle in "$FW_BASE/"*.framework; do
+    if [ ! -d "$fw_bundle" ]; then
+        continue
+    fi
+    fw_name=$(basename "$fw_bundle" .framework)
+    fw_binary="$fw_bundle/$fw_name"
+    if [ -f "$fw_binary" ]; then
+        ldid -S "$fw_binary"
+        echo "✅ Fakesigned $fw_name.framework/$fw_name"
+    else
+        echo "⚠️ No binary at $fw_name.framework/$fw_name — skipping"
     fi
 done
 

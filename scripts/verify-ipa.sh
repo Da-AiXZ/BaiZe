@@ -108,6 +108,35 @@ if [ -d "$FRAMEWORKS_DIR" ]; then
             echo "⚠️ $binary NOT found in Frameworks/ (placeholder may not be embedded)"
         fi
     done
+
+    # Check ios_system runtime dependencies (libssh2, openssl)
+    # Required by curl_ios.framework and ssh_cmd.framework at runtime
+    echo ""
+    echo "--- ios_system Runtime Dependencies ---"
+    for fw_name in libssh2 openssl; do
+        fw_path="$FRAMEWORKS_DIR/$fw_name.framework"
+        if [ -d "$fw_path" ]; then
+            echo "✅ $fw_name.framework found in Frameworks/"
+            ((PASS++))
+            # Verify the framework binary exists and is a Mach-O
+            fw_binary="$fw_path/$fw_name"
+            if [ -f "$fw_binary" ]; then
+                if file "$fw_binary" | grep -q "Mach-O"; then
+                    echo "✅ $fw_name.framework/$fw_name is a valid Mach-O"
+                    ((PASS++))
+                else
+                    echo "❌ $fw_name.framework/$fw_name is NOT a Mach-O binary"
+                    ((FAIL++))
+                fi
+            else
+                echo "❌ $fw_name.framework/$fw_name binary NOT found"
+                ((FAIL++))
+            fi
+        else
+            echo "❌ $fw_name.framework NOT found in Frameworks/ (DYLD crash expected)"
+            ((FAIL++))
+        fi
+    done
 else
     echo "⚠️ Frameworks/ directory NOT found (runtime binaries not embedded)"
 fi
