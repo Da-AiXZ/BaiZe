@@ -21,7 +21,10 @@ struct KeychainService {
 
     // MARK: - Public API
 
-    /// 安全存储值到 Keychain
+    /// UserDefaults fallback key prefix（TrollStore 环境 Keychain 可能不可用）
+    private let fallbackPrefix = "baize_keychain_fallback_"
+
+    /// 安全存储值到 Keychain（失败时回退到 UserDefaults）
     /// - Parameters:
     ///   - key: Keychain 键名
     ///   - value: 要存储的值
@@ -29,49 +32,52 @@ struct KeychainService {
     func save(key: String, value: String) throws {
         do {
             try keychain.set(value, key: key)
+            // Keychain 成功，同步到 UserDefaults 作为备份
+            UserDefaults.standard.set(value, forKey: fallbackPrefix + key)
             baizeLogger.info("Keychain: saved key '\(key)'")
         } catch {
-            throw BaizeError.keychainError("存储失败: \(key) — \(error.localizedDescription)")
+            // Keychain 失败（TrollStore 常见），回退到 UserDefaults
+            baizeLogger.warning("Keychain save failed for '\(key)', using UserDefaults fallback: \(error.localizedDescription)")
+            UserDefaults.standard.set(value, forKey: fallbackPrefix + key)
         }
     }
 
-    /// 从 Keychain 读取值
+    /// 从 Keychain 读取值（失败时回退到 UserDefaults）
     /// - Parameter key: Keychain 键名
     /// - Returns: 存储的值，不存在时返回 nil
     func load(key: String) -> String? {
-        do {
-            let value = try keychain.get(key)
-            if value != nil {
-                baizeLogger.debug("Keychain: loaded key '\(key)'")
-            }
+        // 先尝试 Keychain
+        if let value = try? keychain.get(key), value != nil {
             return value
-        } catch {
-            baizeLogger.error("Keychain: load failed for '\(key)' — \(error.localizedDescription)")
-            return nil
         }
+        // Keychain 失败或无值，回退到 UserDefaults
+        let fallback = UserDefaults.standard.string(forKey: fallbackPrefix + key)
+        if fallback != nil {
+            baizeLogger.debug("Keychain: load failed for '\(key)', using UserDefaults fallback")
+        }
+        return fallback
     }
 
-    /// 从 Keychain 删除值
+    /// 从 Keychain 删除值（同时删除 UserDefaults 备份）
     /// - Parameter key: Keychain 键名
-    /// W2 fix: 使用 BaizeError.keychainError 而非 fileSystemError（语义正确映射）
     func delete(key: String) throws {
         do {
             try keychain.remove(key)
-            baizeLogger.info("Keychain: deleted key '\(key)'")
         } catch {
-            throw BaizeError.keychainError("删除失败: \(key) — \(error.localizedDescription)")
+            // Keychain 删除失败也忽略，继续清理 UserDefaults
         }
+        UserDefaults.standard.removeObject(forKey: fallbackPrefix + key)
+        baizeLogger.info("Keychain: deleted key '\(key)'")
     }
 
-    /// 检查 Keychain 中是否存在某个键
+    /// 检查 Keychain 中是否存在某个键（同时检查 UserDefaults fallback）
     /// - Parameter key: Keychain 键名
     /// - Returns: 是否存在
     func contains(key: String) -> Bool {
-        do {
-            return try keychain.contains(key)
-        } catch {
-            return false
+        if (try? keychain.contains(key)) == true {
+            return true
         }
+        return UserDefaults.standard.string(forKey: fallbackPrefix + key) != nil
     }
 
     // MARK: - API Key Convenience Methods

@@ -12,6 +12,8 @@ struct UnifiedAIConfigView: View {
     @State private var keyStatus: KeyStatus = .unknown
     @State private var isVerifying = false
     @State private var connectionResult: Bool? = nil
+    @State private var showSaveError = false
+    @State private var saveErrorMessage = ""
 
     private let keychain = KeychainService()
 
@@ -208,6 +210,11 @@ struct UnifiedAIConfigView: View {
                 keyStatus = .empty
             }
         }
+        .alert("保存失败", isPresented: $showSaveError) {
+            Button("确定", role: .cancel) { }
+        } message: {
+            Text(saveErrorMessage)
+        }
     }
 
     // MARK: - Helpers
@@ -258,10 +265,12 @@ struct UnifiedAIConfigView: View {
             keyStatus = .saved
         } catch {
             baizeLogger.error("Failed to save API key: \(error.localizedDescription)")
+            saveErrorMessage = error.localizedDescription
+            showSaveError = true
         }
     }
 
-    /// 验证当前 Provider 连接
+    /// 验证当前 Provider 连接（直接使用输入框中的 API Key，不依赖 Keychain）
     private func verifyConnection() {
         guard !apiKeyInput.isEmpty else { return }
         // Save key first if not saved
@@ -274,16 +283,56 @@ struct UnifiedAIConfigView: View {
             let success: Bool
             switch selectedProvider {
             case .openAI:
-                success = await OpenAIProvider(keychainService: keychain).verifyConnection()
+                success = await OpenAICompatibleHelper.verifyConnection(
+                    endpoint: BaizeAPI.openAIEndpoint,
+                    apiKey: apiKeyInput,
+                    model: "gpt-4o-mini"
+                )
             case .anthropic:
-                success = await AnthropicProvider(keychainService: keychain).verifyConnection()
+                success = await verifyAnthropicConnection(apiKey: apiKeyInput)
             case .openRouter:
-                success = await OpenRouterProvider(keychainService: keychain).verifyConnection()
+                success = await OpenAICompatibleHelper.verifyConnection(
+                    endpoint: BaizeAPI.openRouterEndpoint,
+                    apiKey: apiKeyInput,
+                    additionalHeaders: ["HTTP-Referer": "https://baize.app", "X-Title": "Baize"],
+                    model: "openai/gpt-4o-mini"
+                )
             }
             await MainActor.run {
                 connectionResult = success
                 isVerifying = false
             }
+        }
+    }
+
+    /// Anthropic 连接验证（Anthropic 使用不同的 API 格式）
+    private func verifyAnthropicConnection(apiKey: String) async -> Bool {
+        guard let url = URL(string: BaizeAPI.anthropicEndpoint) else { return false }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = BaizeAPI.requestTimeout
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue(BaizeAPI.anthropicVersion, forHTTPHeaderField: "anthropic-version")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "model": "claude-haiku-4-20250414",
+            "max_tokens": 1,
+            "messages": [["role": "user", "content": "hi"]],
+        ]
+
+        do {
+            let bodyData = try JSONSerialization.data(withJSONObject: body)
+            request.httpBody = bodyData
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else { return false }
+            let connected = (200...299).contains(httpResponse.statusCode)
+            apiLogger.info("Anthropic connection verification: \(connected) (status: \(httpResponse.statusCode))")
+            return connected
+        } catch {
+            apiLogger.error("Anthropic connection verification failed: \(error.localizedDescription)")
+            return false
         }
     }
 
