@@ -50,10 +50,15 @@ else
 fi
 
 # 5. Fakesign runtime binaries (ad-hoc, no entitlements)
+# Only sign actual Mach-O binaries — skip placeholder shell scripts
 for binary in "$OUTPUT_DIR/ipa/Payload/$PRODUCT_NAME.app/Frameworks/"*; do
     if [ -f "$binary" ] && [ -x "$binary" ]; then
-        ldid -S "$binary"
-        echo "✅ Fakesigned $(basename "$binary")"
+        if file "$binary" | grep -q "Mach-O"; then
+            ldid -S "$binary"
+            echo "✅ Fakesigned $(basename "$binary")"
+        else
+            echo "⚠️ Skipping $(basename "$binary") — not a Mach-O binary (placeholder)"
+        fi
     fi
 done
 
