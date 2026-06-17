@@ -13,9 +13,31 @@ actor ToolRegistry {
     // MARK: - Initialization
 
     /// W22 fix: 接受注入的 FileSystemService 和 RuntimeExecutor
-    /// 避免在 registerDefaultTools 中创建新的独立实例
+    /// Swift 6 模式下 actor init 是 nonisolated，不能调 actor-isolated 方法
+    /// 改用 static 工厂方法构建工具字典，init 直接赋值给 self.tools
     init(fileSystemService: FileSystemService? = nil, runtimeExecutor: RuntimeExecutor? = nil) {
-        registerDefaultTools(fileSystemService: fileSystemService, runtimeExecutor: runtimeExecutor)
+        self.tools = Self.buildDefaultTools(
+            fs: fileSystemService ?? FileSystemService(rootPath: BaizePath.projectRoot),
+            rt: runtimeExecutor ?? RuntimeExecutor()
+        )
+    }
+
+    /// 静态工厂 — 构建默认工具字典，供 init 使用
+    /// Swift 6 模式下 actor init 不能直接调 actor-isolated 方法
+    private static func buildDefaultTools(fs: FileSystemService, rt: RuntimeExecutor) -> [String: Tool] {
+        var tools: [String: Tool] = [:]
+        // 文件操作工具 (6 个)
+        let readFile = ReadFileTool(fileSystemService: fs);    tools[readFile.name] = readFile
+        let writeFile = WriteFileTool(fileSystemService: fs);  tools[writeFile.name] = writeFile
+        let editFile = EditFileTool(fileSystemService: fs);    tools[editFile.name] = editFile
+        let listDir = ListDirectoryTool(fileSystemService: fs); tools[listDir.name] = listDir
+        let searchFiles = SearchFilesTool(fileSystemService: fs); tools[searchFiles.name] = searchFiles
+        let searchContent = SearchContentTool(fileSystemService: fs); tools[searchContent.name] = searchContent
+        // 运行时工具 (3 个)
+        let execCmd = ExecuteCommandTool(runtimeExecutor: rt);  tools[execCmd.name] = execCmd
+        let runNode = RunNodeTool(runtimeExecutor: rt);         tools[runNode.name] = runNode
+        let runPython = RunPythonTool(runtimeExecutor: rt);     tools[runPython.name] = runPython
+        return tools
     }
 
     // MARK: - Registration
@@ -78,28 +100,4 @@ actor ToolRegistry {
         tools[name] != nil
     }
 
-    // MARK: - Default Tool Registration
-
-    /// 注册 Phase 1 默认 9 个工具
-    /// W22 fix: 使用注入的共享服务实例，避免创建独立实例导致状态丢失
-    /// W15/W21 fix: fallback 时使用 BaizePath.projectRoot 作为 rootPath（而非空构造器）
-    private func registerDefaultTools(fileSystemService: FileSystemService?, runtimeExecutor: RuntimeExecutor?) {
-        let fsService = fileSystemService ?? FileSystemService(rootPath: BaizePath.projectRoot)
-        let runtime = runtimeExecutor ?? RuntimeExecutor()
-
-        // 文件操作工具（6 个）
-        register(tool: ReadFileTool(fileSystemService: fsService))
-        register(tool: WriteFileTool(fileSystemService: fsService))
-        register(tool: EditFileTool(fileSystemService: fsService))
-        register(tool: ListDirectoryTool(fileSystemService: fsService))
-        register(tool: SearchFilesTool(fileSystemService: fsService))
-        register(tool: SearchContentTool(fileSystemService: fsService))
-
-        // 运行时执行工具（3 个）
-        register(tool: ExecuteCommandTool(runtimeExecutor: runtime))
-        register(tool: RunNodeTool(runtimeExecutor: runtime))
-        register(tool: RunPythonTool(runtimeExecutor: runtime))
-
-        toolLogger.info("Default 9 tools registered")
-    }
 }

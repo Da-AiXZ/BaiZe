@@ -9,8 +9,8 @@ struct BaizeApp: App {
 
     // MARK: - Dependency Injection (T05)
 
-    /// Keychain 安全存储服务
-    private let keychainService = KeychainService()
+    /// Keychain 安全存储服务（init 中赋值，去掉默认值避免 let 双重初始化）
+    private let keychainService: KeychainService
 
     /// API Gateway（actor）
     private let apiGateway: APIGateway

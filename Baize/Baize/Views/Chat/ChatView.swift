@@ -108,7 +108,7 @@ struct ChatView: View {
             runtimeExecutor: runtimeExecutor
         )
 
-        let eventStream = agentLoop.run(userMessage: userMessage)
+        let eventStream = try await agentLoop.run(userMessage: userMessage)
 
         do {
             for try await event in eventStream {
