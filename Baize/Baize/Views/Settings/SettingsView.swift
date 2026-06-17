@@ -56,7 +56,7 @@ struct SettingsView: View {
             }
             .listStyle(.insetGrouped)
             .navigationTitle("设置")
-            .navigationDestination(item: $selectedSection) { section in
+            .navigationDestination(for: SettingsSection.self) { section in
                 SettingsDetail(section: section, appState: appState)
             }
         }
