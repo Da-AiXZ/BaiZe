@@ -112,7 +112,8 @@ embed_xcframework() {
     cp -r "$framework_dir" "$FRAMEWORKS_DIR/"
     echo "  Copied $name.framework to Frameworks/"
 
-    # Clean up zip to save disk space
+    # Clean up extracted files to avoid interference with subsequent xcframeworks
+    rm -rf "$xcframework_dir"
     rm -f "$zip_path"
 }
 
