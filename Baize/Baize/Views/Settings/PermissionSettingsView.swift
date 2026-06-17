@@ -60,6 +60,7 @@ struct PermissionSettingsView: View {
         .alert("确认开启绕过模式", isPresented: $isShowingBypassConfirmation) {
             Button("取消", role: .cancel) { selectedMode = BaizePermission.defaultMode }
             Button("确认开启", role: .destructive) {
+                selectedMode = .bypass
                 appState.permissionMode = .bypass
                 // W4 fix: 同步权限模式变更到 PermissionEngine actor
                 if let engine = appState.permissionEngine {

@@ -129,7 +129,17 @@ class FileSystemService: @unchecked Sendable {
     func listDirectory(at path: String? = nil) throws -> [FileItem] {
         let dirPath = path ?? rootPath
         guard fileManager.fileExists(atPath: dirPath) else {
-            throw BaizeError.fileSystemError("目录不存在: \(dirPath)")
+            // Try to create the directory first
+            do {
+                try fileManager.ensureDirectoryExists(atPath: dirPath)
+            } catch {
+                throw BaizeError.fileSystemError("目录不存在且无法创建: \(dirPath)")
+            }
+            // If creation succeeded but directory is still not there (edge case)
+            guard fileManager.fileExists(atPath: dirPath) else {
+                throw BaizeError.fileSystemError("目录不存在: \(dirPath)")
+            }
+            return [] // Return empty list for newly created directory
         }
 
         do {

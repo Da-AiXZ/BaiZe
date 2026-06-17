@@ -101,7 +101,8 @@ struct OpenRouterProvider: LLMProvider {
         return await OpenAICompatibleHelper.verifyConnection(
             endpoint: BaizeAPI.openRouterEndpoint,
             apiKey: apiKey,
-            additionalHeaders: additionalHeaders
+            additionalHeaders: additionalHeaders,
+            model: "openai/gpt-4o-mini"  // Valid OpenRouter model ID
         )
     }
 

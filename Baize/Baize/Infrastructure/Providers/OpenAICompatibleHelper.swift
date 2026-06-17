@@ -148,11 +148,13 @@ enum OpenAICompatibleHelper {
     ///   - endpoint: API 端点 URL
     ///   - apiKey: API Key
     ///   - additionalHeaders: 额外 HTTP 请求头
+    ///   - model: 验证时使用的模型名称（默认 gpt-4o-mini，OpenRouter 需传 openai/gpt-4o-mini）
     /// - Returns: 连接是否成功
     static func verifyConnection(
         endpoint: String,
         apiKey: String,
-        additionalHeaders: [String: String] = [:]
+        additionalHeaders: [String: String] = [:],
+        model: String = "gpt-4o-mini"
     ) async -> Bool {
         guard let url = URL(string: endpoint) else {
             apiLogger.error("Invalid endpoint URL for verification: \(endpoint)")
@@ -171,7 +173,7 @@ enum OpenAICompatibleHelper {
 
         // 发送最小请求体验证连接
         let body: [String: Any] = [
-            "model": "gpt-4o-mini",
+            "model": model,
             "messages": [["role": "user", "content": "hi"]],
             "max_tokens": 1,
         ]

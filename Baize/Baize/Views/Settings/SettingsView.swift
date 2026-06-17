@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// 设置页完整视图 — T05 集成实际的 API 配置和权限模式设置
-/// 链接到 APIKeySettingsView 和 PermissionSettingsView（不再使用占位）
+/// 设置页完整视图 — 合并 API Key + 模型选择为统一的 AI 模型配置入口
+/// 链接到 UnifiedAIConfigView 和 PermissionSettingsView
 struct SettingsView: View {
     @ObservedObject var appState: AppState
     @State private var selectedSection: SettingsSection?
@@ -9,13 +9,13 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
-                // API 配置 → 完整的 APIKeySettingsView
+                // AI 模型配置（合并 API Key + 默认模型）
                 SettingsSectionLink(
-                    icon: "key.fill",
-                    iconColor: .yellow,
-                    title: "API 配置",
-                    subtitle: apiKeySubtitle,
-                    section: .apiKey
+                    icon: "brain.head.profile.fill",
+                    iconColor: .purple,
+                    title: "AI 模型配置",
+                    subtitle: aiModelSubtitle,
+                    section: .aiModel
                 )
 
                 // 权限模式 → 完整的 PermissionSettingsView
@@ -25,15 +25,6 @@ struct SettingsView: View {
                     title: "权限模式",
                     subtitle: appState.permissionMode.displayName,
                     section: .permission
-                )
-
-                // 默认模型
-                SettingsSectionLink(
-                    icon: "cpu",
-                    iconColor: .purple,
-                    title: "默认模型",
-                    subtitle: "当前: \(appState.activeProvider.displayName) / \(appState.activeModel)",
-                    section: .model
                 )
 
                 // 存储与运行时
@@ -62,16 +53,15 @@ struct SettingsView: View {
         }
     }
 
-    /// API Key 状态描述
-    private var apiKeySubtitle: String {
+    /// AI 模型配置状态描述（Provider/Model + Key 配置情况）
+    private var aiModelSubtitle: String {
         let keychain = KeychainService()
         var configured: [String] = []
         if keychain.loadOpenAIKey() != nil { configured.append("OpenAI") }
         if keychain.loadAnthropicKey() != nil { configured.append("Anthropic") }
         if keychain.loadOpenRouterKey() != nil { configured.append("OpenRouter") }
-
-        if configured.isEmpty { return "未配置任何 API Key" }
-        return "已配置: " + configured.joined(separator: ", ")
+        let keyStatus = configured.isEmpty ? "未配置 Key" : "Key: " + configured.joined(separator: ", ")
+        return "\(appState.activeProvider.displayName) / \(appState.activeModel)  |  \(keyStatus)"
     }
 
     /// 运行时状态描述
@@ -87,9 +77,8 @@ struct SettingsView: View {
 
 /// 设置页面分区
 enum SettingsSection: Hashable, Identifiable {
-    case apiKey
+    case aiModel    // merged: API key + model selection
     case permission
-    case model
     case storage
     case about
 
@@ -97,9 +86,8 @@ enum SettingsSection: Hashable, Identifiable {
 
     var title: String {
         switch self {
-        case .apiKey: return "API 配置"
+        case .aiModel: return "AI 模型配置"
         case .permission: return "权限模式"
-        case .model: return "默认模型"
         case .storage: return "存储与运行时"
         case .about: return "关于白泽"
         }
@@ -136,23 +124,20 @@ private struct SettingsSectionLink: View {
     }
 }
 
-// MARK: - Settings Detail (T05: 集成实际设置视图)
+// MARK: - Settings Detail
 
-/// 设置详情页 — T05 集成 APIKeySettingsView 和 PermissionSettingsView
+/// 设置详情页 — 集成 UnifiedAIConfigView 和 PermissionSettingsView
 private struct SettingsDetail: View {
     let section: SettingsSection
     @ObservedObject var appState: AppState
 
     var body: some View {
         switch section {
-        case .apiKey:
-            APIKeySettingsView()
+        case .aiModel:
+            UnifiedAIConfigView(appState: appState)
 
         case .permission:
             PermissionSettingsView(appState: appState)
-
-        case .model:
-            ModelSettingsView(appState: appState)
 
         case .storage:
             StorageSettingsPlaceholder()

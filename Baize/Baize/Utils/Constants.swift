@@ -48,8 +48,8 @@ enum BaizeAPI {
     /// Anthropic API 版本号
     static let anthropicVersion = "2023-06-01"
 
-    /// 默认模型（Phase 1 仅支持 gpt-4o）
-    static let defaultModel = "gpt-4o"
+    /// 默认模型
+    static let defaultModel = "gpt-4.1"
 
     /// API Key Keychain 存储键名
     static let openAIKeyKeychainKey = "com.baize.openai-api-key"
@@ -78,27 +78,45 @@ enum BaizeModels {
 
     /// OpenAI 推荐模型
     enum OpenAI {
+        static let gpt41 = ModelInfo(
+            id: "gpt-4.1",
+            displayName: "GPT-4.1",
+            provider: "openai",
+            contextWindow: 1_000_000
+        )
+        static let gpt41Mini = ModelInfo(
+            id: "gpt-4.1-mini",
+            displayName: "GPT-4.1 Mini",
+            provider: "openai",
+            contextWindow: 1_000_000
+        )
+        static let gpt41Nano = ModelInfo(
+            id: "gpt-4.1-nano",
+            displayName: "GPT-4.1 Nano",
+            provider: "openai",
+            contextWindow: 1_000_000
+        )
+        static let o3 = ModelInfo(
+            id: "o3",
+            displayName: "O3",
+            provider: "openai",
+            contextWindow: 200_000
+        )
+        static let o4Mini = ModelInfo(
+            id: "o4-mini",
+            displayName: "O4 Mini",
+            provider: "openai",
+            contextWindow: 200_000
+        )
         static let gpt4o = ModelInfo(
             id: "gpt-4o",
             displayName: "GPT-4o",
             provider: "openai",
             contextWindow: 128_000
         )
-        static let gpt4oMini = ModelInfo(
-            id: "gpt-4o-mini",
-            displayName: "GPT-4o Mini",
-            provider: "openai",
-            contextWindow: 128_000
-        )
-        static let gpt4Turbo = ModelInfo(
-            id: "gpt-4-turbo",
-            displayName: "GPT-4 Turbo",
-            provider: "openai",
-            contextWindow: 128_000
-        )
 
         /// 所有可用模型
-        static let allModels: [ModelInfo] = [gpt4o, gpt4oMini, gpt4Turbo]
+        static let allModels: [ModelInfo] = [gpt41, gpt41Mini, o4Mini, o3, gpt4o, gpt41Nano]
     }
 
     // MARK: Anthropic Models
@@ -111,6 +129,12 @@ enum BaizeModels {
             provider: "anthropic",
             contextWindow: 200_000
         )
+        static let claudeOpus4 = ModelInfo(
+            id: "claude-opus-4-20250514",
+            displayName: "Claude Opus 4",
+            provider: "anthropic",
+            contextWindow: 200_000
+        )
         static let claudeHaiku4 = ModelInfo(
             id: "claude-haiku-4-20250414",
             displayName: "Claude Haiku 4",
@@ -119,13 +143,49 @@ enum BaizeModels {
         )
 
         /// 所有可用模型
-        static let allModels: [ModelInfo] = [claudeSonnet4, claudeHaiku4]
+        static let allModels: [ModelInfo] = [claudeSonnet4, claudeOpus4, claudeHaiku4]
     }
 
     // MARK: OpenRouter Models
 
     /// OpenRouter 推荐模型
     enum OpenRouter {
+        static let deepseekV31 = ModelInfo(
+            id: "deepseek/deepseek-chat-v3.1",
+            displayName: "DeepSeek V3.1",
+            provider: "openrouter",
+            contextWindow: 128_000
+        )
+        static let deepseekR1_0528 = ModelInfo(
+            id: "deepseek/deepseek-r1-0528",
+            displayName: "DeepSeek R1 (0528)",
+            provider: "openrouter",
+            contextWindow: 128_000
+        )
+        static let gpt41 = ModelInfo(
+            id: "openai/gpt-4.1",
+            displayName: "GPT-4.1 (OpenRouter)",
+            provider: "openrouter",
+            contextWindow: 1_000_000
+        )
+        static let claudeOpus4 = ModelInfo(
+            id: "anthropic/claude-opus-4-20250514",
+            displayName: "Claude Opus 4 (OpenRouter)",
+            provider: "openrouter",
+            contextWindow: 200_000
+        )
+        static let o4Mini = ModelInfo(
+            id: "openai/o4-mini",
+            displayName: "O4 Mini (OpenRouter)",
+            provider: "openrouter",
+            contextWindow: 200_000
+        )
+        static let qwen3_32b_instruct = ModelInfo(
+            id: "qwen/qwen3-32b-instruct",
+            displayName: "Qwen3 32B Instruct",
+            provider: "openrouter",
+            contextWindow: 128_000
+        )
         static let deepseekChat = ModelInfo(
             id: "deepseek/deepseek-chat",
             displayName: "DeepSeek V3",
@@ -219,6 +279,7 @@ enum BaizeModels {
 
         /// 所有可用模型
         static let allModels: [ModelInfo] = [
+            deepseekV31, deepseekR1_0528, gpt41, claudeOpus4, o4Mini, qwen3_32b_instruct,
             deepseekChat, gemini25Flash, gemini25Pro, llama4Maverick,
             mistralLarge, claudeSonnet4, gpt4o, qwen3_235b,
             deepseekR1, claudeHaiku4, gpt4oMini, llama4Scout,

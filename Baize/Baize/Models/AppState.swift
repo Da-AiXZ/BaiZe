@@ -155,11 +155,28 @@ class AppState: ObservableObject {
     }
 
     /// 确保 BaiZe 项目目录存在
+    /// 优先尝试 TrollStore no-sandbox 路径，失败则回退到 App 沙箱 Documents 目录
     private func ensureProjectDirectoryExists() {
         let fm = FileManager.default
-        try? fm.ensureDirectoryExists(atPath: BaizePath.projectRoot)
-        try? fm.ensureDirectoryExists(atPath: BaizePath.internalData)
-        try? fm.ensureDirectoryExists(atPath: BaizePath.conversations)
+
+        // Try creating the TrollStore no-sandbox path first
+        do {
+            try fm.ensureDirectoryExists(atPath: BaizePath.projectRoot)
+            try fm.ensureDirectoryExists(atPath: BaizePath.internalData)
+            try fm.ensureDirectoryExists(atPath: BaizePath.conversations)
+        } catch {
+            // Fallback: use the app's Documents directory (sandboxed but always works)
+            let docsDir = fm.urls(for: .documentDirectory, in: .userDomainMask).first!.path
+            let fallbackRoot = (docsDir as NSString).appendingPathComponent("Baize")
+            let fallbackInternal = (fallbackRoot as NSString).appendingPathComponent(".baize")
+            let fallbackConv = (fallbackInternal as NSString).appendingPathComponent("conversations")
+            try? fm.ensureDirectoryExists(atPath: fallbackRoot)
+            try? fm.ensureDirectoryExists(atPath: fallbackInternal)
+            try? fm.ensureDirectoryExists(atPath: fallbackConv)
+            // Update the current project path to the fallback
+            currentProjectPath = fallbackRoot + "/"
+            baizeLogger.info("Using fallback project directory: \(currentProjectPath)")
+        }
     }
 }
 
