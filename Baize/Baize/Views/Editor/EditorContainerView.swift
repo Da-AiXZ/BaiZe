@@ -1,0 +1,97 @@
+import SwiftUI
+import WebKit
+
+/// 编辑器容器视图 — 集成 MonacoBridge (WKWebView)
+/// 完整实现：Monaco Editor 加载 + 文件打开/编辑 + 内容变更检测 + 保存
+/// 使用 @StateObject 管理 MonacoBridge 和 EditorState
+struct EditorContainerView: View {
+    @ObservedObject var appState: AppState
+    @StateObject private var editorState = EditorState()
+    @StateObject private var monacoBridge = MonacoBridge()
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // 多 Tab 栏
+            EditorTabBar(editorState: editorState)
+
+            // Monaco Editor WebView
+            MonacoEditorWebView(monacoBridge: monacoBridge, editorState: editorState, appState: appState)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.baizeEditorBackground)
+        .onAppear {
+            setupMonacoBridge()
+        }
+        .onChange(of: appState.selectedFilePath) { newPath in
+            if let path = newPath {
+                openFileInEditor(path: path)
+            }
+        }
+    }
+
+    // MARK: - Setup
+
+    /// 初始化 MonacoBridge 和 EditorState 的关联
+    private func setupMonacoBridge() {
+        editorState.monacoBridge = monacoBridge
+
+        // 设置内容变更回调
+        monacoBridge.onContentChanged = { content in
+            editorState.updateContent(content)
+        }
+
+        // 设置保存回调
+        monacoBridge.onSave = {
+            saveCurrentFile()
+        }
+
+        // 加载 Monaco Editor
+        monacoBridge.loadEditor()
+    }
+
+    /// 打开文件到编辑器
+    private func openFileInEditor(path: String) {
+        let fileSystemService = FileSystemService(rootPath: appState.currentProjectPath)
+        guard let content = try? fileSystemService.readFile(at: path) else {
+            appState.showError("无法读取文件: \(path.fileName)")
+            return
+        }
+
+        editorState.openFile(path: path, content: content)
+    }
+
+    /// 保存当前文件
+    private func saveCurrentFile() {
+        guard let filePath = editorState.activeTab?.filePath else { return }
+
+        Task {
+            let content = await monacoBridge.getContent()
+            let fileSystemService = FileSystemService(rootPath: appState.currentProjectPath)
+            do {
+                try fileSystemService.writeFile(at: filePath, content: content)
+                editorState.markSaved()
+                uiLogger.info("File saved: \(filePath.fileName)")
+            } catch {
+                appState.showError("保存失败: \(error.localizedDescription)")
+            }
+        }
+    }
+}
+
+// MARK: - Monaco Editor WebView (UIViewRepresentable)
+
+/// WKWebView 容器 — 将 MonacoBridge 的 WKWebView 嵌入 SwiftUI
+struct MonacoEditorWebView: UIViewRepresentable {
+    @ObservedObject var monacoBridge: MonacoBridge
+    @ObservedObject var editorState: EditorState
+    @ObservedObject var appState: AppState
+
+    func makeUIView(context: Context) -> WKWebView {
+        monacoBridge.createWebView()
+    }
+
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        // Monaco Bridge 通过 evaluateJavaScript 管理 WebView 内容
+        // 无需在此处进行手动更新
+    }
+}

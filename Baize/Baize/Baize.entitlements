@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- TrollStore: Disable App Sandbox for full filesystem access -->
+    <key>com.apple.private.security.no-sandbox</key>
+    <true/>
+
+    <!-- TrollStore: Platform application entitlement for system-level privileges -->
+    <!-- Enables posix_spawn, extended file system access, and platform-level APIs -->
+    <key>com.apple.private.security.platform-application</key>
+    <true/>
+
+    <!-- TrollStore: Access to App Data Containers outside sandbox -->
+    <key>com.apple.developer.storage.AppDataContainers</key>
+    <true/>
+
+    <!-- Allow arbitrary network loads (for OpenAI API SSE streaming) -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!-- Allow network server (for potential local WebSocket IPC between runtimes) -->
+    <key>com.apple.security.network.server</key>
+    <true/>
+
+    <!-- Keychain access group for secure API key storage -->
+    <key>keychain-access-groups</key>
+    <array>
+        <string>com.baize.app</string>
+    </array>
+
+    <!-- Extended file system access (TrollStore no-sandbox covers most, but explicit is better) -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+
+    <!-- Allow document access in-place (for opening project files) -->
+    <key>com.apple.security.files.downloads.read-write</key>
+    <true/>
+
+    <!-- Disable JIT restriction assertion (Node.js --jitless handles this) -->
+    <key>com.apple.private.security.no-jit</key>
+    <false/>
+
+    <!-- Process execution: posix_spawn requires signed binaries in App Bundle -->
+    <!-- TrollStore platform-application entitlement enables posix_spawn -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <false/>
+</dict>
+</plist>

@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Baize Monaco Editor</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; overflow: hidden; background: #1E1E1E; }
+        #container { width: 100%; height: 100%; }
+    </style>
+
+    <!-- Monaco Editor will be loaded from bundled resources in production -->
+    <!-- Phase 1: This HTML provides the Monaco Bridge JavaScript API -->
+    <!-- Phase 2: Replace with full Monaco Editor bundle (monaco-editor npm package) -->
+
+    <script>
+        // =============================================
+        // Baize Monaco Bridge JavaScript API
+        // =============================================
+        // This script provides the interface between Swift (WKWebView)
+        // and Monaco Editor. Swift calls these functions via evaluateJavaScript,
+        // and Monaco calls back via window.webkit.messageHandlers.
+
+        // State
+        let state = {
+            content: '',
+            language: 'plaintext',
+            isReady: false
+        };
+
+        // =============================================
+        // API Functions (called by Swift via evaluateJavaScript)
+        // =============================================
+
+        /**
+         * Open a file in the editor
+         * @param {string} content - File content (escaped)
+         * @param {string} language - Monaco language ID
+         */
+        function monacoOpenFile(content, language) {
+            state.content = unescapeContent(content);
+            state.language = language;
+            updateEditor();
+            notifyReady();
+        }
+
+        /**
+         * Get current editor content
+         * @returns {string} Current content
+         */
+        function monacoGetContent() {
+            return state.content;
+        }
+
+        /**
+         * Set editor content
+         * @param {string} content - New content (escaped)
+         */
+        function monacoSetContent(content) {
+            state.content = unescapeContent(content);
+            updateEditor();
+            notifyContentChanged();
+        }
+
+        /**
+         * Set editor language mode
+         * @param {string} language - Monaco language ID
+         */
+        function monacoSetLanguage(language) {
+            state.language = language;
+            // Phase 1: No Monaco instance yet, just update state
+        }
+
+        // =============================================
+        // Internal Helpers
+        // =============================================
+
+        /**
+         * Unescape content from Swift's escapeForJavaScript
+         */
+        function unescapeContent(escaped) {
+            if (typeof escaped !== 'string') return '';
+            return escaped
+                .replace(/\\n/g, '\n')
+                .replace(/\\r/g, '\r')
+                .replace(/\\t/g, '\t')
+                .replace(/\\'/g, "'")
+                .replace(/\\\\/g, '\\');
+        }
+
+        /**
+         * Update the editor display with current state
+         */
+        function updateEditor() {
+            const display = document.getElementById('editor-display');
+            if (display) {
+                display.textContent = state.content;
+            }
+        }
+
+        /**
+         * Notify Swift that content has changed
+         */
+        function notifyContentChanged() {
+            try {
+                window.webkit.messageHandlers.contentChanged.postMessage(state.content);
+            } catch (e) {
+                console.error('Failed to notify contentChanged:', e);
+            }
+        }
+
+        /**
+         * Notify Swift that editor is ready
+         */
+        function notifyReady() {
+            try {
+                window.webkit.messageHandlers.editorReady.postMessage('');
+            } catch (e) {
+                console.error('Failed to notify editorReady:', e);
+            }
+        }
+
+        /**
+         * Handle keyboard shortcuts (Cmd+S for save)
+         */
+        document.addEventListener('keydown', function(e) {
+            // Cmd+S or Ctrl+S → Save
+            if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+                e.preventDefault();
+                try {
+                    window.webkit.messageHandlers.save.postMessage('');
+                } catch (err) {
+                    console.error('Failed to notify save:', err);
+                }
+            }
+        });
+
+        // Notify Swift that the editor page has loaded
+        try {
+            window.webkit.messageHandlers.editorReady.postMessage('');
+        } catch (e) {
+            // Will be called again when content is set
+        }
+    </script>
+</head>
+<body>
+    <div id="container">
+        <!-- Phase 1: Simple text display placeholder -->
+        <!-- Phase 2: Monaco Editor will be loaded here via AMD require -->
+        <div id="editor-display" style="
+            font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.5;
+            padding: 16px;
+            color: #D4D4D4;
+            white-space: pre;
+            overflow: auto;
+            width: 100%;
+            height: 100%;
+        "></div>
+    </div>
+</body>
+</html>
