@@ -175,7 +175,7 @@ class AppState: ObservableObject {
             try? fm.ensureDirectoryExists(atPath: fallbackConv)
             // Update the current project path to the fallback
             currentProjectPath = fallbackRoot + "/"
-            baizeLogger.info("Using fallback project directory: \(currentProjectPath)")
+            baizeLogger.info("Using fallback project directory: \(self.currentProjectPath)")
         }
     }
 }
