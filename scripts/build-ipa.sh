@@ -38,12 +38,15 @@ for binary in node python3; do
 done
 
 # 4. Fakesign main executable WITH entitlements (W14 fix: sign executable, not IPA)
+# ldid 2.1.5+ assertion fix: strip Xcode's signature first, then fakesign
+EXECUTABLE="$OUTPUT_DIR/ipa/Payload/$PRODUCT_NAME.app/$PRODUCT_NAME"
+codesign --remove-signature "$EXECUTABLE" 2>/dev/null || true
 if [ -f "$ENTITLEMENTS" ]; then
-    ldid -S"$ENTITLEMENTS" "$OUTPUT_DIR/ipa/Payload/$PRODUCT_NAME.app/$PRODUCT_NAME"
+    ldid -S"$ENTITLEMENTS" "$EXECUTABLE"
     echo "✅ Fakesigned main executable with entitlements"
 else
     echo "⚠️ Entitlements file not found at $ENTITLEMENTS, using ad-hoc sign"
-    ldid -S "$OUTPUT_DIR/ipa/Payload/$PRODUCT_NAME.app/$PRODUCT_NAME"
+    ldid -S "$EXECUTABLE"
 fi
 
 # 5. Fakesign runtime binaries (ad-hoc, no entitlements)
