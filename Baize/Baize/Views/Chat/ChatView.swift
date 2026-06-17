@@ -38,6 +38,7 @@ struct ChatView: View {
             // 输入框
             ChatInputView(
                 text: $inputText,
+                isRunning: appState.isAgentRunning,
                 onSend: { sendMessage($0) }
             )
         }
@@ -49,6 +50,11 @@ struct ChatView: View {
 
     private func sendMessage(_ message: String) {
         guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        // W9 fix: 防止重复提交 — 如果 Agent 已经在运行，拒绝新消息
+        guard !appState.isAgentRunning else {
+            baizeLogger.warning("Attempted to send message while agent is running, ignoring")
+            return
+        }
 
         // 添加用户消息
         displayMessages.append(DisplayMessage(
@@ -60,6 +66,9 @@ struct ChatView: View {
         inputText = ""
         isStreaming = true
         streamingText = ""
+
+        // W9 fix: 在 Task 之前同步设置 isAgentRunning = true，防止时序竞争
+        appState.isAgentRunning = true
 
         // 启动 Agent Loop（异步任务）
         Task {
@@ -113,11 +122,17 @@ struct ChatView: View {
                     timestamp: Date()
                 ))
                 isStreaming = false
+                // W9 fix: 错误时也重置 isAgentRunning，防止按钮永久禁用
+                appState.isAgentRunning = false
             }
         }
 
         await MainActor.run {
             isStreaming = false
+            // W9 fix: 正常结束时也确保重置 isAgentRunning（双重保险）
+            // 注意：.completed 事件已经设置了 isAgentRunning = false，
+            // 但如果 stream 未正常 yield .completed（如被取消），这里兜底重置
+            appState.isAgentRunning = false
         }
     }
 

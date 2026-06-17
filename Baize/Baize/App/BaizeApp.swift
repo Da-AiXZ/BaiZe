@@ -27,7 +27,7 @@ struct BaizeApp: App {
     /// Context Manager
     private let contextManager: ContextManager
 
-    /// Conversation Store
+    /// Conversation Store（actor，W1 fix: 防止并发数据竞争）
     private let conversationStore: ConversationStore
 
     /// File System Service

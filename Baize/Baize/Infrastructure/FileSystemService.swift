@@ -67,30 +67,57 @@ class FileSystemService: @unchecked Sendable {
     /// 精确字符串替换编辑（类似 Claude Code 的 edit_file）
     /// - Parameters:
     ///   - path: 文件路径
-    ///   - oldString: 要替换的原始字符串（必须精确匹配）
+    ///   - oldString: 要替换的原始字符串（必须精确匹配且唯一）
     ///   - newString: 替换后的新字符串
     /// - Returns: 是否成功找到并替换（true=替换成功，false=未找到匹配）
+    /// W10 fix: 使用 NSString 精确范围搜索，多处匹配时返回错误而非全局替换
     func editFile(at path: String, oldString: String, newString: String) throws -> Bool {
+        guard !oldString.isEmpty else {
+            throw BaizeError.fileSystemError("oldString 不能为空字符串")
+        }
         guard fileManager.fileExists(atPath: path) else {
             throw BaizeError.fileSystemError("文件不存在: \(path)")
         }
 
         let content = try readFile(at: path)
+        let nsContent = content as NSString
 
-        guard content.contains(oldString) else {
+        // 1. 搜索所有匹配范围
+        var matchRanges: [NSRange] = []
+        var searchRange = NSRange(location: 0, length: nsContent.length)
+
+        while searchRange.location < nsContent.length {
+            let foundRange = nsContent.range(of: oldString, options: [], range: searchRange)
+            if foundRange.location == NSNotFound {
+                break
+            }
+            matchRanges.append(foundRange)
+            // 移动搜索起点到当前匹配之后，继续搜索
+            searchRange = NSRange(
+                location: foundRange.location + foundRange.length,
+                length: nsContent.length - (foundRange.location + foundRange.length)
+            )
+        }
+
+        // 2. 无匹配 → 返回 false
+        if matchRanges.isEmpty {
             baizeLogger.warning("Edit file: oldString not found in \(path.fileName)")
             return false
         }
 
-        // 检查 oldString 是否唯一（避免多处匹配导致意外替换）
-        let occurrences = content.components(separatedBy: oldString).count - 1
-        if occurrences > 1 {
-            baizeLogger.warning("Edit file: oldString has \(occurrences) matches in \(path.fileName), replacing all")
+        // 3. 多处匹配 → 返回错误，要求用户提供更多上下文（Claude Code 行为）
+        if matchRanges.count > 1 {
+            baizeLogger.error("Edit file: oldString has \(matchRanges.count) matches in \(path.fileName), refusing ambiguous edit")
+            throw BaizeError.fileSystemError(
+                "oldString 在文件 \(path.fileName) 中有 \(matchRanges.count) 处匹配，请提供更多上下文使其唯一"
+            )
         }
 
-        let newContent = content.replacingOccurrences(of: oldString, with: newString)
-        try writeFile(at: path, content: newContent)
-        baizeLogger.info("Edit file: \(path.fileName) — replaced \(occurrences) occurrence(s)")
+        // 4. 单处匹配 → 使用 replaceCharacters(in:with:) 精确替换该位置
+        let targetRange = matchRanges[0]
+        let newContent = nsContent.replacingCharacters(in: targetRange, with: newString)
+        try writeFile(at: path, content: newContent as String)
+        baizeLogger.info("Edit file: \(path.fileName) — replaced 1 occurrence at position \(targetRange.location)")
         return true
     }
 

@@ -81,7 +81,7 @@ actor AgentLoop {
 
                     // 3. 循环结束，保存对话
                     session.updatedAt = Date()
-                    try conversationStore.save(session: session)
+                    try await conversationStore.save(session: session)
 
                     // 4. 发送完成事件
                     continuation.yield(.completed)

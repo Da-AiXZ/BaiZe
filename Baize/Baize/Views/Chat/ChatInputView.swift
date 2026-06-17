@@ -3,8 +3,11 @@ import UIKit
 
 /// 对话输入框视图 — 支持多行输入 + 发送按钮
 /// 完整实现（非占位）：TextEditor + Send Button + Shift+Enter newline (hardware keyboard)
+/// W9 fix: 添加 isRunning 参数，Agent 运行时禁用发送按钮防止重复提交
 struct ChatInputView: View {
     @Binding var text: String
+    /// Agent 是否正在运行（W9 fix: 运行时禁用发送）
+    let isRunning: Bool
     let onSend: (String) -> Void
     @State private var editorHeight: CGFloat = 36
     @FocusState private var isFocused: Bool
@@ -19,13 +22,16 @@ struct ChatInputView: View {
                 text: $text,
                 height: $editorHeight,
                 maxHeight: maxEditorHeight,
-                isFocused: $isFocused
+                isFocused: $isFocused,
+                isEditable: !isRunning
             )
 
             // 发送按钮
+            // W9 fix: isRunning 时按钮禁用（灰色、不可点击）
             SendButton(
-                isEnabled: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+                isEnabled: !isRunning && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
                 onTap: {
+                    guard !isRunning else { return }
                     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !trimmed.isEmpty else { return }
                     onSend(trimmed)
@@ -44,11 +50,14 @@ struct ChatInputView: View {
 
 /// 自动调整高度的 UITextView 包装
 /// 支持多行输入、Placeholder、硬件键盘 Enter 发送 / Shift+Enter 换行
+/// W9 fix: 添加 isEditable 参数，Agent 运行时不可编辑
 struct AutoResizingTextEditor: UIViewRepresentable {
     @Binding var text: String
     @Binding var height: CGFloat
     let maxHeight: CGFloat
     @FocusState var isFocused: Bool
+    /// W9 fix: Agent 运行时禁用编辑
+    var isEditable: Bool = true
 
     private let placeholder = "输入消息... (Shift+Enter 换行)"
 
@@ -56,8 +65,8 @@ struct AutoResizingTextEditor: UIViewRepresentable {
         let textView = UITextView()
         textView.delegate = context.coordinator
         textView.isScrollEnabled = true
-        textView.isEditable = true
-        textView.isSelectable = true
+        textView.isEditable = isEditable
+        textView.isSelectable = isEditable
         textView.font = UIFont.systemFont(ofSize: 14)
         textView.textColor = .label
         textView.backgroundColor = UIColor(Color.baizeInputFieldBackground)
@@ -79,9 +88,16 @@ struct AutoResizingTextEditor: UIViewRepresentable {
     }
 
     func updateUIView(_ textView: UITextView, context: Context) {
-        if isFocused && !textView.isFirstResponder {
+        // W9 fix: 同步 isEditable 状态
+        textView.isEditable = isEditable
+        textView.isSelectable = isEditable
+
+        if isFocused && !textView.isFirstResponder && isEditable {
             textView.becomeFirstResponder()
         } else if !isFocused && textView.isFirstResponder {
+            textView.resignFirstResponder()
+        } else if !isEditable && textView.isFirstResponder {
+            // Agent 运行时，关闭键盘
             textView.resignFirstResponder()
         }
     }

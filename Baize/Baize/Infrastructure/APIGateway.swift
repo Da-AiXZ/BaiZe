@@ -58,7 +58,7 @@ actor APIGateway {
                     apiLogger.info("API key loaded, starting stream for model: \(model)")
 
                     // 2. 构建 URLRequest
-                    let urlRequest = buildRequest(
+                    let urlRequest = try buildRequest(
                         apiKey: apiKey,
                         messages: messages,
                         tools: tools,
@@ -132,12 +132,13 @@ actor APIGateway {
     }
 
     /// 构建 OpenAI Chat Completions URLRequest
+    /// W7 fix: JSON 序列化错误不再被 try? 吞没，改为 do-catch + apiLogger 记录
     private func buildRequest(
         apiKey: String,
         messages: [Message],
         tools: [ToolDefinition],
         model: String
-    ) -> URLRequest {
+    ) throws -> URLRequest {
         var request = URLRequest(url: URL(string: BaizeAPI.openAIEndpoint)!)
         request.httpMethod = "POST"
         request.timeoutInterval = BaizeAPI.streamTimeout
@@ -158,7 +159,14 @@ actor APIGateway {
             body["tools"] = tools.map { $0.toOpenAIFormat() }
         }
 
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        do {
+            let bodyData = try JSONSerialization.data(withJSONObject: body)
+            request.httpBody = bodyData
+            apiLogger.debug("Request body serialized: \(bodyData.count) bytes for model: \(model)")
+        } catch {
+            apiLogger.error("Failed to serialize request body for model: \(model) — \(error.localizedDescription)")
+            throw BaizeError.apiError("请求体序列化失败: \(error.localizedDescription)")
+        }
         return request
     }
 }

@@ -4,7 +4,8 @@ import Foundation
 /// Phase 1 使用 JSON 文件（对话量小，JSON 简单）
 /// Phase 2 切换为 SQLite（对话量大时性能更好）
 /// 存储路径：/var/mobile/Documents/Baize/.baize/conversations/
-struct ConversationStore {
+/// W1 fix: 改为 actor 防止并发数据竞争
+actor ConversationStore {
 
     // MARK: - Properties
 

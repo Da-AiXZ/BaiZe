@@ -62,7 +62,7 @@ class AppState: ObservableObject {
     /// Context Manager
     var contextManager: ContextManager?
 
-    /// Conversation Store
+    /// Conversation Store（actor，W1 fix: 防止并发数据竞争）
     var conversationStore: ConversationStore?
 
     /// File System Service
