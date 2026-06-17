@@ -86,6 +86,45 @@ class AppState: ObservableObject {
         ensureProjectDirectoryExists()
     }
 
+    // MARK: - Provider & Model Management
+
+    /// 设置当前活跃的 Provider 和模型
+    /// - Parameters:
+    ///   - provider: API Provider
+    ///   - model: 模型名称
+    func setActiveProvider(_ provider: APIProvider, model: String) {
+        activeProvider = provider
+        activeModel = model
+        persistProviderSelection()
+
+        // 异步通知 APIGateway
+        Task {
+            do {
+                try await apiGateway?.setActiveProvider(providerId: provider.providerId, model: model)
+                baizeLogger.info("Active provider set to '\(provider.displayName)' with model '\(model)'")
+            } catch {
+                baizeLogger.error("Failed to set active provider on APIGateway: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// 持久化 Provider/Model 选择到 UserDefaults
+    private func persistProviderSelection() {
+        UserDefaults.standard.set(activeProvider.rawValue, forKey: "com.baize.active-provider")
+        UserDefaults.standard.set(activeModel, forKey: "com.baize.active-model")
+    }
+
+    /// 从 UserDefaults 恢复 Provider/Model 选择
+    func restoreProviderSelection() {
+        if let rawValue = UserDefaults.standard.string(forKey: "com.baize.active-provider"),
+           let provider = APIProvider(rawValue: rawValue) {
+            activeProvider = provider
+        }
+        if let model = UserDefaults.standard.string(forKey: "com.baize.active-model") {
+            activeModel = model
+        }
+    }
+
     // MARK: - Methods
 
     /// 打开文件（添加到 Tab 列表 + 设为选中）
@@ -137,6 +176,15 @@ enum APIProvider: String, CaseIterable, Codable {
         case .openAI: return "OpenAI"
         case .anthropic: return "Anthropic"
         case .openRouter: return "OpenRouter"
+        }
+    }
+
+    /// Provider ID — 与 LLMProvider.id 一致，用于 APIGateway 查找
+    var providerId: String {
+        switch self {
+        case .openAI: return "openai"
+        case .anthropic: return "anthropic"
+        case .openRouter: return "openrouter"
         }
     }
 

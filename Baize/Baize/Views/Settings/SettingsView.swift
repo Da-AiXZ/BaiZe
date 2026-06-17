@@ -32,7 +32,7 @@ struct SettingsView: View {
                     icon: "cpu",
                     iconColor: .purple,
                     title: "默认模型",
-                    subtitle: "当前: \(appState.activeModel)",
+                    subtitle: "当前: \(appState.activeProvider.displayName) / \(appState.activeModel)",
                     section: .model
                 )
 
@@ -152,7 +152,7 @@ private struct SettingsDetail: View {
             PermissionSettingsView(appState: appState)
 
         case .model:
-            ModelSettingsPlaceholder()
+            ModelSettingsView(appState: appState)
 
         case .storage:
             StorageSettingsPlaceholder()
@@ -160,35 +160,6 @@ private struct SettingsDetail: View {
         case .about:
             AboutView()
         }
-    }
-}
-
-// MARK: - Model Settings Placeholder
-
-/// 默认模型设置占位（Phase 1 仅支持 gpt-4o）
-private struct ModelSettingsPlaceholder: View {
-    var body: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "cpu")
-                .font(.system(size: 48))
-                .foregroundColor(.purple.opacity(0.4))
-
-            Text("默认模型")
-                .font(.title2)
-
-            Text("Phase 1 仅支持 gpt-4o 模型")
-                .font(.body)
-                .foregroundColor(.secondary)
-
-            Text("Phase 2 将支持按任务类型选择不同模型（编程/规划/快速），以及 OpenRouter 多模型接入")
-                .font(.callout)
-                .foregroundColor(.secondary.opacity(0.7))
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .navigationTitle("默认模型")
-        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

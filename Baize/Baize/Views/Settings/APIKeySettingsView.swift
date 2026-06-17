@@ -2,7 +2,7 @@ import SwiftUI
 
 /// API Key 配置视图 — 安全存储 API Key 到 Keychain
 /// 支持配置 OpenAI / Anthropic / OpenRouter API Key
-/// 配置后自动验证连接状态
+/// 配置后自动验证连接状态（Phase 2C: 使用真实 Provider 验证）
 struct APIKeySettingsView: View {
     @State private var openAIKey: String = ""
     @State private var anthropicKey: String = ""
@@ -14,6 +14,11 @@ struct APIKeySettingsView: View {
     @State private var anthropicStatus: KeyStatus = .unknown
     @State private var openRouterStatus: KeyStatus = .unknown
     @State private var isSaving = false
+
+    // Phase 2C: 验证连接加载状态
+    @State private var isVerifyingOpenAI = false
+    @State private var isVerifyingAnthropic = false
+    @State private var isVerifyingOpenRouter = false
 
     private let keychainService = KeychainService()
 
@@ -64,6 +69,7 @@ struct APIKeySettingsView: View {
                 key: $openAIKey,
                 isShowingKey: $isShowingOpenAIKey,
                 status: openAIStatus,
+                isVerifying: isVerifyingOpenAI,
                 onSave: { saveOpenAIKey() },
                 onDelete: { deleteOpenAIKey() },
                 onVerify: { verifyOpenAIKey() }
@@ -76,6 +82,7 @@ struct APIKeySettingsView: View {
                 key: $anthropicKey,
                 isShowingKey: $isShowingAnthropicKey,
                 status: anthropicStatus,
+                isVerifying: isVerifyingAnthropic,
                 onSave: { saveAnthropicKey() },
                 onDelete: { deleteAnthropicKey() },
                 onVerify: { verifyAnthropicKey() }
@@ -88,6 +95,7 @@ struct APIKeySettingsView: View {
                 key: $openRouterKey,
                 isShowingKey: $isShowingOpenRouterKey,
                 status: openRouterStatus,
+                isVerifying: isVerifyingOpenRouter,
                 onSave: { saveOpenRouterKey() },
                 onDelete: { deleteOpenRouterKey() },
                 onVerify: { verifyOpenRouterKey() }
@@ -141,13 +149,19 @@ struct APIKeySettingsView: View {
         }
     }
 
+    /// Phase 2C: 使用 OpenAIProvider 真实验证连接
     private func verifyOpenAIKey() {
-        // Phase 1: 简单验证（发送一个最小请求测试连接）
-        // 完整验证将在 Phase 2 实现
-        if !openAIKey.isEmpty {
-            openAIStatus = .verified
-        } else {
-            openAIStatus = .failed
+        guard !openAIKey.isEmpty else { openAIStatus = .failed; return }
+        isVerifyingOpenAI = true
+        Task {
+            // 保存 Key 后验证
+            saveOpenAIKey()
+            let provider = OpenAIProvider(keychainService: keychainService)
+            let success = await provider.verifyConnection()
+            await MainActor.run {
+                openAIStatus = success ? .verified : .failed
+                isVerifyingOpenAI = false
+            }
         }
     }
 
@@ -170,8 +184,19 @@ struct APIKeySettingsView: View {
         }
     }
 
+    /// Phase 2C: 使用 AnthropicProvider 真实验证连接
     private func verifyAnthropicKey() {
-        anthropicStatus = !anthropicKey.isEmpty ? .verified : .failed
+        guard !anthropicKey.isEmpty else { anthropicStatus = .failed; return }
+        isVerifyingAnthropic = true
+        Task {
+            saveAnthropicKey()
+            let provider = AnthropicProvider(keychainService: keychainService)
+            let success = await provider.verifyConnection()
+            await MainActor.run {
+                anthropicStatus = success ? .verified : .failed
+                isVerifyingAnthropic = false
+            }
+        }
     }
 
     private func saveOpenRouterKey() {
@@ -193,8 +218,19 @@ struct APIKeySettingsView: View {
         }
     }
 
+    /// Phase 2C: 使用 OpenRouterProvider 真实验证连接
     private func verifyOpenRouterKey() {
-        openRouterStatus = !openRouterKey.isEmpty ? .verified : .failed
+        guard !openRouterKey.isEmpty else { openRouterStatus = .failed; return }
+        isVerifyingOpenRouter = true
+        Task {
+            saveOpenRouterKey()
+            let provider = OpenRouterProvider(keychainService: keychainService)
+            let success = await provider.verifyConnection()
+            await MainActor.run {
+                openRouterStatus = success ? .verified : .failed
+                isVerifyingOpenRouter = false
+            }
+        }
     }
 }
 
@@ -207,6 +243,7 @@ private struct APIKeySection: View {
     @Binding var key: String
     @Binding var isShowingKey: Bool
     let status: APIKeySettingsView.KeyStatus
+    let isVerifying: Bool
     let onSave: () -> Void
     let onDelete: () -> Void
     let onVerify: () -> Void
@@ -244,8 +281,18 @@ private struct APIKeySection: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(key.isEmpty)
 
-                Button("验证连接", action: onVerify)
-                    .buttonStyle(.bordered)
+                // Phase 2C: 验证连接按钮增加 loading 指示
+                Button(action: onVerify) {
+                    HStack(spacing: 4) {
+                        if isVerifying {
+                            ProgressView()
+                                .scaleEffect(0.6)
+                        }
+                        Text(isVerifying ? "验证中..." : "验证连接")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(isVerifying)
 
                 if status != .missing {
                     Button("删除", role: .destructive, action: onDelete)

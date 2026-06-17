@@ -293,6 +293,15 @@ private struct ChatHeader: View {
 
             Spacer()
 
+            // Phase 2C: 模型指示器
+            Text("\(appState.activeProvider.displayName) / \(appState.activeModel)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(Color.purple.opacity(0.1))
+                .cornerRadius(4)
+
             Text(appState.permissionMode.displayName)
                 .font(.caption)
                 .foregroundColor(.secondary)

@@ -39,6 +39,15 @@ enum BaizeAPI {
     /// OpenAI Chat Completions 端点
     static let openAIEndpoint = "https://api.openai.com/v1/chat/completions"
 
+    /// Anthropic Messages 端点
+    static let anthropicEndpoint = "https://api.anthropic.com/v1/messages"
+
+    /// OpenRouter Chat Completions 端点
+    static let openRouterEndpoint = "https://openrouter.ai/api/v1/chat/completions"
+
+    /// Anthropic API 版本号
+    static let anthropicVersion = "2023-06-01"
+
     /// 默认模型（Phase 1 仅支持 gpt-4o）
     static let defaultModel = "gpt-4o"
 
@@ -59,6 +68,163 @@ enum BaizeAPI {
 
     /// 网络错误自动重试次数
     static let maxRetries = 1
+}
+
+// MARK: - Model Definitions
+
+/// 各 Provider 推荐模型列表
+enum BaizeModels {
+    // MARK: OpenAI Models
+
+    /// OpenAI 推荐模型
+    enum OpenAI {
+        static let gpt4o = ModelInfo(
+            id: "gpt-4o",
+            displayName: "GPT-4o",
+            provider: "openai",
+            contextWindow: 128_000
+        )
+        static let gpt4oMini = ModelInfo(
+            id: "gpt-4o-mini",
+            displayName: "GPT-4o Mini",
+            provider: "openai",
+            contextWindow: 128_000
+        )
+        static let gpt4Turbo = ModelInfo(
+            id: "gpt-4-turbo",
+            displayName: "GPT-4 Turbo",
+            provider: "openai",
+            contextWindow: 128_000
+        )
+
+        /// 所有可用模型
+        static let allModels: [ModelInfo] = [gpt4o, gpt4oMini, gpt4Turbo]
+    }
+
+    // MARK: Anthropic Models
+
+    /// Anthropic 推荐模型
+    enum Anthropic {
+        static let claudeSonnet4 = ModelInfo(
+            id: "claude-sonnet-4-20250514",
+            displayName: "Claude Sonnet 4",
+            provider: "anthropic",
+            contextWindow: 200_000
+        )
+        static let claudeHaiku4 = ModelInfo(
+            id: "claude-haiku-4-20250414",
+            displayName: "Claude Haiku 4",
+            provider: "anthropic",
+            contextWindow: 200_000
+        )
+
+        /// 所有可用模型
+        static let allModels: [ModelInfo] = [claudeSonnet4, claudeHaiku4]
+    }
+
+    // MARK: OpenRouter Models
+
+    /// OpenRouter 推荐模型
+    enum OpenRouter {
+        static let deepseekChat = ModelInfo(
+            id: "deepseek/deepseek-chat",
+            displayName: "DeepSeek V3",
+            provider: "openrouter",
+            contextWindow: 128_000
+        )
+        static let gemini25Flash = ModelInfo(
+            id: "google/gemini-2.5-flash",
+            displayName: "Gemini 2.5 Flash",
+            provider: "openrouter",
+            contextWindow: 1_000_000
+        )
+        static let gemini25Pro = ModelInfo(
+            id: "google/gemini-2.5-pro",
+            displayName: "Gemini 2.5 Pro",
+            provider: "openrouter",
+            contextWindow: 1_000_000
+        )
+        static let llama4Maverick = ModelInfo(
+            id: "meta-llama/llama-4-maverick",
+            displayName: "Llama 4 Maverick",
+            provider: "openrouter",
+            contextWindow: 1_000_000
+        )
+        static let mistralLarge = ModelInfo(
+            id: "mistralai/mistral-large-2411",
+            displayName: "Mistral Large",
+            provider: "openrouter",
+            contextWindow: 128_000
+        )
+        static let claudeSonnet4 = ModelInfo(
+            id: "anthropic/claude-sonnet-4-20250514",
+            displayName: "Claude Sonnet 4 (OpenRouter)",
+            provider: "openrouter",
+            contextWindow: 200_000
+        )
+        static let gpt4o = ModelInfo(
+            id: "openai/gpt-4o",
+            displayName: "GPT-4o (OpenRouter)",
+            provider: "openrouter",
+            contextWindow: 128_000
+        )
+        static let qwen3_235b = ModelInfo(
+            id: "qwen/qwen3-235b-a22b",
+            displayName: "Qwen3 235B",
+            provider: "openrouter",
+            contextWindow: 128_000
+        )
+        static let deepseekR1 = ModelInfo(
+            id: "deepseek/deepseek-r1",
+            displayName: "DeepSeek R1",
+            provider: "openrouter",
+            contextWindow: 128_000
+        )
+        static let claudeHaiku4 = ModelInfo(
+            id: "anthropic/claude-haiku-4-20250414",
+            displayName: "Claude Haiku 4 (OpenRouter)",
+            provider: "openrouter",
+            contextWindow: 200_000
+        )
+        static let gpt4oMini = ModelInfo(
+            id: "openai/gpt-4o-mini",
+            displayName: "GPT-4o Mini (OpenRouter)",
+            provider: "openrouter",
+            contextWindow: 128_000
+        )
+        static let llama4Scout = ModelInfo(
+            id: "meta-llama/llama-4-scout",
+            displayName: "Llama 4 Scout",
+            provider: "openrouter",
+            contextWindow: 10_000_000
+        )
+        static let gemini25FlashLite = ModelInfo(
+            id: "google/gemini-2.5-flash-lite",
+            displayName: "Gemini 2.5 Flash Lite",
+            provider: "openrouter",
+            contextWindow: 1_000_000
+        )
+        static let mistralSmall = ModelInfo(
+            id: "mistralai/mistral-small-24b-instruct-2501",
+            displayName: "Mistral Small 24B",
+            provider: "openrouter",
+            contextWindow: 128_000
+        )
+        static let qwen3_32b = ModelInfo(
+            id: "qwen/qwen3-32b",
+            displayName: "Qwen3 32B",
+            provider: "openrouter",
+            contextWindow: 128_000
+        )
+
+        /// 所有可用模型
+        static let allModels: [ModelInfo] = [
+            deepseekChat, gemini25Flash, gemini25Pro, llama4Maverick,
+            mistralLarge, claudeSonnet4, gpt4o, qwen3_235b,
+            deepseekR1, claudeHaiku4, gpt4oMini, llama4Scout,
+            gemini25FlashLite, mistralSmall, qwen3_32b,
+        ]
+    }
 }
 
 // MARK: - Token Budget

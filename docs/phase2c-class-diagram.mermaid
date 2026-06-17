@@ -1,0 +1,219 @@
+%% 白泽 Phase 2C — 类图
+%% 多模型支持架构设计
+
+classDiagram
+    direction TB
+
+    %% ============ Provider 协议层 ============
+
+    class LLMProvider {
+        <<protocol>>
+        +id: String
+        +displayName: String
+        +supportsFunctionCalling: Bool
+        +availableModels: [ModelInfo]
+        +isConfigured: Bool
+        +streamComplete(messages: [Message], tools: [ToolDefinition], model: String) AsyncThrowingStream~LLMChunk, Error~
+        +verifyConnection() async Bool
+    }
+
+    class ModelInfo {
+        +id: String
+        +displayName: String
+        +provider: String
+        +contextWindow: Int
+    }
+
+    %% ============ Provider 实现 ============
+
+    class OpenAIProvider {
+        +id: String = "openai"
+        +displayName: String = "OpenAI"
+        +supportsFunctionCalling: Bool = true
+        +availableModels: [ModelInfo]
+        +isConfigured: Bool
+        -keychainService: KeychainService
+        +streamComplete(messages, tools, model) AsyncThrowingStream~LLMChunk, Error~
+        +verifyConnection() async Bool
+        -getAPIKey() throws String
+    }
+
+    class AnthropicProvider {
+        +id: String = "anthropic"
+        +displayName: String = "Anthropic"
+        +supportsFunctionCalling: Bool = true
+        +availableModels: [ModelInfo]
+        +isConfigured: Bool
+        -keychainService: KeychainService
+        +streamComplete(messages, tools, model) AsyncThrowingStream~LLMChunk, Error~
+        +verifyConnection() async Bool
+        -getAPIKey() throws String
+        -buildRequest(apiKey, messages, tools, model) throws URLRequest
+        -interpretSSEEvent(event: SSEEvent) [LLMChunk]
+        -extractSystem(messages: [Message]) (String?, [Message])
+    }
+
+    class OpenRouterProvider {
+        +id: String = "openrouter"
+        +displayName: String = "OpenRouter"
+        +supportsFunctionCalling: Bool = true
+        +availableModels: [ModelInfo]
+        +isConfigured: Bool
+        -keychainService: KeychainService
+        +streamComplete(messages, tools, model) AsyncThrowingStream~LLMChunk, Error~
+        +verifyConnection() async Bool
+        -getAPIKey() throws String
+    }
+
+    class OpenAICompatibleHelper {
+        <<enum, static methods>>
+        +buildRequest(endpoint, apiKey, additionalHeaders, messages, tools, model) throws URLRequest
+        +interpretSSEEvent(event: SSEEvent) [LLMChunk]
+        +verifyConnection(endpoint, apiKey, additionalHeaders) async Bool
+    }
+
+    %% ============ APIGateway（重构后）============
+
+    class APIGateway {
+        <<actor>>
+        -providers: [String: any LLMProvider]
+        -activeProviderId: String
+        -activeModel: String
+        -keychainService: KeychainService
+        +register(provider: any LLMProvider)
+        +setActiveProvider(providerId: String, model: String)
+        +getActiveProvider() any LLMProvider
+        +getRegisteredProviders() [String: any LLMProvider]
+        +streamComplete(messages: [Message], tools: [ToolDefinition], model: String) AsyncThrowingStream~LLMChunk, Error~
+        +cancelStream()
+    }
+
+    class LLMChunk {
+        <<enum, nested in APIGateway>>
+        textDelta(String)
+        toolCallBegin(id: String, name: String)
+        toolCallDelta(id: String, argumentsDelta: String)
+        done(finishReason: String)
+    }
+
+    class ToolDefinition {
+        +name: String
+        +description: String
+        +parameters: [String: Any]
+        +toOpenAIFormat() [String: Any]
+        +toAnthropicFormat() [String: Any]
+    }
+
+    %% ============ SSEStream（泛化后）============
+
+    class SSEStream {
+        +parse(urlRequest: URLRequest) AsyncThrowingStream~SSEEvent, Error~
+        -parseBuffer(buffer: String) [SSEEvent]
+    }
+
+    class SSEEvent {
+        <<struct, nested in SSEStream>>
+        +event: String?
+        +data: String
+    }
+
+    %% ============ Message 扩展 ============
+
+    class Message {
+        <<enum>>
+        system(String)
+        user(String)
+        assistant(String)
+        assistantWithToolCalls(content: String, toolCalls: [ToolCall])
+        toolCall(id: String, name: String, arguments: String)
+        toolResult(id: String, content: String)
+        +toOpenAIFormat() [String: Any]
+        +toAnthropicFormat() [String: Any]
+    }
+
+    class MessageArrayExtensions {
+        <<extension Array~Message~~
+        +toOpenAIMergedFormat() [[String: Any]]
+        +toAnthropicMessages() (system: String?, messages: [[String: Any]])
+    }
+
+    %% ============ UI 层 ============
+
+    class ModelSettingsView {
+        +appState: AppState
+        -selectedProvider: APIProvider
+        -selectedModel: String
+        -providerDetailSection: some View
+        -recommendedModelsSection: some View
+        -onProviderChange(provider: APIProvider)
+        -onModelChange(model: String)
+    }
+
+    class APIKeySettingsView {
+        +verifyOpenAIKey()
+        +verifyAnthropicKey()
+        +verifyOpenRouterKey()
+        -performVerification(provider: APIProvider) async
+    }
+
+    class AppState {
+        <<@MainActor, ObservableObject>>
+        +activeProvider: APIProvider
+        +activeModel: String
+        +apiGateway: APIGateway?
+        +setActiveProvider(provider: APIProvider, model: String)
+        -persistProviderSelection()
+        -restoreProviderSelection()
+    }
+
+    class APIProvider {
+        <<enum>>
+        openAI
+        anthropic
+        openRouter
+        +displayName: String
+        +keychainKey: String
+    }
+
+    class KeychainService {
+        <<struct>>
+        +save(key: String, value: String) throws
+        +load(key: String) String?
+        +delete(key: String) throws
+        +loadOpenAIKey() String?
+        +loadAnthropicKey() String?
+        +loadOpenRouterKey() String?
+    }
+
+    %% ============ 关联关系 ============
+
+    LLMProvider <|.. OpenAIProvider : implements
+    LLMProvider <|.. AnthropicProvider : implements
+    LLMProvider <|.. OpenRouterProvider : implements
+
+    OpenAIProvider ..> OpenAICompatibleHelper : uses
+    OpenRouterProvider ..> OpenAICompatibleHelper : uses
+    OpenAICompatibleHelper ..> SSEStream : parses via
+    AnthropicProvider ..> SSEStream : parses via
+
+    APIGateway --> LLMProvider : registers and delegates
+    APIGateway --> LLMChunk : defines nested type
+    APIGateway --> ToolDefinition : defines
+
+    OpenAIProvider --> KeychainService : reads key
+    AnthropicProvider --> KeychainService : reads key
+    OpenRouterProvider --> KeychainService : reads key
+
+    SSEStream --> SSEEvent : produces
+
+    Message ..> MessageArrayExtensions : extension
+    MessageArrayExtensions ..> ToolCall : references
+
+    ModelSettingsView --> AppState : observes
+    APIKeySettingsView --> KeychainService : reads and writes
+    APIKeySettingsView ..> LLMProvider : verifyConnection
+
+    AppState --> APIGateway : holds reference
+    AppState --> APIProvider : tracks active
+
+    ModelInfo --> LLMProvider : returned by availableModels

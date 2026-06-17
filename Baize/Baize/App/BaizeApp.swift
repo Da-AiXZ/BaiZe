@@ -71,6 +71,17 @@ struct BaizeApp: App {
             state.conversationStore = conversation
             state.fileSystemService = fsService
             state.runtimeExecutor = runtime
+
+            // Phase 2C: 恢复上次 Provider/Model 选择
+            state.restoreProviderSelection()
+            Task {
+                do {
+                    try await api.setActiveProvider(providerId: state.activeProvider.providerId, model: state.activeModel)
+                } catch {
+                    baizeLogger.error("Failed to restore provider selection: \(error.localizedDescription)")
+                }
+            }
+
             return state
         }())
     }

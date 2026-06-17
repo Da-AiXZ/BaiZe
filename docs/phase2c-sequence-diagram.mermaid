@@ -1,0 +1,142 @@
+%% 白泽 Phase 2C — 时序图
+%% 多模型支持关键流程
+
+%% ========== 4.1 用户发起对话 — Provider 委托流程 ==========
+
+sequenceDiagram
+    actor User
+    participant ChatView
+    participant AppState
+    participant AgentLoop
+    participant APIGateway
+    participant Provider as LLMProvider (active)
+    participant SSEStream
+    participant API as LLM API Server
+
+    User->>ChatView: 输入消息并发送
+    ChatView->>AppState: isAgentRunning = true
+    ChatView->>AgentLoop: run(userMessage)
+
+    loop Agent 循环
+        AgentLoop->>APIGateway: streamComplete(messages, tools)
+        Note over APIGateway: 使用 activeProviderId 查找 Provider<br/>使用 activeModel 作为模型参数
+
+        APIGateway->>Provider: streamComplete(messages, tools, model)
+
+        Note over Provider: 1. 从 Keychain 读取 API Key<br/>2. 构建 Provider 特定 URLRequest<br/>3. 调用 SSEStream.parse(urlRequest)
+
+        Provider->>SSEStream: parse(urlRequest)
+        SSEStream->>API: HTTPS POST (SSE stream)
+
+        loop SSE 事件流
+            API-->>SSEStream: raw SSE lines (event: + data:)
+            SSEStream-->>Provider: SSEEvent(event, data)
+
+            Note over Provider: 解释 SSEEvent<br/>OpenAI: data == [DONE] → done<br/>Anthropic: event == message_stop → done
+
+            Provider-->>APIGateway: LLMChunk (textDelta / toolCallBegin / toolCallDelta / done)
+            APIGateway-->>AgentLoop: LLMChunk (透传)
+
+            alt textDelta
+                AgentLoop-->>ChatView: AgentEvent.textDelta
+                ChatView-->>User: 流式显示文本
+            else toolCallBegin / toolCallDelta
+                AgentLoop->>AgentLoop: 累积 tool_call 参数
+            else done
+                Note over AgentLoop: 流式接收完成
+            end
+        end
+
+        alt 存在 tool_calls
+            AgentLoop->>AgentLoop: 执行工具 → 注入 tool_result → 继续循环
+        else 无 tool_calls
+            Note over AgentLoop: 循环结束
+        end
+    end
+
+    AgentLoop-->>ChatView: AgentEvent.completed
+    ChatView->>AppState: isAgentRunning = false
+
+%% ========== 4.2 Anthropic SSE 流式解析流程 ==========
+
+sequenceDiagram
+    participant Provider as AnthropicProvider
+    participant SSEStream
+    participant Anthropic as Anthropic API
+    participant APIGateway
+    participant AgentLoop
+
+    Provider->>Provider: 从 messages 中提取 system 消息
+    Provider->>Provider: 转换 messages 为 Anthropic 格式<br/>(toAnthropicMessages)
+    Provider->>Provider: 转换 tools 为 Anthropic 格式<br/>(input_schema)
+    Provider->>Provider: 构建 URLRequest<br/>POST /v1/messages<br/>x-api-key + anthropic-version
+
+    Provider->>SSEStream: parse(urlRequest)
+    SSEStream->>Anthropic: HTTPS POST (SSE)
+
+    loop SSE 事件流
+        Anthropic-->>SSEStream: event: message_start<br/>data: {"type":"message_start","message":{...}}
+        SSEStream-->>Provider: SSEEvent(event: "message_start", data: "{...}")
+        Note over Provider: 初始化消息上下文<br/>不 yield LLMChunk
+
+        Anthropic-->>SSEStream: event: content_block_start<br/>data: {"type":"tool_use","id":"toolu_xxx","name":"read_file"}
+        SSEStream-->>Provider: SSEEvent(event: "content_block_start", data: "{...}")
+        Note over Provider: 检测到 tool_use 开始<br/>yield LLMChunk.toolCallBegin(id, name)
+
+        Anthropic-->>SSEStream: event: content_block_delta<br/>data: {"delta":{"type":"text_delta","text":"你好"}}
+        SSEStream-->>Provider: SSEEvent(event: "content_block_delta", data: "{...}")
+        Note over Provider: delta.type == text_delta<br/>yield LLMChunk.textDelta("你好")
+
+        Anthropic-->>SSEStream: event: content_block_delta<br/>data: {"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}
+        SSEStream-->>Provider: SSEEvent(event: "content_block_delta", data: "{...}")
+        Note over Provider: delta.type == input_json_delta<br/>yield LLMChunk.toolCallDelta(id, argumentsDelta)
+
+        Anthropic-->>SSEStream: event: content_block_stop<br/>data: {"index":0}
+        SSEStream-->>Provider: SSEEvent(event: "content_block_stop", data: "{...}")
+        Note over Provider: content_block 结束<br/>不 yield LLMChunk
+
+        Anthropic-->>SSEStream: event: message_delta<br/>data: {"delta":{"stop_reason":"tool_use"}}
+        SSEStream-->>Provider: SSEEvent(event: "message_delta", data: "{...}")
+        Note over Provider: 记录 stop_reason<br/>不 yield LLMChunk
+
+        Anthropic-->>SSEStream: event: message_stop<br/>data: {}
+        SSEStream-->>Provider: SSEEvent(event: "message_stop", data: "{}")
+        Note over Provider: 消息结束<br/>yield LLMChunk.done(finishReason: stop_reason)
+    end
+
+    Provider-->>APIGateway: AsyncThrowingStream~LLMChunk~
+    APIGateway-->>AgentLoop: AsyncThrowingStream~LLMChunk~ (透传)
+    Note over AgentLoop: 消费 LLMChunk, 与 OpenAI 流程完全一致
+
+%% ========== 4.3 切换 Provider 流程 ==========
+
+sequenceDiagram
+    actor User
+    participant ModelSettings as ModelSettingsView
+    participant AppState
+    participant UserDefaults
+    participant APIGateway
+    participant Provider as LLMProvider (new)
+
+    User->>ModelSettings: 选择新 Provider (如 Anthropic)
+    ModelSettings->>ModelSettings: 加载该 Provider 的 availableModels
+    User->>ModelSettings: 选择模型 (如 claude-sonnet-4-20250514)
+    ModelSettings->>AppState: setActiveProvider(.anthropic, model: "claude-sonnet-4-20250514")
+
+    AppState->>UserDefaults: set("anthropic", forKey: "activeProvider")
+    AppState->>UserDefaults: set("claude-sonnet-4-20250514", forKey: "activeModel")
+
+    AppState->>AppState: activeProvider = .anthropic
+    AppState->>AppState: activeModel = "claude-sonnet-4-20250514"
+
+    par 异步通知 APIGateway
+        AppState->>APIGateway: setActiveProvider("anthropic", model: "claude-sonnet-4-20250514")
+        APIGateway->>APIGateway: activeProviderId = "anthropic"
+        APIGateway->>APIGateway: activeModel = "claude-sonnet-4-20250514"
+        APIGateway-->>AppState: 完成
+    end
+
+    Note over User: 下一条消息将使用 Anthropic Provider<br/>对话历史不丢失（统一 Message 模型）
+
+    User->>ModelSettings: 返回对话
+    Note over ModelSettings: 对话历史保留在 AgentLoop.session.messages<br/>下次 streamComplete 时由 AnthropicProvider 转换格式

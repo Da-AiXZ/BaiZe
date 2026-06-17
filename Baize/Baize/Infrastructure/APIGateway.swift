@@ -1,14 +1,15 @@
 import Foundation
 
-/// OpenAI Chat Completions API 调用网关 — Actor 并发模型
-/// 负责：构建请求、发送 SSE 流式请求、解析响应、累积 tool_call 参数
+/// LLM API 调用网关 — Actor 并发模型
+/// Phase 2C 重构：委托到 LLMProvider 协议，支持多 Provider 切换
+/// 负责：Provider 注册、Provider/模型切换、流式请求委托
 /// 通过 KeychainService 读取 API Key
 /// 返回 AsyncThrowingStream<LLMChunk> 供 AgentLoop 消费
 actor APIGateway {
 
     // MARK: - Properties
 
-    /// SSE 流解析器
+    /// SSE 流解析器（保留用于向后兼容，新代码在 Provider 中创建）
     private let sseStream = SSEStream()
 
     /// Keychain 服务实例
@@ -17,10 +18,19 @@ actor APIGateway {
     /// 当前活跃的 SSE stream task（用于取消）
     private var activeTask: Task<Void, Never>?
 
+    /// 已注册的 Provider 字典（id → Provider）
+    private var providers: [String: any LLMProvider] = [:]
+
+    /// 当前活跃的 Provider ID
+    private var activeProviderId: String = "openai"
+
+    /// 当前活跃的模型名称
+    private var activeModel: String = BaizeAPI.defaultModel
+
     // MARK: - LLM Chunk Types
 
     /// LLM 响应增量 chunk — AgentLoop 消费的类型
-    enum LLMChunk {
+    enum LLMChunk: Sendable {
         /// 文本增量
         case textDelta(String)
         /// 工具调用开始（id + name）
@@ -35,82 +45,45 @@ actor APIGateway {
 
     init(keychainService: KeychainService) {
         self.keychainService = keychainService
+
+        // 注册默认 Provider
+        let openAIProvider = OpenAIProvider(keychainService: keychainService)
+        let anthropicProvider = AnthropicProvider(keychainService: keychainService)
+        let openRouterProvider = OpenRouterProvider(keychainService: keychainService)
+
+        providers[openAIProvider.id] = openAIProvider
+        providers[anthropicProvider.id] = anthropicProvider
+        providers[openRouterProvider.id] = openRouterProvider
+
+        apiLogger.info("APIGateway initialized with providers: \(providers.keys.joined(separator: ", "))")
     }
 
     // MARK: - Public API
 
     /// 发送 Chat Completions 请求，返回 SSE 流式响应
+    /// 委托到当前活跃的 Provider 执行
     /// - Parameters:
     ///   - messages: 对话消息数组
-    ///   - tools: 工具定义数组（OpenAI function calling 格式）
-    ///   - model: 模型名称，默认 gpt-4o
+    ///   - tools: 工具定义数组
+    ///   - model: 模型名称，默认使用 activeModel
     /// - Returns: AsyncThrowingStream<LLMChunk> 供 AgentLoop for-await 消费
     func streamComplete(
         messages: [Message],
         tools: [ToolDefinition],
-        model: String = BaizeAPI.defaultModel
+        model: String? = nil
     ) -> AsyncThrowingStream<LLMChunk, Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    // 1. 读取 API Key
-                    let apiKey = try getAPIKey()
-                    apiLogger.info("API key loaded, starting stream for model: \(model)")
+        let resolvedModel = model ?? activeModel
 
-                    // 2. 构建 URLRequest
-                    let urlRequest = try buildRequest(
-                        apiKey: apiKey,
-                        messages: messages,
-                        tools: tools,
-                        model: model
-                    )
-
-                    // 3. 通过 SSEStream 解析流式响应
-                    let sseEvents = sseStream.parse(urlRequest: urlRequest)
-
-                    // 4. 状态：累积 tool_call 参数
-                    var pendingToolCalls: [String: PendingToolCall] = [:]
-
-                    // 5. 消费 SSE 事件，转换为 LLMChunk
-                    for try await event in sseEvents {
-                        switch event {
-                        case .delta(let content):
-                            continuation.yield(.textDelta(content))
-
-                        case .toolCallBegin(id: let id, name: let name):
-                            pendingToolCalls[id] = PendingToolCall(id: id, name: name, arguments: "")
-                            continuation.yield(.toolCallBegin(id: id, name: name))
-
-                        case .toolCallDelta(id: let id, argumentsDelta: let delta):
-                            if let pending = pendingToolCalls[id] {
-                                pendingToolCalls[id] = PendingToolCall(
-                                    id: pending.id,
-                                    name: pending.name,
-                                    arguments: pending.arguments + delta
-                                )
-                            }
-                            continuation.yield(.toolCallDelta(id: id, argumentsDelta: delta))
-
-                        case .done:
-                            continuation.yield(.done(finishReason: "stop"))
-                            apiLogger.info("SSE stream done, yielded \(pendingToolCalls.count) tool calls")
-
-                        case .comment(let text):
-                            apiLogger.debug("SSE comment: \(text)")
-                        }
-                    }
-
-                    continuation.finish()
-                } catch {
-                    apiLogger.error("APIGateway stream error: \(error.localizedDescription)")
-                    continuation.finish(throwing: error)
-                }
-            }
-
-            continuation.onTermination = { _ in
-                task.cancel()
+        // 委托到活跃 Provider
+        guard let provider = providers[activeProviderId] else {
+            apiLogger.error("No active provider registered with id: \(activeProviderId)")
+            return AsyncThrowingStream { continuation in
+                continuation.finish(throwing: ProviderError.notRegistered(activeProviderId))
             }
         }
+
+        apiLogger.info("APIGateway: delegating to provider '\(activeProviderId)' with model '\(resolvedModel)'")
+        return provider.streamComplete(messages: messages, tools: tools, model: resolvedModel)
     }
 
     /// 取消当前活跃的 SSE stream
@@ -120,64 +93,57 @@ actor APIGateway {
         apiLogger.info("SSE stream cancelled")
     }
 
-    // MARK: - Private Methods
+    // MARK: - Provider Management
 
-    /// 从 Keychain 获取 API Key
-    private func getAPIKey() throws -> String {
-        guard let apiKey = keychainService.load(key: BaizeAPI.openAIKeyKeychainKey),
-              !apiKey.isEmpty else {
-            throw BaizeError.apiKeyMissing
-        }
-        return apiKey
+    /// 注册一个新的 Provider
+    /// - Parameter provider: 实现 LLMProvider 协议的 Provider
+    func register(provider: any LLMProvider) {
+        providers[provider.id] = provider
+        apiLogger.info("Provider registered: \(provider.id) (\(provider.displayName))")
     }
 
-    /// 构建 OpenAI Chat Completions URLRequest
-    /// W7 fix: JSON 序列化错误不再被 try? 吞没，改为 do-catch + apiLogger 记录
-    private func buildRequest(
-        apiKey: String,
-        messages: [Message],
-        tools: [ToolDefinition],
-        model: String
-    ) throws -> URLRequest {
-        var request = URLRequest(url: URL(string: BaizeAPI.openAIEndpoint)!)
-        request.httpMethod = "POST"
-        request.timeoutInterval = BaizeAPI.streamTimeout
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        // 构建请求 Body
-        // 修复 C1/C2：使用 toOpenAIMergedFormat() 合并连续 toolCall 消息为
-        // 单个 assistant 消息，符合 OpenAI API 要求
-        var body: [String: Any] = [
-            "model": model,
-            "stream": true,
-            "messages": messages.toOpenAIMergedFormat(),
-        ]
-
-        // 添加 tools 定义（如果有）
-        if !tools.isEmpty {
-            body["tools"] = tools.map { $0.toOpenAIFormat() }
+    /// 设置当前活跃的 Provider 和模型
+    /// - Parameters:
+    ///   - providerId: Provider ID
+    ///   - model: 模型名称，默认使用 Provider 的第一个推荐模型
+    func setActiveProvider(providerId: String, model: String? = nil) throws {
+        guard providers[providerId] != nil else {
+            throw ProviderError.notRegistered(providerId)
         }
 
-        do {
-            let bodyData = try JSONSerialization.data(withJSONObject: body)
-            request.httpBody = bodyData
-            apiLogger.debug("Request body serialized: \(bodyData.count) bytes for model: \(model)")
-        } catch {
-            apiLogger.error("Failed to serialize request body for model: \(model) — \(error.localizedDescription)")
-            throw BaizeError.apiError("请求体序列化失败: \(error.localizedDescription)")
+        activeProviderId = providerId
+
+        // 如果指定了模型，使用指定的；否则使用 Provider 的第一个推荐模型
+        if let model = model {
+            activeModel = model
+        } else if let firstModel = providers[providerId]?.availableModels.first {
+            activeModel = firstModel.id
         }
-        return request
+
+        apiLogger.info("Active provider set to '\(providerId)', model: \(activeModel)")
     }
-}
 
-// MARK: - Pending Tool Call
+    /// 获取当前活跃的 Provider
+    /// - Returns: 当前活跃的 Provider，如果未注册则返回 nil
+    func getActiveProvider() -> (any LLMProvider)? {
+        providers[activeProviderId]
+    }
 
-/// 累积中的工具调用（SSE tool_call 参数是增量传输的）
-private struct PendingToolCall {
-    let id: String
-    let name: String
-    var arguments: String
+    /// 获取所有已注册的 Provider
+    /// - Returns: Provider 数组
+    func getRegisteredProviders() -> [any LLMProvider] {
+        Array(providers.values)
+    }
+
+    /// 获取当前活跃的 Provider ID
+    func getActiveProviderId() -> String {
+        activeProviderId
+    }
+
+    /// 获取当前活跃的模型名称
+    func getActiveModel() -> String {
+        activeModel
+    }
 }
 
 // MARK: - Tool Definition
@@ -197,6 +163,16 @@ struct ToolDefinition {
                 "description": description,
                 "parameters": parameters,
             ]
+        ]
+    }
+
+    /// 转换为 Anthropic tools 参数格式
+    /// Anthropic 格式：{name, description, input_schema}
+    func toAnthropicFormat() -> [String: Any] {
+        return [
+            "name": name,
+            "description": description,
+            "input_schema": parameters,
         ]
     }
 }

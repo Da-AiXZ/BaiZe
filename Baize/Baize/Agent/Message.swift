@@ -168,6 +168,78 @@ enum Message: Sendable, Identifiable {
             ]
         }
     }
+
+    // MARK: - Anthropic API Format Conversion
+
+    /// 转换为 Anthropic Messages API 的消息格式
+    /// Anthropic 格式与 OpenAI 有以下差异：
+    ///   - system 消息不在 messages 数组中，提取到顶层 system 参数
+    ///   - assistant with tool_calls 使用 content blocks 格式
+    ///   - tool_result 使用 user 角色 + tool_result content block
+    ///   - 不存在独立的 toolCall 消息（合并到 assistant 消息）
+    func toAnthropicFormat() -> [String: Any] {
+        switch self {
+        case .system:
+            // system 消息不在 messages 数组中，由 toAnthropicMessages() 提取到顶层
+            // 此处返回空字典，调用方应使用 toAnthropicMessages() 而非逐条转换
+            return [:]
+
+        case .user(let text):
+            return ["role": "user", "content": text]
+
+        case .assistant(let text):
+            return ["role": "assistant", "content": text]
+
+        case .assistantWithToolCalls(let content, let toolCalls):
+            // Anthropic 使用 content blocks 格式
+            var contentBlocks: [[String: Any]] = []
+
+            // 文本 block（即使为空也不添加空文本 block，除非没有 tool_calls）
+            if !content.isEmpty {
+                contentBlocks.append(["type": "text", "text": content])
+            }
+
+            // tool_use blocks
+            for call in toolCalls {
+                // 解析 arguments JSON 为对象
+                var inputObject: Any = [:]
+                if let data = call.arguments.data(using: .utf8),
+                   let parsed = try? JSONSerialization.jsonObject(with: data) {
+                    inputObject = parsed
+                }
+                contentBlocks.append([
+                    "type": "tool_use",
+                    "id": call.id,
+                    "name": call.name,
+                    "input": inputObject,
+                ])
+            }
+
+            // 如果没有文本也没有 tool_calls（不应发生），添加空文本
+            if contentBlocks.isEmpty {
+                contentBlocks.append(["type": "text", "text": ""])
+            }
+
+            return ["role": "assistant", "content": contentBlocks]
+
+        case .toolCall:
+            // 独立 toolCall 消息 — 在 Anthropic 格式中应合并到 assistant 消息
+            // 此处返回空字典，调用方应使用 toAnthropicMessages() 处理合并
+            return [:]
+
+        case .toolResult(let id, let content):
+            return [
+                "role": "user",
+                "content": [
+                    [
+                        "type": "tool_result",
+                        "tool_use_id": id,
+                        "content": content,
+                    ]
+                ]
+            ]
+        }
+    }
 }
 
 // MARK: - String Stable Hash Extension
@@ -244,6 +316,85 @@ extension Array where Element == Message {
         }
 
         return result
+    }
+}
+
+// MARK: - Message Array Anthropic Format Conversion
+
+extension Array where Element == Message {
+    /// 将消息列表转换为 Anthropic Messages API 格式
+    /// 提取 system 消息为顶层 system 参数，合并连续 toolCall 消息
+    /// - Returns: (system: 顶层 system 字符串, messages: 非系统消息数组)
+    func toAnthropicMessages() -> (system: String?, messages: [[String: Any]]) {
+        // 1. 提取所有 system 消息拼接为顶层 system 参数
+        var systemParts: [String] = []
+        var nonSystemMessages: [Message] = []
+
+        for message in self {
+            if case .system(let text) = message {
+                systemParts.append(text)
+            } else {
+                nonSystemMessages.append(message)
+            }
+        }
+
+        let systemPrompt = systemParts.isEmpty ? nil : systemParts.joined(separator: "\n\n")
+
+        // 2. 合并连续的 toolCall 消息（与 toOpenAIMergedFormat 逻辑一致）
+        var result: [[String: Any]] = []
+        var i = 0
+
+        while i < nonSystemMessages.count {
+            let message = nonSystemMessages[i]
+
+            switch message {
+            case .user, .toolResult, .assistantWithToolCalls:
+                result.append(message.toAnthropicFormat())
+                i += 1
+
+            case .assistant(let text):
+                // 检查下一条消息是否是连续的 toolCall
+                if i + 1 < nonSystemMessages.count && nonSystemMessages[i + 1].isConsecutiveToolCall {
+                    // 收集后续连续的 toolCall
+                    var toolCalls: [ToolCall] = []
+                    var j = i + 1
+                    while j < nonSystemMessages.count && nonSystemMessages[j].isConsecutiveToolCall {
+                        if case .toolCall(let id, let name, let arguments) = nonSystemMessages[j] {
+                            toolCalls.append(ToolCall(id: id, name: name, arguments: arguments))
+                        }
+                        j += 1
+                    }
+                    // 合并为一个 assistantWithToolCalls 消息
+                    let mergedMessage = Message.assistantWithToolCalls(content: text, toolCalls: toolCalls)
+                    result.append(mergedMessage.toAnthropicFormat())
+                    i = j
+                } else {
+                    result.append(message.toAnthropicFormat())
+                    i += 1
+                }
+
+            case .toolCall:
+                // 连续的 toolCall 消息需要合并为单个 assistant 消息
+                var toolCalls: [ToolCall] = []
+                var j = i
+                while j < nonSystemMessages.count && nonSystemMessages[j].isConsecutiveToolCall {
+                    if case .toolCall(let id, let name, let arguments) = nonSystemMessages[j] {
+                        toolCalls.append(ToolCall(id: id, name: name, arguments: arguments))
+                    }
+                    j += 1
+                }
+                // 合并为空文本的 assistantWithToolCalls 消息
+                let mergedMessage = Message.assistantWithToolCalls(content: "", toolCalls: toolCalls)
+                result.append(mergedMessage.toAnthropicFormat())
+                i = j
+
+            case .system:
+                // 已在上方提取，不应到达此处
+                i += 1
+            }
+        }
+
+        return (system: systemPrompt, messages: result)
     }
 }
 

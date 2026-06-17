@@ -1,24 +1,20 @@
 import Foundation
 
 /// SSE 协议解析器 — 基于 URLSession AsyncThrowingStream
-/// 解析 Server-Sent Events 流：data: {...}、data: [DONE]
-/// 支持 content delta、tool_call delta、finish_reason 等事件类型
+/// 泛化版本：仅解析 SSE 协议层（event + data 字段），
+/// 不包含任何 Provider 特定的 JSON 解释逻辑（迁移到各 Provider Helper）
 struct SSEStream {
 
-    // MARK: - SSE Event Types
+    // MARK: - SSE Event
 
-    /// SSE 解析后的事件
-    enum SSEEvent {
-        /// 内容增量（LLM 文本输出）
-        case delta(String)
-        /// 工具调用开始（id + name）
-        case toolCallBegin(id: String, name: String)
-        /// 工具调用参数增量
-        case toolCallDelta(id: String, argumentsDelta: String)
-        /// 流式结束
-        case done
-        /// 心跳注释（SSE comment lines starting with :）
-        case comment(String)
+    /// SSE 解析后的原始事件 — 仅包含协议层的 event 和 data 字段
+    /// Provider 特定解释由各 Provider Helper 负责
+    struct SSEEvent: Sendable {
+        /// SSE event 字段（如 message_start, content_block_delta 等）
+        /// 为 nil 时表示默认事件（无 event: 行）
+        let event: String?
+        /// SSE data 字段内容（多行 data 用 \n 拼接，RFC 8895）
+        let data: String
     }
 
     // MARK: - Public API
@@ -83,18 +79,19 @@ struct SSEStream {
 
     /// 解析缓冲区中的 SSE 事件块
     /// SSE 格式（RFC 8895）：
+    ///   event: message_start
+    ///   data: {"type":"message_start",...}
+    ///   （空行分隔事件）
     ///   多行 data 用 \n 拼接（W6 fix）
     ///   data: line1
     ///   data: line2
     ///   → 实际数据为 "line1\nline2"
-    ///   data: {"choices":[{"delta":{"content":"..."}}]}
-    ///   data: {"choices":[{"delta":{"tool_calls":[...]}}]}
-    ///   data: [DONE]
     private func parseBuffer(_ buffer: String) -> [SSEEvent] {
         var events: [SSEEvent] = []
         let lines = buffer.split(separator: "\n", omittingEmptySubsequences: false)
 
-        // W6 fix: 收集所有 data 行，多行 data 用 \n 拼接（RFC 8895）
+        // 收集当前事件块的字段
+        var currentEvent: String? = nil
         var dataLines: [String] = []
 
         for line in lines {
@@ -103,99 +100,31 @@ struct SSEStream {
             // 跳过空行（事件分隔符已在调用处处理）
             if trimmedLine.isEmpty { continue }
 
-            // SSE 注释行（以 : 开头）
-            if trimmedLine.hasPrefix(":") {
-                events.append(.comment(String(trimmedLine.dropFirst())))
-                continue
+            // SSE 注释行（以 : 开头）— 跳过
+            if trimmedLine.hasPrefix(":") { continue }
+
+            // SSE event: 行
+            if trimmedLine.hasPrefix("event:") {
+                let eventContent = String(trimmedLine.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+                currentEvent = eventContent
             }
 
-            // SSE data 行 — 累积多行 data
+            // SSE data: 行 — 累积多行 data
             if trimmedLine.hasPrefix("data:") {
                 let dataContent = String(trimmedLine.dropFirst(5)).trimmingCharacters(in: .whitespaces)
                 dataLines.append(dataContent)
             }
 
-            // SSE event: 行（当前仅处理 data: 类型）
-            // 忽略 event:, id:, retry: 等其他 SSE 字段
+            // 忽略 id:, retry: 等其他 SSE 字段
         }
 
         // W6 fix: 将累积的 data 行用 \n 拼接（RFC 8895 规范）
         if !dataLines.isEmpty {
             let currentData = dataLines.joined(separator: "\n")
-            if currentData == "[DONE]" {
-                events.append(.done)
-            } else {
-                let parsedEvents = parseDataJSON(currentData)
-                events.append(contentsOf: parsedEvents)
-            }
+            let event = SSEEvent(event: currentEvent, data: currentData)
+            events.append(event)
         }
 
         return events
-    }
-
-    /// 解析 SSE data 字段的 JSON 内容
-    /// OpenAI Chat Completions SSE JSON 格式：
-    /// {
-    ///   "id": "chatcmpl-xxx",
-    ///   "choices": [{
-    ///     "delta": {"content": "..."} 或 {"tool_calls": [...]},
-    ///     "finish_reason": null | "stop" | "tool_calls"
-    ///   }]
-    /// }
-    private func parseDataJSON(_ jsonString: String) -> [SSEEvent] {
-        guard let jsonData = jsonString.data(using: .utf8) else {
-            apiLogger.error("SSE data JSON conversion failed")
-            return []
-        }
-
-        do {
-            let json = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any]
-            guard let choices = json?["choices"] as? [[String: Any]],
-                  let firstChoice = choices.first else {
-                apiLogger.debug("SSE JSON: no choices array found")
-                return []
-            }
-
-            var events: [SSEEvent] = []
-            let delta = firstChoice["delta"] as? [String: Any] ?? [:]
-
-            // 1. 处理 content delta
-            if let content = delta["content"] as? String, !content.isEmpty {
-                events.append(.delta(content))
-            }
-
-            // 2. 处理 tool_calls delta
-            if let toolCalls = delta["tool_calls"] as? [[String: Any]] {
-                for toolCall in toolCalls {
-                    let id = toolCall["id"] as? String ?? ""
-                    let function = toolCall["function"] as? [String: Any] ?? [:]
-                    let name = function["name"] as? String ?? ""
-                    let argumentsDelta = function["arguments"] as? String ?? ""
-
-                    if !name.isEmpty && !id.isEmpty {
-                        // 工具调用开始
-                        events.append(.toolCallBegin(id: id, name: name))
-                    }
-                    if !argumentsDelta.isEmpty {
-                        // 工具调用参数增量
-                        events.append(.toolCallDelta(id: id, argumentsDelta: argumentsDelta))
-                    }
-                }
-            }
-
-            // 3. 处理 finish_reason
-            if let finishReason = firstChoice["finish_reason"] as? String, finishReason != "null" {
-                // finishReason 在 SSE chunk 中通常为 null
-                // 当 finishReason 非空时，流即将结束
-                if finishReason == "stop" || finishReason == "tool_calls" {
-                    // 不在此处 yield .done，由 [DONE] 标记流结束
-                }
-            }
-
-            return events
-        } catch {
-            apiLogger.error("SSE JSON parse error: \(error.localizedDescription)")
-            return []
-        }
     }
 }
