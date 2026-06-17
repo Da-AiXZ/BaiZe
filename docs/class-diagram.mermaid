@@ -1,0 +1,108 @@
+classDiagram
+    class ProjectYML {
+        +String name
+        +Options options
+        +List~SPMPackage~ packages
+        +List~Target~ targets
+    }
+
+    class Options {
+        +Bool createIntermediateGroups
+        +Bool generateEmptyDirectories
+        +String minimumXcodeGenVersion
+    }
+
+    class SPMPackage {
+        +String name
+        +String url
+        +String branch
+        +String majorVersion
+        +String from
+    }
+
+    class Target {
+        +String name
+        +String type
+        +String platform
+        +DeploymentTarget deploymentTarget
+        +List~Source~ sources
+        +List~Dependency~ dependencies
+        +Settings settings
+        +String entitlementsPath
+    }
+
+    class DeploymentTarget {
+        +String iOS
+    }
+
+    class Source {
+        +String path
+        +String type
+        +String buildPhase
+        +List~String~ excludes
+    }
+
+    class Dependency {
+        +String package
+        +String product
+    }
+
+    class Settings {
+        +Dict base
+        +Dict config
+    }
+
+    class BuildIPAScript {
+        +String archivePath
+        +String outputDir
+        +String productName
+        +String entitlementsPath
+        +extractAppFromArchive()
+        +insertRuntimeBinaries()
+        +fakesignWithLdid()
+        +createIPA()
+    }
+
+    class DownloadRuntimeScript {
+        +String runtimeDir
+        +String nodeVersion
+        +String pythonVersion
+        +downloadNodejsMobile()
+        +downloadCPythoniOS()
+        +createPlaceholder()
+        +verifyBinary()
+    }
+
+    class VerifyIPAScript {
+        +String ipaPath
+        +verifyBundleStructure()
+        +verifyEntitlements()
+        +verifyRuntimeBinaries()
+        +verifyInfoPlist()
+        +generateReport()
+    }
+
+    class CIWorkflow {
+        +String name
+        +List~Trigger~ on
+        +EnvVars env
+        +List~Step~ steps
+    }
+
+    class Step {
+        +String name
+        +String uses
+        +String run
+        +CacheConfig cache
+    }
+
+    ProjectYML --> Options
+    ProjectYML --> SPMPackage
+    ProjectYML --> Target
+    Target --> DeploymentTarget
+    Target --> Source
+    Target --> Dependency
+    Target --> Settings
+    BuildIPAScript --> CIWorkflow : called by
+    DownloadRuntimeScript --> CIWorkflow : called by
+    VerifyIPAScript --> CIWorkflow : called by

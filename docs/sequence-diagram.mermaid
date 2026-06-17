@@ -1,0 +1,79 @@
+sequenceDiagram
+    participant CI as GitHub Actions
+    participant XG as XcodeGen
+    participant XB as xcodebuild
+    participant DR as download-runtime.sh
+    participant BI as build-ipa.sh
+    participant VI as verify-ipa.sh
+    participant GH as GitHub Artifact
+
+    CI->>CI: checkout repository
+    CI->>CI: brew install ldid xcodegen xcpretty
+    CI->>CI: select Xcode 15.4
+    CI->>XG: xcodegen generate (project.yml → Baize.xcodeproj)
+    XG-->>CI: Baize.xcodeproj created
+    CI->>XB: xcodebuild -resolvePackageDependencies
+    XB-->>CI: SPM packages resolved (ios_system, KeychainAccess)
+    CI->>DR: bash scripts/download-runtime.sh
+    DR->>DR: download nodejs-mobile arm64 binary
+    DR->>DR: download CPython iOS binary (or create placeholder)
+    DR-->>CI: Runtime binaries in Baize/Baize/Frameworks/
+    CI->>XB: xcodebuild archive -scheme Baize -sdk iphoneos -arch arm64
+    Note over XB: Compiles ALL Swift sources (including BaizeApp.swift @main)
+    Note over XB: Embeds Info.plist, entitlements, resources
+    Note over XB: Output: build/Baize.xcarchive/Products/Applications/Baize.app
+    XB-->>CI: build/Baize.xcarchive
+    CI->>BI: bash scripts/build-ipa.sh build/Baize.xcarchive output
+    BI->>BI: Extract Baize.app from xcarchive
+    BI->>BI: Copy Runtime binaries into Baize.app/Frameworks/
+    BI->>BI: ldid -SBaize/Baize/Baize.entitlements Baize.app/Baize
+    BI->>BI: ldid -S each Frameworks/* binary
+    BI->>BI: zip → Baize.ipa
+    BI-->>CI: output/Baize.ipa
+    CI->>VI: bash scripts/verify-ipa.sh output/Baize.ipa
+    VI->>VI: Check bundle structure (Payload/Baize.app/)
+    VI->>VI: ldid -e Baize.app/Baize → verify entitlements
+    VI->>VI: Check Info.plist (CFBundleIdentifier, etc.)
+    VI->>VI: Check Frameworks/ (node, python3)
+    VI-->>CI: Verification report
+    CI->>GH: upload-artifact Baize-IPA
+
+sequenceDiagram
+    participant Dev as Developer/CI
+    participant XG as XcodeGen
+    participant PY as project.yml
+    participant PS as Package.swift
+    participant XP as Baize.xcodeproj
+
+    Dev->>XG: xcodegen generate
+    XG->>PY: Read project.yml
+    XG->>PS: Read Package.swift (for SPM dependency metadata)
+    Note over XG: Create iOS app target "Baize"
+    Note over XG: Sources = all Swift files under Baize/Baize/
+    Note over XG: Dependencies = ios_system + KeychainAccess
+    Note over XG: Settings = INFOPLIST_FILE, CODE_SIGN_ENTITLEMENTS, etc.
+    XG->>XP: Generate Baize.xcodeproj/project.pbxproj
+    XG-->>Dev: Baize.xcodeproj ready
+
+sequenceDiagram
+    participant BI as build-ipa.sh
+    participant ARC as xcarchive
+    participant APP as Baize.app
+    participant FRW as Frameworks/
+    participant LD as ldid
+    participant ZIP as zip
+
+    BI->>ARC: Find build/Baize.xcarchive
+    BI->>APP: Extract Products/Applications/Baize.app
+    BI->>APP: Verify Baize.app/Baize executable exists
+    BI->>FRW: mkdir Baize.app/Frameworks/
+    BI->>FRW: cp node → Frameworks/node
+    BI->>FRW: cp python3 → Frameworks/python3
+    BI->>LD: ldid -SBaize/Baize/Baize.entitlements Baize.app/Baize
+    Note over LD: Fakesign main executable with entitlements
+    BI->>LD: ldid -S Frameworks/node
+    BI->>LD: ldid -S Frameworks/python3
+    Note over LD: Fakesign runtime binaries (no entitlements)
+    BI->>ZIP: mkdir Payload/ && cp -r Baize.app Payload/
+    BI->>ZIP: zip -r Baize.ipa Payload/
+    BI-->>BI: output/Baize.ipa created

@@ -1,4 +1,5 @@
 // swift-tools-version: 5.9
+// NOTE: Actual iOS app build is driven by XcodeGen (project.yml). This BaizeKit target is for SPM dependency resolution and development reference only.
 import PackageDescription
 
 let package = Package(
@@ -19,10 +20,9 @@ let package = Package(
                 .product(name: "KeychainAccess", package: "KeychainAccess"),
             ],
             path: "Baize/Baize",
-            exclude: ["App/BaizeApp.swift"],
+            exclude: ["App/BaizeApp.swift", "Info.plist", "Baize.entitlements"],
             resources: [
                 .process("Resources/monaco-editor"),
-                .process("Resources/Assets.xcassets"),
             ]
         ),
     ]

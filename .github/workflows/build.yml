@@ -11,14 +11,13 @@ on:
   workflow_dispatch:
 
 env:
-  SCHEME: BaizeKit
+  SCHEME: Baize
   PRODUCT_NAME: Baize
-  TEAM_ID: ""
   BUNDLE_ID: com.baize.app
 
 jobs:
   build:
-    name: Build & Package IPA (with Runtime)
+    name: Build & Package IPA (XcodeGen)
     runs-on: macos-14
     timeout-minutes: 45
 
@@ -26,193 +25,61 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Select Xcode version
+      - name: Select Xcode 15.4
         run: |
           sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
           xcodebuild -version
 
-      - name: Install build dependencies
+      - name: Install build tools
         run: |
-          brew install ldid xcpretty
+          brew install ldid xcodegen xcpretty
 
-      - name: Cache SPM dependencies
+      - name: Cache SPM packages
         uses: actions/cache@v4
         with:
-          path: .build
-          key: ${{ runner.os }}-spm-${{ hashFiles('Package.swift') }}
+          path: SourcePackages
+          key: ${{ runner.os }}-spm-${{ hashFiles('project.yml') }}
           restore-keys: ${{ runner.os }}-spm-
 
-      # =============================================
-      # Node.js Runtime (nodejs-mobile --jitless)
-      # =============================================
-      - name: Download nodejs-mobile binary
+      - name: Generate Xcode project (XcodeGen)
         run: |
-          # Download pre-built node binary for iOS arm64 (1Conan fork)
-          # Phase 1: Placeholder download step
-          # Phase 2: Use actual nodejs-mobile build artifacts
-          echo "Downloading nodejs-mobile binary..."
-          NODE_BINARY_DIR="Baize/Baize/Frameworks"
-          mkdir -p "$NODE_BINARY_DIR"
+          xcodegen generate
+          echo "✅ Baize.xcodeproj generated"
 
-          # For Phase 1, create a placeholder script
-          # In production, this would download from nodejs-mobile releases
-          echo '#!/bin/sh' > "$NODE_BINARY_DIR/node"
-          echo 'echo "Node.js placeholder - Phase 1"' >> "$NODE_BINARY_DIR/node"
-          chmod +x "$NODE_BINARY_DIR/node"
-          echo "✅ Node.js placeholder binary created"
-
-      # =============================================
-      # Python Runtime (CPython iOS embed)
-      # =============================================
-      - name: Download CPython iOS binary
-        run: |
-          # Download CPython 3.13+ iOS binary
-          # Phase 1: Placeholder
-          # Phase 2: Use BeeWare Python-Apple-support XCFramework
-          echo "Downloading CPython iOS binary..."
-          PYTHON_BINARY_DIR="Baize/Baize/Frameworks"
-          mkdir -p "$PYTHON_BINARY_DIR"
-
-          # For Phase 1, create a placeholder script
-          echo '#!/bin/sh' > "$PYTHON_BINARY_DIR/python3"
-          echo 'echo "Python placeholder - Phase 1"' >> "$PYTHON_BINARY_DIR/python3"
-          chmod +x "$PYTHON_BINARY_DIR/python3"
-          echo "✅ Python placeholder binary created"
-
-      # =============================================
-      # Monaco Editor Resources
-      # =============================================
-      - name: Verify Monaco Editor resources
-        run: |
-          MONACO_DIR="Baize/Baize/Resources/monaco-editor"
-          if [ -f "$MONACO_DIR/index.html" ]; then
-            echo "✅ Monaco Editor index.html found"
-          else
-            echo "⚠️ Monaco Editor index.html not found, creating placeholder"
-            mkdir -p "$MONACO_DIR"
-            echo '<!DOCTYPE html><html><body>Monaco Editor Placeholder</body></html>' > "$MONACO_DIR/index.html"
-          fi
-
-      # =============================================
-      # Build — 修复 C5：使用 SPM (swift build) 替代不存在的 xcodeproj
-      # 项目使用 Package.swift + SPM 管理，不存在 Baize.xcodeproj
-      # 使用 xcodebuild -scheme 构建 SPM target (BaizeKit)
-      # =============================================
       - name: Resolve SPM dependencies
         run: |
-          swift package resolve 2>&1 | head -20
+          xcodebuild -resolvePackageDependencies \
+            -scheme Baize \
+            -clonedSourcePackagesDirPath SourcePackages
 
-      - name: Build via SPM + xcodebuild (Archive)
+      - name: Download Runtime binaries
+        run: |
+          bash scripts/download-runtime.sh
+
+      - name: Build Archive (xcodebuild)
         run: |
           set -o pipefail
-
-          # 使用 SPM 生成的 Xcode 项目（而非不存在的 .xcodeproj）
-          # xcodebuild 可以直接构建 SPM scheme
-          echo "Building BaizeKit via xcodebuild with SPM scheme..."
-
           xcodebuild archive \
-            -scheme BaizeKit \
+            -scheme Baize \
             -sdk iphoneos \
             -arch arm64 \
             -configuration Release \
             -archivePath build/Baize.xcarchive \
+            -clonedSourcePackagesDirPath SourcePackages \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-            DEVELOPMENT_TEAM="${{ env.TEAM_ID }}" \
-            PRODUCT_BUNDLE_IDENTIFIER="${{ env.BUNDLE_ID }}" \
-            | xcpretty
+            DEVELOPMENT_TEAM="" \
+            PRODUCT_BUNDLE_IDENTIFIER=com.baize.app \
+            | tee build.log | xcpretty --color
 
-          # 验证构建结果
-          if [ ! -d "build/Baize.xcarchive" ]; then
-            echo "⚠️ Archive build failed, trying swift build fallback..."
-
-            # Fallback: 使用 swift build 编译 + 手动构建 .app
-            swift build \
-              -c release \
-              --arch arm64 \
-              -Xswiftc -sdk -Xswiftc iphoneos \
-              -Xswiftc -target -Xswiftc arm64-apple-ios16.0 \
-              2>&1 | tail -20
-
-            # 手动查找构建产物
-            echo "Searching for build products..."
-            find .build -name "BaizeKit" -type f 2>/dev/null || true
-          fi
-
-      # =============================================
-      # Package IPA
-      # =============================================
-      - name: Package IPA from archive or build output
+      - name: Build IPA from Archive
         run: |
-          # Try to find .app from archive
-          APP_PATH=""
+          bash scripts/build-ipa.sh build/Baize.xcarchive output
 
-          # Method 1: From xcarchive
-          ARCHIVE_APP="build/Baize.xcarchive/Products/Applications/${{ env.PRODUCT_NAME }}.app"
-          if [ -d "$ARCHIVE_APP" ]; then
-            APP_PATH="$ARCHIVE_APP"
-          fi
-
-          # Method 2: From DerivedData (xcodebuild 可能输出到此处)
-          if [ -z "$APP_PATH" ]; then
-            FOUND_APP=$(find ~/Library/Developer/Xcode/DerivedData -name "${{ env.PRODUCT_NAME }}.app" -type d 2>/dev/null | head -1)
-            if [ -n "$FOUND_APP" ]; then
-              APP_PATH="$FOUND_APP"
-            fi
-          fi
-
-          # Method 3: From build/Build/Products
-          if [ -z "$APP_PATH" ]; then
-            FOUND_APP=$(find build -name "${{ env.PRODUCT_NAME }}.app" -type d | head -1)
-            if [ -n "$FOUND_APP" ]; then
-              APP_PATH="$FOUND_APP"
-            fi
-          fi
-
-          if [ -z "$APP_PATH" ]; then
-            echo "❌ .app bundle not found"
-            echo "Searching entire build directory..."
-            find build -name "*.app" -type d || true
-            find . -name "${{ env.PRODUCT_NAME }}.app" -type d 2>/dev/null || true
-            exit 1
-          fi
-
-          echo "✅ Found .app at: $APP_PATH"
-
-          # Verify runtime binaries are in Frameworks
-          echo "Checking runtime binaries..."
-          ls -la "$APP_PATH/Frameworks/" || echo "No Frameworks directory"
-          ls -la "$APP_PATH/monaco-editor/" || echo "No monaco-editor directory"
-
-          # Create IPA structure
-          mkdir -p build/ipa/Payload
-          cp -r "$APP_PATH" build/ipa/Payload/
-
-          # Fakesign entire .app with ldid (TrollStore compatible)
-          ldid -S Baize/Baize/Baize.entitlements build/ipa/Payload/${{ env.PRODUCT_NAME }}.app
-
-          # Also fakesign runtime binaries if they exist
-          if [ -f "build/ipa/Payload/${{ env.PRODUCT_NAME }}.app/Frameworks/node" ]; then
-            ldid -S build/ipa/Payload/${{ env.PRODUCT_NAME }}.app/Frameworks/node
-            echo "✅ Node.js binary fakesigned"
-          fi
-
-          if [ -f "build/ipa/Payload/${{ env.PRODUCT_NAME }}.app/Frameworks/python3" ]; then
-            ldid -S build/ipa/Payload/${{ env.PRODUCT_NAME }}.app/Frameworks/python3
-            echo "✅ Python binary fakesigned"
-          fi
-
-          # Create IPA
-          cd build/ipa
-          zip -r "${{ env.PRODUCT_NAME }}.ipa" Payload
-          cd ..
-
-          mkdir -p output
-          mv build/ipa/${{ env.PRODUCT_NAME }}.ipa output/
-
-          echo "✅ IPA created: output/${{ env.PRODUCT_NAME }}.ipa"
-          ls -lh output/
+      - name: Verify IPA
+        run: |
+          bash scripts/verify-ipa.sh output/Baize.ipa
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
@@ -221,56 +88,33 @@ jobs:
           path: output/Baize.ipa
           retention-days: 30
 
-      - name: Verify IPA structure
-        run: |
-          echo "=== IPA Contents ==="
-          unzip -l output/Baize.ipa | head -30
-
-          echo ""
-          echo "=== Entitlements ==="
-          # 修复 W14: ldid -e 需要对 .app 内的可执行文件执行，而非 .ipa (zip)
-          unzip -o output/Baize.ipa -d /tmp/ipa_verify
-          EXECUTABLE_PATH="/tmp/ipa_verify/Payload/Baize.app/Baize"
-          if [ -f "$EXECUTABLE_PATH" ]; then
-            ldid -e "$EXECUTABLE_PATH" || true
-          else
-            echo "⚠️ Executable not found at $EXECUTABLE_PATH"
-            # 列出 .app 内文件帮助调试
-            find /tmp/ipa_verify/Payload/Baize.app -type f | head -20
-          fi
-
-          echo ""
-          echo "=== App Info.plist ==="
-          unzip -p output/Baize.ipa Payload/Baize.app/Info.plist
-
-          echo ""
-          echo "=== Frameworks (Runtime Binaries) ==="
-          unzip -l output/Baize.ipa | grep "Frameworks/" || echo "No Frameworks found"
-
-          echo ""
-          echo "=== Monaco Editor Resources ==="
-          unzip -l output/Baize.ipa | grep "monaco-editor/" || echo "No Monaco resources found"
-
-      # =============================================
-      # TrollStore Compatibility Test Info
-      # =============================================
       - name: Generate build report
+        if: always()
         run: |
           echo "## Baize Build Report" > build-report.md
           echo "" >> build-report.md
-          echo "- **IPA Size**: $(ls -lh output/Baize.ipa | awk '{print $5}')"
+          if [ -f "output/Baize.ipa" ]; then
+            echo "- **IPA Size**: $(ls -lh output/Baize.ipa | awk '{print $5}')" >> build-report.md
+            echo "- **Build Status**: ✅ Success" >> build-report.md
+          else
+            echo "- **Build Status**: ❌ Failed" >> build-report.md
+            if [ -f "build.log" ]; then
+              echo "- **Last 30 lines of build log**:" >> build-report.md
+              echo '```' >> build-report.md
+              tail -30 build.log >> build-report.md
+              echo '```' >> build-report.md
+            fi
+          fi
           echo "- **Build Date**: $(date -u +"%Y-%m-%d %H:%M UTC")" >> build-report.md
           echo "- **Target**: iOS 16+ arm64 (iPad Pro M1)" >> build-report.md
           echo "- **TrollStore**: Compatible (ldid fakesigned)" >> build-report.md
-          echo "- **Entitlements**: no-sandbox, platform-application, storage.AppDataContainers" >> build-report.md
-          echo "- **Node.js**: Placeholder (Phase 1)" >> build-report.md
-          echo "- **Python**: Placeholder (Phase 1)" >> build-report.md
-          echo "- **Monaco Editor**: Placeholder HTML (Phase 1)" >> build-report.md
-          echo "" >> build-report.md
-          echo "### 4 项实测待确认 (T05)" >> build-report.md
-          echo "1. nodejs-mobile 在 TrollStore no-sandbox 下的 child_process" >> build-report.md
-          echo "2. ios_system 在 no-sandbox 下的文件系统访问范围" >> build-report.md
-          echo "3. posix_spawn 在 TrollStore 下能否 spawn Bundle 外二进制" >> build-report.md
-          echo "4. nodejs-mobile 不使用 App Extension 直接主进程运行的稳定性" >> build-report.md
-          echo "" >> build-report.md
+          echo "- **Build System**: XcodeGen + xcodebuild" >> build-report.md
+          echo "- **Runtime Binaries**: Placeholder (Phase 2B)" >> build-report.md
           cat build-report.md
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log

@@ -1,0 +1,137 @@
+#!/bin/bash
+set -euo pipefail
+
+# verify-ipa.sh — 验证 IPA 结构和内容
+# Usage: verify-ipa.sh <ipa-path>
+
+IPA_PATH="${1:?Usage: verify-ipa.sh <ipa-path>}"
+PRODUCT_NAME="Baize"
+
+echo "🔍 Verifying IPA: $IPA_PATH"
+echo ""
+
+if [ ! -f "$IPA_PATH" ]; then
+    echo "❌ IPA file not found: $IPA_PATH"
+    exit 1
+fi
+
+# 1. Unzip for inspection
+VERIFY_DIR="/tmp/baize-ipa-verify-$$"
+rm -rf "$VERIFY_DIR"
+mkdir -p "$VERIFY_DIR"
+unzip -q "$IPA_PATH" -d "$VERIFY_DIR"
+
+PASS=0
+FAIL=0
+
+# 2. Check bundle structure
+echo "=== Bundle Structure ==="
+APP_DIR="$VERIFY_DIR/Payload/$PRODUCT_NAME.app"
+if [ -d "$APP_DIR" ]; then
+    echo "✅ Payload/$PRODUCT_NAME.app exists"
+    ((PASS++))
+else
+    echo "❌ Payload/$PRODUCT_NAME.app NOT found"
+    ((FAIL++))
+fi
+
+# 3. Check main executable
+echo ""
+echo "=== Main Executable ==="
+EXECUTABLE="$APP_DIR/$PRODUCT_NAME"
+if [ -f "$EXECUTABLE" ]; then
+    echo "✅ Main executable exists: $PRODUCT_NAME"
+    ((PASS++))
+    if [ -x "$EXECUTABLE" ]; then
+        echo "✅ Main executable is executable"
+        ((PASS++))
+    else
+        echo "❌ Main executable is NOT executable"
+        ((FAIL++))
+    fi
+else
+    echo "❌ Main executable NOT found"
+    ((FAIL++))
+fi
+
+# 4. Check entitlements
+echo ""
+echo "=== Entitlements ==="
+if [ -f "$EXECUTABLE" ]; then
+    ENTITLEMENTS_OUTPUT=$(ldid -e "$EXECUTABLE" 2>/dev/null || true)
+    if echo "$ENTITLEMENTS_OUTPUT" | grep -q "no-sandbox"; then
+        echo "✅ Entitlement 'no-sandbox' found"
+        ((PASS++))
+    else
+        echo "⚠️ Entitlement 'no-sandbox' not found (may be embedded differently)"
+    fi
+    if echo "$ENTITLEMENTS_OUTPUT" | grep -q "platform-application"; then
+        echo "✅ Entitlement 'platform-application' found"
+        ((PASS++))
+    else
+        echo "⚠️ Entitlement 'platform-application' not found"
+    fi
+fi
+
+# 5. Check Info.plist
+echo ""
+echo "=== Info.plist ==="
+INFO_PLIST="$APP_DIR/Info.plist"
+if [ -f "$INFO_PLIST" ]; then
+    echo "✅ Info.plist exists"
+    ((PASS++))
+    # Check CFBundleIdentifier
+    BUNDLE_ID=$(plutil -extract CFBundleIdentifier raw "$INFO_PLIST" 2>/dev/null || true)
+    if [ "$BUNDLE_ID" = "com.baize.app" ]; then
+        echo "✅ CFBundleIdentifier = com.baize.app"
+        ((PASS++))
+    else
+        echo "⚠️ CFBundleIdentifier = $BUNDLE_ID (expected com.baize.app)"
+    fi
+else
+    echo "❌ Info.plist NOT found"
+    ((FAIL++))
+fi
+
+# 6. Check Frameworks (runtime binaries)
+echo ""
+echo "=== Frameworks (Runtime Binaries) ==="
+FRAMEWORKS_DIR="$APP_DIR/Frameworks"
+if [ -d "$FRAMEWORKS_DIR" ]; then
+    echo "✅ Frameworks/ directory exists"
+    ((PASS++))
+    for binary in node python3; do
+        if [ -f "$FRAMEWORKS_DIR/$binary" ]; then
+            echo "✅ $binary found in Frameworks/"
+            ((PASS++))
+        else
+            echo "⚠️ $binary NOT found in Frameworks/ (placeholder may not be embedded)"
+        fi
+    done
+else
+    echo "⚠️ Frameworks/ directory NOT found (runtime binaries not embedded)"
+fi
+
+# 7. Check monaco-editor
+echo ""
+echo "=== Monaco Editor Resources ==="
+MONACO_DIR="$APP_DIR/monaco-editor"
+if [ -d "$MONACO_DIR" ]; then
+    echo "✅ monaco-editor/ directory exists in app bundle"
+    ((PASS++))
+else
+    echo "⚠️ monaco-editor/ directory NOT found"
+fi
+
+# 8. Summary
+echo ""
+echo "======================================"
+echo "Verification Summary: $PASS passed, $FAIL failed"
+echo "======================================"
+
+# Cleanup
+rm -rf "$VERIFY_DIR"
+
+if [ "$FAIL" -gt 0 ]; then
+    exit 1
+fi

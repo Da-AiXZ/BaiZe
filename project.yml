@@ -1,0 +1,56 @@
+name: Baize
+options:
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+  minimumXcodeGenVersion: "2.30"
+
+packages:
+  ios_system:
+    url: https://github.com/holzschu/ios_system
+    branch: master
+  KeychainAccess:
+    url: https://github.com/kishikawakatsumi/KeychainAccess
+    majorVersion: "4.2.2"
+
+targets:
+  Baize:
+    type: application
+    platform: iOS
+    deploymentTarget:
+      iOS: "16.0"
+    sources:
+      - Baize/Baize/Agent
+      - Baize/Baize/App
+      - Baize/Baize/Infrastructure
+      - Baize/Baize/Models
+      - Baize/Baize/Tools
+      - Baize/Baize/Utils
+      - Baize/Baize/Views
+      - path: Baize/Baize/Resources/monaco-editor
+        type: folder
+        buildPhase: resources
+      - path: Baize/Baize/Resources/LaunchScreen.storyboard
+        buildPhase: resources
+    dependencies:
+      - package: ios_system
+        product: ios_system
+      - package: KeychainAccess
+        product: KeychainAccess
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.baize.app
+        PRODUCT_NAME: Baize
+        INFOPLIST_FILE: Baize/Baize/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Baize/Baize/Baize.entitlements
+        TARGETED_DEVICE_FAMILY: "2"
+        ARCHS: arm64
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO
+        DEVELOPMENT_TEAM: ""
+        SWIFT_VERSION: "5.9"
+        GENERATE_INFOPLIST_FILE: NO
+        SUPPORTS_MACCATALYST: NO
+        ENABLE_PREVIEWS: NO
+    entitlements:
+      path: Baize/Baize/Baize.entitlements

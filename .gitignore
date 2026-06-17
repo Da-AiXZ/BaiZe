@@ -1,7 +1,6 @@
 # Xcode
-*.xcodeproj/*
-!*.xcodeproj/project.pbxproj
-!*.xcodeproj/xcshareddata/
+# XcodeGen (project.yml → .xcodeproj, 不入库)
+*.xcodeproj/
 *.xcworkspace/*
 !*.xcworkspace/contents.xcworkspacedata
 !*.xcworkspace/xcshareddata/
@@ -53,3 +52,12 @@ venv/
 
 # Baize runtime temp files
 .baize-tmp/
+
+# SPM Source Packages (CI cache)
+SourcePackages/
+
+# Build logs
+build.log
+
+# Output
+output/
