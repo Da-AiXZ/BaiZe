@@ -119,6 +119,37 @@ MONACO_DIR="$APP_DIR/monaco-editor"
 if [ -d "$MONACO_DIR" ]; then
     echo "✅ monaco-editor/ directory exists in app bundle"
     ((PASS++))
+
+    # Check index.html
+    if [ -f "$MONACO_DIR/index.html" ]; then
+        echo "✅ monaco-editor/index.html exists"
+        ((PASS++))
+    else
+        echo "❌ monaco-editor/index.html NOT found"
+        ((FAIL++))
+    fi
+
+    # Check min/vs directory (Monaco editor core)
+    if [ -d "$MONACO_DIR/min/vs" ]; then
+        echo "✅ monaco-editor/min/vs/ directory exists (Monaco core)"
+        ((PASS++))
+
+        # Check loader.js
+        if [ -f "$MONACO_DIR/min/vs/loader.js" ]; then
+            echo "✅ monaco-editor/min/vs/loader.js exists"
+            ((PASS++))
+        else
+            echo "❌ monaco-editor/min/vs/loader.js NOT found"
+            ((FAIL++))
+        fi
+
+        # Report Monaco resource size
+        MONACO_SIZE=$(du -sh "$MONACO_DIR/min/" 2>/dev/null | awk '{print $1}' || echo "unknown")
+        MONACO_FILES=$(find "$MONACO_DIR/min/" -type f 2>/dev/null | wc -l | tr -d ' ')
+        echo "   Monaco min/ size: ${MONACO_SIZE} (${MONACO_FILES} files)"
+    else
+        echo "⚠️ monaco-editor/min/vs/ NOT found (Monaco core not downloaded)"
+    fi
 else
     echo "⚠️ monaco-editor/ directory NOT found"
 fi

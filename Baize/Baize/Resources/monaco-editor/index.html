@@ -6,159 +6,530 @@
     <title>Baize Monaco Editor</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        html, body { width: 100%; height: 100%; overflow: hidden; background: #1E1E1E; }
+        html, body { width: 100%; height: 100%; overflow: hidden; background: #1A1A2E; }
         #container { width: 100%; height: 100%; }
-    </style>
 
-    <!-- Monaco Editor will be loaded from bundled resources in production -->
-    <!-- Phase 1: This HTML provides the Monaco Bridge JavaScript API -->
-    <!-- Phase 2: Replace with full Monaco Editor bundle (monaco-editor npm package) -->
+        /* Loading overlay */
+        #loading {
+            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: #1A1A2E; z-index: 100;
+            font-family: -apple-system, 'SF Pro Display', 'Helvetica Neue', sans-serif;
+        }
+        #loading .spinner {
+            width: 40px; height: 40px;
+            border: 3px solid rgba(0, 240, 255, 0.15);
+            border-top-color: #00F0FF;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        #loading .label {
+            margin-top: 16px; color: #00F0FF; font-size: 14px;
+            letter-spacing: 2px; text-transform: uppercase;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <!-- Loading overlay — hidden after Monaco init -->
+    <div id="loading">
+        <div class="spinner"></div>
+        <div class="label">Loading Editor</div>
+    </div>
+
+    <!-- Monaco Editor container -->
+    <div id="container"></div>
+
+    <!-- AMD loader -->
+    <script src="min/vs/loader.js"></script>
 
     <script>
-        // =============================================
-        // Baize Monaco Bridge JavaScript API
-        // =============================================
-        // This script provides the interface between Swift (WKWebView)
-        // and Monaco Editor. Swift calls these functions via evaluateJavaScript,
-        // and Monaco calls back via window.webkit.messageHandlers.
+    // =============================================
+    // Baize Monaco Editor — Full Integration
+    // =============================================
+    // Phase 2D: Real Monaco Editor with Swift bridge API
+    // - AMD require loader from bundled min/vs/
+    // - Inline Web Worker (data URL) to avoid CORS issues
+    // - Baize Cyberpunk theme
+    // - Full bridge API: openFile, getContent, setContent, setLanguage, setTheme, goToLine, search
+    // - Cmd+S save shortcut
+    // - onDidChangeModelContent → Swift contentChanged
+    // =============================================
 
-        // State
-        let state = {
-            content: '',
-            language: 'plaintext',
-            isReady: false
-        };
+    // Guard: Monaco editor instance
+    var editor = null;
 
-        // =============================================
-        // API Functions (called by Swift via evaluateJavaScript)
-        // =============================================
+    // Guard: Monaco module reference
+    var monacoModule = null;
 
-        /**
-         * Open a file in the editor
-         * @param {string} content - File content (escaped)
-         * @param {string} language - Monaco language ID
-         */
-        function monacoOpenFile(content, language) {
-            state.content = unescapeContent(content);
-            state.language = language;
-            updateEditor();
-            notifyReady();
+    // =============================================
+    // Unescape helper — matches Swift's escapeForJavaScript
+    // =============================================
+    function unescapeContent(escaped) {
+        if (typeof escaped !== 'string') return '';
+        return escaped
+            .replace(/\\n/g, '\n')
+            .replace(/\\r/g, '\r')
+            .replace(/\\t/g, '\t')
+            .replace(/\\'/g, "'")
+            .replace(/\\\\/g, '\\');
+    }
+
+    // =============================================
+    // Monaco Environment — Inline Worker (CORS-safe)
+    // =============================================
+    self.MonacoEnvironment = {
+        getWorkerUrl: function(workerId, label) {
+            return 'data:text/javascript;charset=utf-8,' + encodeURIComponent(
+                'self.MonacoEnvironment = { baseUrl: "min/" };' +
+                'importScripts("min/vs/base/worker/workerMain.js");'
+            );
         }
+    };
 
-        /**
-         * Get current editor content
-         * @returns {string} Current content
-         */
-        function monacoGetContent() {
-            return state.content;
-        }
+    // =============================================
+    // AMD Require Config & Init
+    // =============================================
+    require.config({
+        paths: { 'vs': 'min/vs' }
+    });
 
-        /**
-         * Set editor content
-         * @param {string} content - New content (escaped)
-         */
-        function monacoSetContent(content) {
-            state.content = unescapeContent(content);
-            updateEditor();
-            notifyContentChanged();
-        }
+    require(['vs/editor/editor.main'], function(monaco) {
+        monacoModule = monaco;
 
-        /**
-         * Set editor language mode
-         * @param {string} language - Monaco language ID
-         */
-        function monacoSetLanguage(language) {
-            state.language = language;
-            // Phase 1: No Monaco instance yet, just update state
-        }
+        // ---- Register Baize Cyberpunk Theme ----
+        monaco.editor.defineTheme('baize-cyberpunk', {
+            base: 'vs-dark',
+            inherit: true,
+            rules: [
+                // Keywords — neon pink
+                { token: 'keyword', foreground: 'FF2E93', fontStyle: 'bold' },
+                { token: 'keyword.flow', foreground: 'FF2E93', fontStyle: 'bold' },
+                { token: 'keyword.control', foreground: 'FF2E93', fontStyle: 'bold' },
+                { token: 'keyword.operator', foreground: 'FF2E93' },
+                { token: 'keyword.operator.new', foreground: 'FF2E93' },
 
-        // =============================================
-        // Internal Helpers
-        // =============================================
+                // Strings — neon cyan
+                { token: 'string', foreground: '00F0FF' },
+                { token: 'string.escape', foreground: '00F0FF', fontStyle: 'italic' },
+                { token: 'string.regexp', foreground: '00D4AA' },
 
-        /**
-         * Unescape content from Swift's escapeForJavaScript
-         */
-        function unescapeContent(escaped) {
-            if (typeof escaped !== 'string') return '';
-            return escaped
-                .replace(/\\n/g, '\n')
-                .replace(/\\r/g, '\r')
-                .replace(/\\t/g, '\t')
-                .replace(/\\'/g, "'")
-                .replace(/\\\\/g, '\\');
-        }
+                // Comments — muted green
+                { token: 'comment', foreground: '6A9955', fontStyle: 'italic' },
+                { token: 'comment.doc', foreground: '6A9955', fontStyle: 'italic' },
 
-        /**
-         * Update the editor display with current state
-         */
-        function updateEditor() {
-            const display = document.getElementById('editor-display');
-            if (display) {
-                display.textContent = state.content;
+                // Numbers — soft amber
+                { token: 'number', foreground: 'FFD700' },
+                { token: 'number.float', foreground: 'FFD700' },
+
+                // Types / class names — soft lavender
+                { token: 'type', foreground: 'C8A2F8' },
+                { token: 'type.identifier', foreground: 'C8A2F8' },
+                { token: 'type.declaration', foreground: 'C8A2F8' },
+
+                // Function names — bright white-green
+                { token: 'function', foreground: 'D4FAF0' },
+                { token: 'function.call', foreground: 'D4FAF0' },
+
+                // Variables — light gray
+                { token: 'variable', foreground: 'D4D4D4' },
+                { token: 'variable.predefined', foreground: '4EC9B0' },
+                { token: 'variable.parameter', foreground: '9CDCFE' },
+
+                // Operators
+                { token: 'operator', foreground: 'D4D4D4' },
+
+                // Delimiters / punctuation
+                { token: 'delimiter', foreground: 'D4D4D4' },
+                { token: 'delimiter.bracket', foreground: 'FF2E93' },
+                { token: 'delimiter.parenthesis', foreground: 'D4D4D4' },
+
+                // Tags (HTML/XML)
+                { token: 'tag', foreground: 'FF2E93' },
+                { token: 'tag.name', foreground: 'FF2E93' },
+                { token: 'tag.attribute.name', foreground: '9CDCFE' },
+                { token: 'tag.attribute.value', foreground: '00F0FF' },
+
+                // Meta
+                { token: 'meta.tag', foreground: 'FF2E93' },
+                { token: 'metatag', foreground: '6A9955' },
+                { token: 'metatag.content', foreground: 'D4D4D4' },
+
+                // Markup
+                { token: 'markup.heading', foreground: 'FF2E93', fontStyle: 'bold' },
+                { token: 'markup.bold', foreground: 'D4D4D4', fontStyle: 'bold' },
+                { token: 'markup.italic', foreground: 'D4D4D4', fontStyle: 'italic' },
+                { token: 'markup.underline', foreground: '00F0FF', fontStyle: 'underline' },
+                { token: 'markup.inserted', foreground: '00F0FF' },
+                { token: 'markup.deleted', foreground: 'FF2E93' },
+                { token: 'markup.changed', foreground: 'FFD700' },
+                { token: 'markup.punctuation', foreground: 'D4D4D4' },
+                { token: 'markup.list', foreground: 'FF2E93' },
+            ],
+            colors: {
+                // Editor base
+                'editor.background': '#1A1A2E',
+                'editor.foreground': '#D4D4D4',
+                'editor.lineHighlightBackground': '#16213E',
+                'editor.selectionBackground': 'rgba(0, 240, 255, 0.15)',
+                'editor.inactiveSelectionBackground': 'rgba(0, 240, 255, 0.08)',
+                'editorCursor.foreground': '#00F0FF',
+                'editorWhitespace.foreground': 'rgba(255, 255, 255, 0.08)',
+
+                // Line numbers
+                'editorLineNumber.foreground': '#6A6A8E',
+                'editorLineNumber.activeForeground': '#00F0FF',
+                'editorGutter.background': '#16213E',
+
+                // Minimap
+                'minimap.background': '#1A1A2E',
+
+                // Scrollbar
+                'scrollbarSlider.background': 'rgba(0, 240, 255, 0.12)',
+                'scrollbarSlider.hoverBackground': 'rgba(0, 240, 255, 0.25)',
+                'scrollbarSlider.activeBackground': 'rgba(0, 240, 255, 0.35)',
+
+                // Selection highlight
+                'editor.selectionHighlightBackground': 'rgba(0, 240, 255, 0.08)',
+                'editor.wordHighlightBackground': 'rgba(255, 46, 147, 0.12)',
+                'editor.wordHighlightStrongBackground': 'rgba(255, 46, 147, 0.20)',
+
+                // Find/Replace
+                'editor.findMatchBackground': 'rgba(0, 240, 255, 0.25)',
+                'editor.findMatchHighlightBackground': 'rgba(0, 240, 255, 0.10)',
+                'editor.findRangeHighlightBackground': 'rgba(0, 240, 255, 0.05)',
+
+                // Hover
+                'editorHoverWidget.background': '#252540',
+                'editorHoverWidget.border': 'rgba(0, 240, 255, 0.2)',
+
+                // Suggest widget
+                'editorSuggestWidget.background': '#252540',
+                'editorSuggestWidget.border': 'rgba(0, 240, 255, 0.2)',
+                'editorSuggestWidget.selectedBackground': 'rgba(0, 240, 255, 0.12)',
+
+                // Bracket matching
+                'editorBracketMatch.background': 'rgba(0, 240, 255, 0.08)',
+                'editorBracketMatch.border': '#00F0FF',
+
+                // Overview ruler
+                'editorOverviewRuler.border': 'rgba(0, 240, 255, 0.1)',
+
+                // Indent guides
+                'editorIndentGuide.background': 'rgba(255, 255, 255, 0.06)',
+                'editorIndentGuide.activeBackground': 'rgba(0, 240, 255, 0.15)',
+
+                // Current line
+                'editor.rangeHighlightBackground': 'rgba(0, 240, 255, 0.06)',
             }
-        }
+        });
 
-        /**
-         * Notify Swift that content has changed
-         */
-        function notifyContentChanged() {
+        // ---- Create Editor Instance ----
+        editor = monaco.editor.create(document.getElementById('container'), {
+            value: '// Baize — 白泽编程智能体\n// Welcome to the Baize Monaco Editor\n',
+            language: 'javascript',
+            theme: 'baize-cyberpunk',
+            fontSize: 14,
+            fontFamily: "'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace",
+            fontLigatures: true,
+            minimap: { enabled: true },
+            scrollBeyondLastLine: false,
+            wordWrap: 'on',
+            lineNumbers: 'on',
+            renderLineHighlight: 'line',
+            cursorBlinking: 'smooth',
+            cursorSmoothCaretAnimation: 'on',
+            smoothScrolling: true,
+            padding: { top: 8, bottom: 8 },
+            automaticLayout: true,
+            tabSize: 4,
+            insertSpaces: true,
+            renderWhitespace: 'selection',
+            bracketPairColorization: { enabled: true },
+            guides: {
+                bracketPairs: true,
+                indentation: true
+            },
+            // iPad-optimized
+            scrollbar: {
+                verticalScrollbarSize: 8,
+                horizontalScrollbarSize: 8,
+                useShadows: false
+            },
+            overviewRulerBorder: false,
+            hideCursorInOverviewRuler: true,
+        });
+
+        // ---- Content Change → Swift ----
+        editor.onDidChangeModelContent(function() {
             try {
-                window.webkit.messageHandlers.contentChanged.postMessage(state.content);
+                var content = editor.getValue();
+                window.webkit.messageHandlers.contentChanged.postMessage(content);
             } catch (e) {
                 console.error('Failed to notify contentChanged:', e);
             }
-        }
+        });
 
-        /**
-         * Notify Swift that editor is ready
-         */
-        function notifyReady() {
-            try {
-                window.webkit.messageHandlers.editorReady.postMessage('');
-            } catch (e) {
-                console.error('Failed to notify editorReady:', e);
-            }
-        }
-
-        /**
-         * Handle keyboard shortcuts (Cmd+S for save)
-         */
-        document.addEventListener('keydown', function(e) {
-            // Cmd+S or Ctrl+S → Save
-            if ((e.metaKey || e.ctrlKey) && e.key === 's') {
-                e.preventDefault();
+        // ---- Cmd+S Save Action ----
+        editor.addAction({
+            id: 'baize-save',
+            label: 'Save File',
+            keybindings: [
+                monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS
+            ],
+            run: function() {
                 try {
                     window.webkit.messageHandlers.save.postMessage('');
-                } catch (err) {
-                    console.error('Failed to notify save:', err);
+                } catch (e) {
+                    console.error('Failed to notify save:', e);
                 }
             }
         });
 
-        // Notify Swift that the editor page has loaded
+        // ---- Go To Line Action ----
+        editor.addAction({
+            id: 'baize-go-to-line',
+            label: 'Go to Line',
+            keybindings: [
+                monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyG
+            ],
+            run: function() {
+                // Trigger Monaco's built-in go-to-line
+                editor.trigger('baize', 'editor.action.gotoLine');
+            }
+        });
+
+        // ---- Find Action ----
+        editor.addAction({
+            id: 'baize-find',
+            label: 'Find',
+            keybindings: [
+                monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF
+            ],
+            run: function() {
+                editor.trigger('baize', 'actions.find');
+            }
+        });
+
+        // ---- Hide Loading Overlay ----
+        var loadingEl = document.getElementById('loading');
+        if (loadingEl) {
+            loadingEl.style.display = 'none';
+        }
+
+        // ---- Notify Swift: Editor Ready ----
         try {
             window.webkit.messageHandlers.editorReady.postMessage('');
         } catch (e) {
-            // Will be called again when content is set
+            console.error('Failed to notify editorReady:', e);
         }
+
+        console.log('✅ Baize Monaco Editor initialized with baize-cyberpunk theme');
+    });
+
+    // =============================================
+    // Global error handler → Swift
+    // =============================================
+    window.onerror = function(message, source, lineno, colno, error) {
+        try {
+            window.webkit.messageHandlers.error.postMessage(
+                'JS Error: ' + message + ' at ' + source + ':' + lineno + ':' + colno
+            );
+        } catch (e) {
+            console.error('Failed to report error:', message);
+        }
+    };
+
+    // =============================================
+    // Bridge API Functions — Called by Swift via evaluateJavaScript
+    // =============================================
+
+    /**
+     * Open a file — set editor content and language mode
+     * @param {string} content - File content (Swift-escaped)
+     * @param {string} language - Monaco language ID
+     */
+    function monacoOpenFile(content, language) {
+        if (!editor) return;
+        var raw = unescapeContent(content);
+        var model = editor.getModel();
+        // Preserve undo stack by using setValue on existing model
+        if (model) {
+            // Push edit operation to preserve undo
+            editor.pushUndoStop();
+            model.setValue(raw);
+            monaco.editor.setModelLanguage(model, language || 'plaintext');
+            editor.pushUndoStop();
+        } else {
+            editor.setValue(raw);
+            monaco.editor.setModelLanguage(editor.getModel(), language || 'plaintext');
+        }
+        // Reset cursor to top
+        editor.setPosition({ lineNumber: 1, column: 1 });
+        editor.revealLineInCenter(1);
+        editor.focus();
+    }
+
+    /**
+     * Get current editor content
+     * @returns {string} Current content
+     */
+    function monacoGetContent() {
+        if (!editor) return '';
+        return editor.getValue();
+    }
+
+    /**
+     * Set editor content (replaces all content)
+     * @param {string} content - New content (Swift-escaped)
+     */
+    function monacoSetContent(content) {
+        if (!editor) return;
+        var raw = unescapeContent(content);
+        var model = editor.getModel();
+        if (model) {
+            editor.pushUndoStop();
+            model.setValue(raw);
+            editor.pushUndoStop();
+        }
+    }
+
+    /**
+     * Set editor language mode
+     * @param {string} language - Monaco language ID
+     */
+    function monacoSetLanguage(language) {
+        if (!editor || !monacoModule) return;
+        var model = editor.getModel();
+        if (model) {
+            monaco.editor.setModelLanguage(model, language || 'plaintext');
+        }
+    }
+
+    /**
+     * Set editor theme
+     * @param {string} themeName - Theme name: 'baize-cyberpunk', 'vs-dark', 'vs', 'hc-black'
+     */
+    function monacoSetTheme(themeName) {
+        if (!monacoModule) return;
+        var validThemes = ['baize-cyberpunk', 'vs-dark', 'vs', 'hc-black'];
+        if (validThemes.indexOf(themeName) === -1) {
+            themeName = 'baize-cyberpunk';
+        }
+        monaco.editor.setTheme(themeName);
+    }
+
+    /**
+     * Get list of supported Monaco languages
+     * @returns {string} JSON array of language IDs
+     */
+    function monacoGetLanguages() {
+        if (!monacoModule) return '[]';
+        var languages = monacoModule.languages.getLanguages();
+        return JSON.stringify(languages.map(function(lang) { return lang.id; }));
+    }
+
+    /**
+     * Go to a specific line number
+     * @param {number} line - Line number (1-based)
+     */
+    function monacoGoToLine(line) {
+        if (!editor) return;
+        var lineNum = parseInt(line, 10);
+        if (isNaN(lineNum) || lineNum < 1) return;
+        var lineCount = editor.getModel().getLineCount();
+        if (lineNum > lineCount) lineNum = lineCount;
+        editor.setPosition({ lineNumber: lineNum, column: 1 });
+        editor.revealLineInCenter(lineNum);
+        editor.focus();
+    }
+
+    /**
+     * Trigger search/find in editor
+     * @param {string} query - Search query string
+     */
+    function monacoSearch(query) {
+        if (!editor) return;
+        // Use Monaco's find controller
+        var findController = editor.getContribution('editor.contrib.findController');
+        if (findController) {
+            findController.start({
+                forceRevealReplace: false,
+                seedSearchStringFromSelection: 'none',
+                seedSearchStringFromGlobalSelection: 'none',
+                shouldFocus: true,
+                shouldAnimate: true,
+                updateGlobalSelection: false
+            });
+            // Set search value
+            if (query) {
+                findController.findModel.setSearchString(query);
+                findController.findController.next();
+            }
+        }
+    }
+
+    /**
+     * Insert text at current cursor position
+     * @param {string} text - Text to insert (Swift-escaped)
+     */
+    function monacoInsertText(text) {
+        if (!editor) return;
+        var raw = unescapeContent(text);
+        editor.trigger('baize', 'type', { text: raw });
+    }
+
+    /**
+     * Get current cursor position
+     * @returns {string} JSON object {lineNumber, column}
+     */
+    function monacoGetPosition() {
+        if (!editor) return '{"lineNumber":1,"column":1}';
+        var pos = editor.getPosition();
+        return JSON.stringify({ lineNumber: pos.lineNumber, column: pos.column });
+    }
+
+    /**
+     * Set editor read-only mode
+     * @param {boolean} readOnly - True to enable read-only mode
+     */
+    function monacoSetReadOnly(readOnly) {
+        if (!editor) return;
+        editor.updateOptions({ readOnly: !!readOnly });
+    }
+
+    /**
+     * Resize / trigger layout update (e.g., after orientation change)
+     */
+    function monacoLayout() {
+        if (!editor) return;
+        editor.layout();
+    }
+
+    // =============================================
+    // Keyboard shortcut — Cmd+S fallback (document level)
+    // =============================================
+    document.addEventListener('keydown', function(e) {
+        if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+            e.preventDefault();
+            try {
+                window.webkit.messageHandlers.save.postMessage('');
+            } catch (err) {
+                console.error('Failed to notify save:', err);
+            }
+        }
+    });
+
+    // =============================================
+    // Window resize → re-layout editor
+    // =============================================
+    window.addEventListener('resize', function() {
+        if (editor) {
+            editor.layout();
+        }
+    });
     </script>
-</head>
-<body>
-    <div id="container">
-        <!-- Phase 1: Simple text display placeholder -->
-        <!-- Phase 2: Monaco Editor will be loaded here via AMD require -->
-        <div id="editor-display" style="
-            font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
-            font-size: 14px;
-            line-height: 1.5;
-            padding: 16px;
-            color: #D4D4D4;
-            white-space: pre;
-            overflow: auto;
-            width: 100%;
-            height: 100%;
-        "></div>
-    </div>
 </body>
 </html>

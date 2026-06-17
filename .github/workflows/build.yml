@@ -58,6 +58,10 @@ jobs:
         run: |
           bash scripts/download-runtime.sh
 
+      - name: Download Monaco Editor
+        run: |
+          bash scripts/download-monaco.sh
+
       - name: Build Archive (xcodebuild)
         run: |
           set -o pipefail
@@ -112,6 +116,7 @@ jobs:
           echo "- **TrollStore**: Compatible (ldid fakesigned)" >> build-report.md
           echo "- **Build System**: XcodeGen + xcodebuild" >> build-report.md
           echo "- **Runtime Binaries**: Placeholder (Phase 2B)" >> build-report.md
+          echo "- **Monaco Editor**: v0.52.2 (Phase 2D)" >> build-report.md
           cat build-report.md
 
       - name: Upload build log on failure

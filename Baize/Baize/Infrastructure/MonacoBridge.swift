@@ -61,25 +61,28 @@ class MonacoBridge: NSObject, ObservableObject, WKScriptMessageHandler, WKNaviga
         return webView
     }
 
-    // MARK: - Editor Operations
+    // MARK: - Editor Loading
 
     /// 加载 Monaco Editor HTML 页面
+    /// 从 App Bundle 加载 monaco-editor/index.html，允许读取整个 monaco-editor 目录
     func loadEditor() {
         guard let webView = webView else { return }
 
         // 从 App Bundle 加载 Monaco Editor 资源
         if let htmlPath = Bundle.main.path(forResource: "index", ofType: "html", inDirectory: BaizePath.monacoResources) {
             let htmlURL = URL(fileURLWithPath: htmlPath)
+            // allowingReadAccessTo 设为 monaco-editor 目录，使 Monaco AMD loader 能加载 min/vs/ 下的文件
             webView.loadFileURL(htmlURL, allowingReadAccessTo: htmlURL.deletingLastPathComponent())
             uiLogger.info("Loading Monaco Editor from bundle: \(htmlPath)")
         } else {
-            // Phase 1: 如果 Monaco 资源尚未嵌入 Bundle，加载占位 HTML
-            loadPlaceholderHTML()
-            uiLogger.warning("Monaco Editor resources not found, loading placeholder")
+            uiLogger.error("Monaco Editor resources not found in bundle — index.html missing from \(BaizePath.monacoResources)")
         }
     }
 
+    // MARK: - Editor Operations
+
     /// 打开文件 — 设置 Monaco Editor 内容和语言模式
+    /// 等待 isEditorLoaded 后再调用 JS，确保 Monaco 实例已就绪
     /// - Parameters:
     ///   - path: 文件路径（用于标识）
     ///   - content: 文件内容
@@ -90,7 +93,20 @@ class MonacoBridge: NSObject, ObservableObject, WKScriptMessageHandler, WKNaviga
         let language = languageForFile(path: path)
         let escapedContent = escapeForJavaScript(content)
 
-        evaluateJavaScript("monacoOpenFile('\(escapedContent)', '\(language)')")
+        // 如果编辑器尚未加载，延迟执行
+        if !isEditorLoaded {
+            uiLogger.debug("Monaco: editor not ready, deferring openFile for \(path.fileName)")
+            Task { @MainActor in
+                // 等待编辑器加载完成，最多 5 秒
+                for _ in 0..<50 {
+                    if self.isEditorLoaded { break }
+                    try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+                }
+                self.evaluateJavaScript("monacoOpenFile('\(escapedContent)', '\(language)')")
+            }
+        } else {
+            evaluateJavaScript("monacoOpenFile('\(escapedContent)', '\(language)')")
+        }
         uiLogger.info("Monaco: opened file \(path.fileName) with language \(language)")
     }
 
@@ -125,6 +141,52 @@ class MonacoBridge: NSObject, ObservableObject, WKScriptMessageHandler, WKNaviga
     func setLanguage(language: String) {
         evaluateJavaScript("monacoSetLanguage('\(language)')")
         uiLogger.debug("Monaco: set language to \(language)")
+    }
+
+    /// 设置 Monaco Editor 主题
+    /// - Parameter themeName: 主题名称（baize-cyberpunk, vs-dark, vs, hc-black）
+    func setTheme(_ themeName: String) {
+        evaluateJavaScript("monacoSetTheme('\(themeName)')")
+        uiLogger.debug("Monaco: set theme to \(themeName)")
+    }
+
+    /// 获取 Monaco Editor 支持的语言列表
+    /// - Returns: JSON 字符串数组，如 ["javascript","python","swift",...]
+    func getLanguages() async -> String {
+        guard let webView = webView else { return "[]" }
+
+        return await withCheckedContinuation { continuation in
+            webView.evaluateJavaScript("monacoGetLanguages()") { result, error in
+                if let error = error {
+                    uiLogger.error("Monaco getLanguages error: \(error.localizedDescription)")
+                    continuation.resume(returning: "[]")
+                } else if let languages = result as? String {
+                    continuation.resume(returning: languages)
+                } else {
+                    continuation.resume(returning: "[]")
+                }
+            }
+        }
+    }
+
+    /// 跳转到指定行号
+    /// - Parameter line: 行号（1-based）
+    func goToLine(line: Int) {
+        evaluateJavaScript("monacoGoToLine(\(line))")
+        uiLogger.debug("Monaco: go to line \(line)")
+    }
+
+    /// 在编辑器中搜索
+    /// - Parameter query: 搜索关键词
+    func search(query: String) {
+        let escaped = escapeForJavaScript(query)
+        evaluateJavaScript("monacoSearch('\(escaped)')")
+        uiLogger.debug("Monaco: search for '\(query)'")
+    }
+
+    /// 触发编辑器重新布局（例如 iPad 旋转后调用）
+    func layout() {
+        evaluateJavaScript("monacoLayout()")
     }
 
     // MARK: - WKScriptMessageHandler
@@ -204,6 +266,13 @@ class MonacoBridge: NSObject, ObservableObject, WKScriptMessageHandler, WKNaviga
         case "sql": return "sql"
         case "r": return "r"
         case "dockerfile": return "dockerfile"
+        case "lua": return "lua"
+        case "kt", "kts": return "kotlin"
+        case "scala": return "scala"
+        case "pl", "pm": return "perl"
+        case "dart": return "dart"
+        case "objc": return "objective-c"
+        case "m", "mm": return "objective-c"
         default: return "plaintext"
         }
     }
@@ -217,55 +286,6 @@ class MonacoBridge: NSObject, ObservableObject, WKScriptMessageHandler, WKNaviga
             .replacingOccurrences(of: "\r", with: "\\r")
             .replacingOccurrences(of: "\t", with: "\\t")
     }
-
-    /// 加载 Phase 1 占位 HTML（Monaco 资源尚未嵌入时的回退）
-    private func loadPlaceholderHTML() {
-        guard let webView = webView else { return }
-
-        let placeholderHTML = """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <style>
-                body { margin: 0; padding: 0; background: #1E1E1E; color: #D4D4D4; }
-                #editor { width: 100%; height: 100vh; font-family: 'Menlo', monospace; }
-                .placeholder { padding: 40px; text-align: center; }
-                .placeholder h2 { color: #4A9EFF; }
-                .placeholder p { color: #888; }
-            </style>
-        </head>
-        <body>
-            <div id="editor">
-                <div class="placeholder">
-                    <h2>Monaco Editor</h2>
-                    <p>Phase 1 Placeholder — Monaco Editor resources will be embedded in Phase 2</p>
-                </div>
-            </div>
-            <script>
-                // Placeholder JavaScript API for Monaco Bridge
-                function monacoOpenFile(content, language) {
-                    document.getElementById('editor').innerText = content;
-                    window.webkit.messageHandlers.editorReady.postMessage('');
-                }
-                function monacoGetContent() {
-                    return document.getElementById('editor').innerText;
-                }
-                function monacoSetContent(content) {
-                    document.getElementById('editor').innerText = content;
-                }
-                function monacoSetLanguage(language) {
-                    // Placeholder — no language support yet
-                }
-                window.webkit.messageHandlers.editorReady.postMessage('');
-            </script>
-        </body>
-        </html>
-        """
-
-        webView.loadHTMLString(placeholderHTML, baseURL: nil)
-    }
 }
 
 // MARK: - WKNavigationDelegate
@@ -274,7 +294,8 @@ extension MonacoBridge {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         Task { @MainActor in
             uiLogger.info("Monaco WebView navigation completed")
-            isEditorLoaded = true
+            // Note: isEditorLoaded is set by JS editorReady message, not here
+            // because AMD require() is async — the page loads first, then Monaco initializes
         }
     }
 
