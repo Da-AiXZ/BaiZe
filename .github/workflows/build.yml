@@ -18,15 +18,12 @@ env:
 jobs:
   build:
     name: Build & Package IPA (XcodeGen)
-    runs-on: macos-15
+    runs-on: macos-14
     timeout-minutes: 45
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Select Xcode 15.4 (iOS 17.5 SDK for iOS 16 compatibility)
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app
 
       - name: Print Xcode version
         run: xcodebuild -version
@@ -50,7 +47,7 @@ jobs:
         run: |
           xcodegen generate
           # Patch project format: XcodeGen 2.45 generates objectVersion 77 (Xcode 16),
-          # but we use Xcode 15.4 which requires objectVersion 60.
+          # but macos-14 has Xcode 15.4 which requires objectVersion 60.
           sed -i '' 's/objectVersion = [0-9]*/objectVersion = 60/' Baize.xcodeproj/project.pbxproj
           echo "✅ Baize.xcodeproj generated (objectVersion patched to 60 for Xcode 15.4)"
 
