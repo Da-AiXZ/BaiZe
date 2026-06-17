@@ -341,7 +341,45 @@ UI (SwiftUI) → Business (Agent Services) → Infrastructure (Platform)
 
 ---
 
-## 10. 常见坑和注意事项
+## 10. CI 通过后：Phase 2C、2D 干什么
+
+> 详细版：`docs/phase2-plan.md`（已在 zip 里）
+
+### Phase 2C — 多模型支持
+
+**目标**：不再只支持 OpenAI，加上 Anthropic (Claude) 和 OpenRouter（300+ 模型代理）。
+
+| 序号 | 任务 | 说明 |
+|------|------|------|
+| 2C-1 | 定义 `LLMProvider` 协议 | streamComplete + supportsFunctionCalling |
+| 2C-2 | 重构 `APIGateway` | 改为 Provider 注册机制，不再硬编码 OpenAI |
+| 2C-3 | 实现 `OpenAIProvider` | 沿用现有逻辑，包一层协议 |
+| 2C-4 | 实现 `AnthropicProvider` | Content Block 格式 + SSE 流式（消息格式与 OpenAI 不同） |
+| 2C-5 | 实现 `OpenRouterProvider` | OpenAI 兼容格式，加路由参数（model 名称映射） |
+| 2C-6 | 加 ModelSettingsView | 选择 Provider + 模型 + 输入 API Key |
+| 2C-7 | 加 APIKeySettingsView | Anthropic / OpenRouter 密钥输入 |
+
+**涉及文件**：`APIGateway.swift`（重构）、新增 `LLMProvider.swift`、`OpenAIProvider.swift`、`AnthropicProvider.swift`、`OpenRouterProvider.swift`、修改 `ModelSettingsView.swift`、`APIKeySettingsView.swift`
+
+### Phase 2D — Monaco Editor 真实集成
+
+**目标**：当前 Monaco 是 placeholder（空壳），换成能写代码的真货。
+
+| 序号 | 任务 | 说明 |
+|------|------|------|
+| 2D-1 | 下载 Monaco npm 包 | `npm pack monaco-editor` → 解压 → 嵌入 App Bundle |
+| 2D-2 | 集成 `GCDWebServer` | 本地 20234 端口提供 Monaco 静态资源 |
+| 2D-3 | 更新 `MonacoBridge.swift` | 适配真实 Monaco API（openFile, setLanguage, getValue 等） |
+| 2D-4 | 实现基本编辑功能 | 语法高亮、文件打开/保存、Tab 切换 |
+| 2D-5 | 主题适配 | VS Code 暗色 → 白泽赛博朋克风格 |
+
+**涉及文件**：`MonacoBridge.swift`（重写）、`EditorContainerView.swift`、`EditorTabBar.swift`、新增 `MonacoServer.swift`、新增 `monaco-editor/` Bundle 资源
+
+**参考架构**：CodeApp 的 GCDWebServer + WKWebView 方案（已验证可行）。
+
+---
+
+## 11. 常见坑和注意事项
 
 1. **`gh` CLI 路径**: Windows 下是 `"/c/Program Files/GitHub CLI/gh.exe"`，不是 `gh`
 2. **SSH 子模块**: ios_system 的 wasm3 子模块用 SSH URL，需要 `git config --global url."https://github.com/".insteadOf "git@github.com:"`
@@ -356,7 +394,7 @@ UI (SwiftUI) → Business (Agent Services) → Infrastructure (Platform)
 
 ---
 
-## 11. 快速参考命令
+## 12. 快速参考命令
 
 ```bash
 # 进入项目
@@ -381,7 +419,7 @@ git push origin main
 
 ---
 
-## 12. 前任 AI 的总结
+## 13. 前任 AI 的总结
 
 ```
 我（上一位 AI）的工作：
