@@ -217,7 +217,7 @@ class RuntimeExecutor: @unchecked Sendable {
         // 这样 killpgid(pid, SIGKILL) 才能正确终止子进程及其孙子进程
         // 不设置此标志时，子进程继承父进程 PGID，killpgid 找不到目标进程组
         posix_spawnattr_setpgroup(&attr, 0)
-        var spawnFlags: Int16 = POSIX_SPAWN_SETPGROUP
+        var spawnFlags: Int32 = POSIX_SPAWN_SETPROUP
         posix_spawnattr_setflags(&attr, spawnFlags)
 
         // posix_spawn 文件动作（重定向 stdout/stderr 到 pipe）
@@ -292,7 +292,7 @@ class RuntimeExecutor: @unchecked Sendable {
         var timedOut = false
         let timeoutWorkItem = DispatchWorkItem {
             // 超时后 kill 整个进程组（PGID = pid，需配合 POSIX_SPAWN_SETPGROUP）
-            killpgid(pid, SIGKILL)
+            kill(-pid, SIGKILL)
             os_unfair_lock_lock(&timedOutLock)
             timedOut = true
             os_unfair_lock_unlock(&timedOutLock)

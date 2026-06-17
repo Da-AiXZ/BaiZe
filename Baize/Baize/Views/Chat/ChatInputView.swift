@@ -10,7 +10,7 @@ struct ChatInputView: View {
     let isRunning: Bool
     let onSend: (String) -> Void
     @State private var editorHeight: CGFloat = 36
-    @FocusState private var isFocused: Bool
+    @State private var isFocused: Bool = false
 
     /// 最大输入高度（超过此高度后滚动）
     private let maxEditorHeight: CGFloat = 120
@@ -55,7 +55,7 @@ struct AutoResizingTextEditor: UIViewRepresentable {
     @Binding var text: String
     @Binding var height: CGFloat
     let maxHeight: CGFloat
-    @FocusState var isFocused: Bool
+    @Binding var isFocused: Bool
     /// W9 fix: Agent 运行时禁用编辑
     var isEditable: Bool = true
 
