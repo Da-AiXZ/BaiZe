@@ -58,36 +58,62 @@ embed_xcframework() {
     local url="$2"  # download URL
     local zip_name="$3"  # e.g. libssh2-dynamic.xcframework.zip
 
-    echo "⬇️  Downloading $name xcframework..."
-    curl -L -o "$XCFW_TMPDIR/$zip_name" "$url"
+    echo "  Downloading $name xcframework..."
+    local zip_path="$XCFW_TMPDIR/$zip_name"
+    curl -fL --retry 3 --retry-delay 5 -o "$zip_path" "$url"
 
-    echo "📂 Unzipping $name xcframework..."
-    unzip -q "$XCFW_TMPDIR/$zip_name" -d "$XCFW_TMPDIR"
+    # Verify download
+    local zip_size
+    zip_size=$(stat -f%z "$zip_path" 2>/dev/null || stat -c%s "$zip_path" 2>/dev/null || echo 0)
+    if [ "$zip_size" -lt 1000 ]; then
+        echo "  ERROR: Downloaded $zip_name is only $zip_size bytes (expected several MB)"
+        echo "  URL: $url"
+        head -5 "$zip_path" 2>/dev/null || true
+        exit 1
+    fi
+    echo "  Downloaded $zip_name ($(( zip_size / 1024 )) KB)"
+
+    echo "  Unzipping $name xcframework..."
+    unzip -q -o "$zip_path" -d "$XCFW_TMPDIR"
+
+    # Find the .xcframework directory (name might differ from zip filename)
+    local xcframework_dir=""
+    xcframework_dir=$(find "$XCFW_TMPDIR" -maxdepth 1 -type d -name '*.xcframework' | head -n 1)
+
+    if [ -z "$xcframework_dir" ]; then
+        echo "  ERROR: No .xcframework directory found after unzipping $zip_name"
+        echo "  Contents of temp dir:"
+        ls -1 "$XCFW_TMPDIR" 2>/dev/null || true
+        exit 1
+    fi
+    echo "  Found xcframework: $(basename "$xcframework_dir")"
 
     # Dynamically find the arm64-ios slice directory inside the xcframework.
     # Directory names vary: ios-arm64, ios-arm64_arm64e, etc.
-    local xcframework_dir="$XCFW_TMPDIR/${zip_name%.zip}"
     local slice_dir=""
     slice_dir=$(find "$xcframework_dir" -maxdepth 1 -type d -name 'ios-arm64*' | head -n 1)
 
     if [ -z "$slice_dir" ]; then
-        echo "❌ Could not find ios-arm64 slice in $xcframework_dir"
-        echo "   Available slices:"
+        echo "  ERROR: Could not find ios-arm64 slice in $(basename "$xcframework_dir")"
+        echo "  Available slices:"
         ls -1 "$xcframework_dir" 2>/dev/null || true
         exit 1
     fi
 
     local framework_dir="$slice_dir/$name.framework"
     if [ ! -d "$framework_dir" ]; then
-        echo "❌ $name.framework not found at $framework_dir"
-        echo "   Contents of slice:"
+        echo "  ERROR: $name.framework not found at $framework_dir"
+        echo "  Contents of slice:"
         ls -1 "$slice_dir" 2>/dev/null || true
         exit 1
     fi
 
-    echo "✅ Found $name.framework in $(basename "$slice_dir") slice"
+    echo "  Found $name.framework in $(basename "$slice_dir") slice"
     cp -r "$framework_dir" "$FRAMEWORKS_DIR/"
-    echo "✅ Copied $name.framework to Frameworks/"
+    echo "  Copied $name.framework to Frameworks/"
+
+    # Clean up zip to save disk space
+    rm -f "$zip_path"
 }
 
 embed_xcframework "libssh2" "$LIBSSH2_XCFRAMEWORK_URL" "libssh2-dynamic.xcframework.zip"
