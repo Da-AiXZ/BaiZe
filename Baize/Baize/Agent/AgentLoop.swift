@@ -132,12 +132,12 @@ actor AgentLoop {
 
             // 1. 构建上下文（系统提示 + BAIZE.md + 对话历史 + 工具定义）
             let promptContext = contextManager.buildContext(messages: session.messages)
-            let toolDefinitions = toolRegistry.getToolDefinitions()
+            let toolDefinitions = await toolRegistry.getToolDefinitions()
 
             // 2. 调用 LLM API（SSE 流式）
             // 修复 C3：使用 promptContext.messages（含 system prompt + BAIZE.md + 压缩历史）
             // 而非原始 session.messages
-            let llmStream = apiGateway.streamComplete(
+            let llmStream = await apiGateway.streamComplete(
                 messages: promptContext.messages,
                 tools: toolDefinitions
             )

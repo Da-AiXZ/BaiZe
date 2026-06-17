@@ -6,7 +6,7 @@ import WebKit
 /// 通过 evaluateJavaScript 向 Monaco 发送指令（打开文件、设置语言等）
 /// 必须在 MainActor 上运行（WKWebView 操作要求主线程）
 @MainActor
-class MonacoBridge: NSObject, ObservableObject {
+class MonacoBridge: NSObject, ObservableObject, WKScriptMessageHandler, WKNavigationDelegate {
 
     // MARK: - Properties
 
@@ -27,6 +27,12 @@ class MonacoBridge: NSObject, ObservableObject {
 
     /// Monaco Editor 是否已加载完成
     @Published var isEditorLoaded: Bool = false
+
+    // MARK: - Initialization
+
+    override init() {
+        super.init()
+    }
 
     // MARK: - WKWebView Configuration
 
@@ -123,7 +129,7 @@ class MonacoBridge: NSObject, ObservableObject {
 
     // MARK: - WKScriptMessageHandler
 
-    nonisolated func userContentController(
+    func userContentController(
         _ userContentController: WKUserContentController,
         didReceive message: WKScriptMessage
     ) {
@@ -264,15 +270,15 @@ class MonacoBridge: NSObject, ObservableObject {
 
 // MARK: - WKNavigationDelegate
 
-extension MonacoBridge: WKNavigationDelegate {
-    nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+extension MonacoBridge {
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         Task { @MainActor in
             uiLogger.info("Monaco WebView navigation completed")
             isEditorLoaded = true
         }
     }
 
-    nonisolated func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         Task { @MainActor in
             uiLogger.error("Monaco WebView navigation failed: \(error.localizedDescription)")
             isEditorLoaded = false

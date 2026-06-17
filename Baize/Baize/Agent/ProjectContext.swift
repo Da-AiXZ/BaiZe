@@ -55,7 +55,7 @@ class ProjectContext {
             hasConfigFile = true
             let content = try fileSystemService.readFile(at: configPath)
             config = parseBaizeMD(content: content)
-            agentLogger.info("BAIZE.md loaded: \(configPath) — \(config?.codingConventions.count ?? 0) conventions")
+            agentLogger.info("BAIZE.md loaded: \(configPath) — \(self.config?.codingConventions.count ?? 0) conventions")
         } else {
             hasConfigFile = false
             config = BaizeConfig() // 使用默认配置

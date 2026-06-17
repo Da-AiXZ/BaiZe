@@ -151,21 +151,22 @@ private struct ToolCallBubble: View {
         .padding(.horizontal, 4)
     }
 
+    @ViewBuilder
     private var statusIcon: some View {
         switch status {
         case .pending:
-            return Image(systemName: "clock")
+            Image(systemName: "clock")
                 .foregroundColor(.secondary)
                 .font(.system(size: 14))
         case .executing:
-            return ProgressView()
+            ProgressView()
                 .scaleEffect(0.7)
         case .completed:
-            return Image(systemName: "checkmark.circle.fill")
+            Image(systemName: "checkmark.circle.fill")
                 .foregroundColor(.green)
                 .font(.system(size: 14))
         case .denied:
-            return Image(systemName: "xmark.circle.fill")
+            Image(systemName: "xmark.circle.fill")
                 .foregroundColor(.red)
                 .font(.system(size: 14))
         }

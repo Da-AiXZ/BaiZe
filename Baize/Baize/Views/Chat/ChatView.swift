@@ -156,9 +156,9 @@ struct ChatView: View {
             displayMessages.append(DisplayMessage(
                 role: .toolCall,
                 content: "调用 \(toolCall.name)",
+                timestamp: Date(),
                 toolCall: toolCall,
-                toolStatus: .pending,
-                timestamp: Date()
+                toolStatus: .pending
             ))
 
         case .toolExecuting(let toolCall):

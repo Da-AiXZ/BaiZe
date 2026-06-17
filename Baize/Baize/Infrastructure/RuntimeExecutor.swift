@@ -62,9 +62,7 @@ class RuntimeExecutor: @unchecked Sendable {
         // ios_system 的 SPM 集成将在 T05 端到端集成时完善
         // 当前使用 posix_spawn 执行命令
 
-        guard let workingDirectory = workingDir ?? BaizePath.projectRoot else {
-            return ExecutionResult(stdout: "", stderr: "No working directory", exitCode: -1, isError: true)
-        }
+        let workingDirectory = workingDir ?? BaizePath.projectRoot
 
         // 拆分命令为程序 + 参数
         let parts = command.split(separator: " ", omittingEmptySubsequences: true)
@@ -217,7 +215,7 @@ class RuntimeExecutor: @unchecked Sendable {
         // 这样 killpgid(pid, SIGKILL) 才能正确终止子进程及其孙子进程
         // 不设置此标志时，子进程继承父进程 PGID，killpgid 找不到目标进程组
         posix_spawnattr_setpgroup(&attr, 0)
-        var spawnFlags: Int32 = POSIX_SPAWN_SETPROUP
+        var spawnFlags: Int16 = Int16(POSIX_SPAWN_SETPGROUP)
         posix_spawnattr_setflags(&attr, spawnFlags)
 
         // posix_spawn 文件动作（重定向 stdout/stderr 到 pipe）
@@ -414,9 +412,7 @@ class RuntimeExecutor: @unchecked Sendable {
 
     /// 获取 App Bundle 内二进制文件的完整路径
     private func bundlePath(for relativePath: String) -> String {
-        guard let bundlePath = Bundle.main.bundlePath else {
-            return relativePath
-        }
+        let bundlePath = Bundle.main.bundlePath
         return (bundlePath as NSString).appendingPathComponent(relativePath)
     }
 }
