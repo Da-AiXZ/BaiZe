@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 文件搜索视图 — 支持文件名搜索 + 文件内容 Grep 搜索
-/// 独立搜索面板，可通过文件浏览器搜索栏进入
+/// W5 fix: 使用 AppState 共享的 FileSystemService，避免创建独立实例
 struct FileSearchView: View {
     @ObservedObject var appState: AppState
     @State private var searchText = ""
@@ -9,7 +9,16 @@ struct FileSearchView: View {
     @State private var results: [SearchResultItem] = []
     @State private var isSearching = false
 
-    private let fileSystemService = FileSystemService()
+    /// W5 fix: 从 AppState 获取共享 FileSystemService（延迟初始化）
+    /// W15/W21 fix: fallback 使用 appState.currentProjectPath 而非默认路径
+    private var fileSystemService: FileSystemService {
+        guard let shared = appState.fileSystemService else {
+            let fallback = FileSystemService(rootPath: appState.currentProjectPath)
+            fallback.setRootPath(appState.currentProjectPath)
+            return fallback
+        }
+        return shared
+    }
 
     enum SearchMode: String, CaseIterable {
         case fileName = "文件名"

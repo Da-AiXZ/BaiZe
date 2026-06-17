@@ -9,7 +9,7 @@ struct SearchContentTool: Tool {
     let isReadOnly = true
     let isDestructive = false
 
-    let inputSchema: [String: Any] = SchemaBuilder.objectSchema(
+    let inputSchema: JSONSchemaDictionary = SchemaBuilder.objectSchema(
         required: ["pattern"],
         properties: [
             "pattern": SchemaBuilder.stringProperty(description: "要搜索的关键词或字符串"),

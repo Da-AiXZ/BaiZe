@@ -178,7 +178,8 @@ enum PermissionMode: String, CaseIterable, Codable {
 // MARK: - Effect (Permission Decision Result)
 
 /// 权限决策效果 — 三态
-enum Effect: String, Codable {
+/// W4 fix: 添加 Sendable，PermissionDecision 跨 actor 隔离边界传递需符合 Sendable
+enum Effect: String, Codable, Sendable {
     case allow
     case ask
     case deny

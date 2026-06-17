@@ -25,12 +25,13 @@ struct KeychainService {
     /// - Parameters:
     ///   - key: Keychain 键名
     ///   - value: 要存储的值
+    /// W2 fix: 使用 BaizeError.keychainError 而非 fileSystemError（语义正确映射）
     func save(key: String, value: String) throws {
         do {
             try keychain.set(value, key: key)
             baizeLogger.info("Keychain: saved key '\(key)'")
         } catch {
-            throw BaizeError.fileSystemError("Keychain 存储失败: \(key) — \(error.localizedDescription)")
+            throw BaizeError.keychainError("存储失败: \(key) — \(error.localizedDescription)")
         }
     }
 
@@ -52,12 +53,13 @@ struct KeychainService {
 
     /// 从 Keychain 删除值
     /// - Parameter key: Keychain 键名
+    /// W2 fix: 使用 BaizeError.keychainError 而非 fileSystemError（语义正确映射）
     func delete(key: String) throws {
         do {
             try keychain.remove(key)
             baizeLogger.info("Keychain: deleted key '\(key)'")
         } catch {
-            throw BaizeError.fileSystemError("Keychain 删除失败: \(key) — \(error.localizedDescription)")
+            throw BaizeError.keychainError("删除失败: \(key) — \(error.localizedDescription)")
         }
     }
 

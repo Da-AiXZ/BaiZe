@@ -11,7 +11,7 @@ struct EditFileTool: Tool {
     let isReadOnly = false
     let isDestructive = true
 
-    let inputSchema: [String: Any] = SchemaBuilder.objectSchema(
+    let inputSchema: JSONSchemaDictionary = SchemaBuilder.objectSchema(
         required: ["path", "old_string", "new_string"],
         properties: [
             "path": SchemaBuilder.pathProperty(description: "要编辑的文件路径"),

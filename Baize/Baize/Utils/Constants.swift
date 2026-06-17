@@ -142,6 +142,8 @@ enum BaizeError: LocalizedError {
     case permissionDenied(String)
     case apiKeyMissing
     case runtimeNotAvailable(String)
+    /// W2 fix: 添加专用的 keychain 错误 case，而非将 Keychain 错误映射到 fileSystemError
+    case keychainError(String)
 
     var errorDescription: String? {
         switch self {
@@ -153,6 +155,7 @@ enum BaizeError: LocalizedError {
         case .permissionDenied(let msg): return "权限被拒绝: \(msg)"
         case .apiKeyMissing: return "API Key 未配置，请在设置中添加"
         case .runtimeNotAvailable(let name): return "运行时 \(name) 不可用"
+        case .keychainError(let msg): return "Keychain 错误: \(msg)"
         }
     }
 }

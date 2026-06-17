@@ -215,7 +215,8 @@ actor AgentLoop {
                         permissionEngine: permissionEngine
                     )
 
-                    let decision = permissionEngine.evaluate(
+                    // W4 fix: PermissionEngine 改为 actor，evaluate 需要 await
+                    let decision = await permissionEngine.evaluate(
                         toolCall: toolCall,
                         context: executionContext
                     )

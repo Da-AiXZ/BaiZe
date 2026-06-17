@@ -3,6 +3,7 @@ import Foundation
 
 /// 编辑器状态模型 — 管理 Monaco Editor 的打开文件、Tab、光标等状态
 /// 作为 ObservableObject 供 EditorContainerView 和 EditorTabBar 使用
+/// W5 fix: 添加 fileSystemService 属性，使用共享实例而非每次创建新实例
 @MainActor
 class EditorState: ObservableObject {
 
@@ -27,6 +28,9 @@ class EditorState: ObservableObject {
 
     /// Monaco Bridge 实例
     var monacoBridge: MonacoBridge?
+
+    /// W5 fix: 共享的 FileSystemService（由 EditorContainerView 注入）
+    var fileSystemService: FileSystemService?
 
     // MARK: - Methods
 
@@ -73,11 +77,12 @@ class EditorState: ObservableObject {
     }
 
     /// 刷新指定文件内容（当 Agent 通过 write_file/edit_file 修改了文件）
+    /// W5 fix: 使用共享 FileSystemService 而非创建新实例
     func refreshFile(at path: String) {
         // 如果当前打开的文件被修改，重新读取并更新
         if activeTab?.filePath == path {
-            let fileService = FileSystemService()
-            if let newContent = try? fileService.readFile(at: path) {
+            guard let fsService = fileSystemService else { return }
+            if let newContent = try? fsService.readFile(at: path) {
                 currentContent = newContent
                 hasUnsavedChanges = false
                 monacoBridge?.openFile(path: path, content: newContent)

@@ -82,8 +82,9 @@ actor ToolRegistry {
 
     /// 注册 Phase 1 默认 9 个工具
     /// W22 fix: 使用注入的共享服务实例，避免创建独立实例导致状态丢失
+    /// W15/W21 fix: fallback 时使用 BaizePath.projectRoot 作为 rootPath（而非空构造器）
     private func registerDefaultTools(fileSystemService: FileSystemService?, runtimeExecutor: RuntimeExecutor?) {
-        let fsService = fileSystemService ?? FileSystemService()
+        let fsService = fileSystemService ?? FileSystemService(rootPath: BaizePath.projectRoot)
         let runtime = runtimeExecutor ?? RuntimeExecutor()
 
         // 文件操作工具（6 个）

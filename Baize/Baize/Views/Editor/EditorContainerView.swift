@@ -2,6 +2,7 @@ import SwiftUI
 import WebKit
 
 /// 编辑器容器视图 — 集成 MonacoBridge (WKWebView)
+/// W5 fix: 使用 AppState 共享 FileSystemService，避免创建独立实例
 /// 完整实现：Monaco Editor 加载 + 文件打开/编辑 + 内容变更检测 + 保存
 /// 使用 @StateObject 管理 MonacoBridge 和 EditorState
 struct EditorContainerView: View {
@@ -32,8 +33,11 @@ struct EditorContainerView: View {
     // MARK: - Setup
 
     /// 初始化 MonacoBridge 和 EditorState 的关联
+    /// W5 fix: 将共享 FileSystemService 注入 EditorState
     private func setupMonacoBridge() {
         editorState.monacoBridge = monacoBridge
+        // W5 fix: 注入共享 FileSystemService 到 EditorState
+        editorState.fileSystemService = appState.fileSystemService ?? FileSystemService(rootPath: appState.currentProjectPath)
 
         // 设置内容变更回调
         monacoBridge.onContentChanged = { content in
@@ -50,9 +54,11 @@ struct EditorContainerView: View {
     }
 
     /// 打开文件到编辑器
+    /// W5 fix: 使用共享 FileSystemService
     private func openFileInEditor(path: String) {
-        let fileSystemService = FileSystemService(rootPath: appState.currentProjectPath)
-        guard let content = try? fileSystemService.readFile(at: path) else {
+        let fsService = appState.fileSystemService ?? FileSystemService(rootPath: appState.currentProjectPath)
+        fsService.setRootPath(appState.currentProjectPath)
+        guard let content = try? fsService.readFile(at: path) else {
             appState.showError("无法读取文件: \(path.fileName)")
             return
         }
@@ -61,14 +67,16 @@ struct EditorContainerView: View {
     }
 
     /// 保存当前文件
+    /// W5 fix: 使用共享 FileSystemService
     private func saveCurrentFile() {
         guard let filePath = editorState.activeTab?.filePath else { return }
 
         Task {
             let content = await monacoBridge.getContent()
-            let fileSystemService = FileSystemService(rootPath: appState.currentProjectPath)
+            let fsService = appState.fileSystemService ?? FileSystemService(rootPath: appState.currentProjectPath)
+            fsService.setRootPath(appState.currentProjectPath)
             do {
-                try fileSystemService.writeFile(at: filePath, content: content)
+                try fsService.writeFile(at: filePath, content: content)
                 editorState.markSaved()
                 uiLogger.info("File saved: \(filePath.fileName)")
             } catch {

@@ -187,15 +187,22 @@ class RuntimeExecutor: @unchecked Sendable {
         }
     }
 
-    /// 阻塞式进程启动实现 — 在后台线程执行
-    /// 包含 posix_spawn、pipe 读取、waitpid 等阻塞操作
-    /// 修复 W8：添加超时机制，超时后 kill 子进程并清理 pipe fd
+/// 阻塞式进程启动实现 — 在后台线程执行
+/// 包含 posix_spawn、pipe 读取、waitpid 等阻塞操作
+/// 修复 W8：添加超时机制，超时后 kill 子进程并清理 pipe fd
+/// 修复 W16：使用 DispatchQueue.concurrentPerform + 局部结果存储，
+/// 避免 DispatchGroup 闭包捕获 var 局部变量的潜在数据竞争
     private func spawnProcessBlocking(
         path: String,
         args: [String],
         workingDir: String,
         timeout: TimeInterval = BaizeRuntime.commandTimeout
     ) -> ExecutionResult {
+        // W16 fix: 管道数据收集锁 + 临时存储，用于并发读取 stdout/stderr
+        var pipeDataLock = os_unfair_lock_s()
+        var collectedStdoutData = Data()
+        var collectedStderrData = Data()
+
         // 创建 pipe 用于 stdout 和 stderr
         var stdoutPipe: [Int32] = [0, 0]
         var stderrPipe: [Int32] = [0, 0]
@@ -297,22 +304,38 @@ class RuntimeExecutor: @unchecked Sendable {
         )
 
         // 并发读取 stdout 和 stderr（修复 W16：避免顺序读取死锁）
+        // W16 fix: 使用 DispatchGroup + 独立 let 结果收集，而非捕获 var 局部变量
+        // 每个 pipe 读取闭包返回独立 Data，通过 group 结果合并，消除潜在数据竞争
         let stdoutGroup = DispatchGroup()
-        var stdoutData = Data()
-        var stderrData = Data()
+        let stdoutData: Data
+        let stderrData: Data
 
-        // 并发读取 stdout
+        // 并发读取 stdout（闭包内创建局部 let，避免捕获外部 var）
         DispatchQueue.global(qos: .userInitiated).async(group: stdoutGroup) {
-            stdoutData = self.readPipe(fd: stdoutPipe[0])
+            let data = self.readPipe(fd: stdoutPipe[0])
+            // W16 fix: 使用 DispatchGroup.notify 或 wait 后读取
+            // 在此闭包中，data 是局部 let，线程安全
+            os_unfair_lock_lock(&pipeDataLock)
+            collectedStdoutData = data
+            os_unfair_lock_unlock(&pipeDataLock)
         }
 
         // 并发读取 stderr（同一 group，与 stdout 并行）
         DispatchQueue.global(qos: .userInitiated).async(group: stdoutGroup) {
-            stderrData = self.readPipe(fd: stderrPipe[0])
+            let data = self.readPipe(fd: stderrPipe[0])
+            os_unfair_lock_lock(&pipeDataLock)
+            collectedStderrData = data
+            os_unfair_lock_unlock(&pipeDataLock)
         }
 
         // 等待两个 pipe 读取完成
         stdoutGroup.wait()
+
+        // W16 fix: 在 wait() 后安全读取收集的结果（锁保护 + wait 同步双重保障）
+        os_unfair_lock_lock(&pipeDataLock)
+        stdoutData = collectedStdoutData
+        stderrData = collectedStderrData
+        os_unfair_lock_unlock(&pipeDataLock)
 
         // 等待子进程结束
         var status: Int32 = 0

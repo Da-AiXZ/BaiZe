@@ -9,7 +9,7 @@ struct WriteFileTool: Tool {
     let isReadOnly = false
     let isDestructive = true
 
-    let inputSchema: [String: Any] = SchemaBuilder.objectSchema(
+    let inputSchema: JSONSchemaDictionary = SchemaBuilder.objectSchema(
         required: ["path", "content"],
         properties: [
             "path": SchemaBuilder.pathProperty(description: "文件路径（绝对路径或项目相对路径）。如果文件不存在将创建新文件。"),

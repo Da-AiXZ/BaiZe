@@ -10,7 +10,7 @@ struct ExecuteCommandTool: Tool {
     let isReadOnly = false
     let isDestructive = true
 
-    let inputSchema: [String: Any] = SchemaBuilder.objectSchema(
+    let inputSchema: JSONSchemaDictionary = SchemaBuilder.objectSchema(
         required: ["command"],
         properties: [
             "command": SchemaBuilder.stringProperty(description: "要执行的 Shell 命令（如 'ls -la', 'git status', 'npm test'）"),

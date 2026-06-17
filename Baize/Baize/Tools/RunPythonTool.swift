@@ -10,7 +10,7 @@ struct RunPythonTool: Tool {
     let isReadOnly = false
     let isDestructive = true
 
-    let inputSchema: [String: Any] = SchemaBuilder.objectSchema(
+    let inputSchema: JSONSchemaDictionary = SchemaBuilder.objectSchema(
         required: ["script"],
         properties: [
             "script": SchemaBuilder.stringProperty(description: "要执行的 Python 代码内容"),

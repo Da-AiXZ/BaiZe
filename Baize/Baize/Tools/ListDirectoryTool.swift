@@ -9,7 +9,7 @@ struct ListDirectoryTool: Tool {
     let isReadOnly = true
     let isDestructive = false
 
-    let inputSchema: [String: Any] = SchemaBuilder.objectSchema(
+    let inputSchema: JSONSchemaDictionary = SchemaBuilder.objectSchema(
         required: [],
         properties: [
             "path": SchemaBuilder.pathProperty(description: "要列出的目录路径（默认为项目根目录）"),

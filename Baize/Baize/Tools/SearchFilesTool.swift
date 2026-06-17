@@ -9,7 +9,7 @@ struct SearchFilesTool: Tool {
     let isReadOnly = true
     let isDestructive = false
 
-    let inputSchema: [String: Any] = SchemaBuilder.objectSchema(
+    let inputSchema: JSONSchemaDictionary = SchemaBuilder.objectSchema(
         required: ["pattern"],
         properties: [
             "pattern": SchemaBuilder.stringProperty(description: "文件名搜索模式（支持通配符，如 *.swift, test_*.py, config.*）"),

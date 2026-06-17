@@ -9,7 +9,7 @@ struct ReadFileTool: Tool {
     let isReadOnly = true
     let isDestructive = false
 
-    let inputSchema: [String: Any] = SchemaBuilder.objectSchema(
+    let inputSchema: JSONSchemaDictionary = SchemaBuilder.objectSchema(
         required: ["path"],
         properties: [
             "path": SchemaBuilder.pathProperty(description: "要读取的文件路径（绝对路径或项目相对路径）"),

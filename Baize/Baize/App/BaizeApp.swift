@@ -18,7 +18,7 @@ struct BaizeApp: App {
     /// Tool Registry（actor）
     private let toolRegistry: ToolRegistry
 
-    /// Permission Engine
+    /// Permission Engine（actor，W4 fix: 确保权限状态共享 + 线程安全）
     private let permissionEngine: PermissionEngine
 
     /// Project Context（class 引用类型，load() 变更即时持久化）

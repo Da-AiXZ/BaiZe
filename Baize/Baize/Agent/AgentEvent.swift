@@ -3,7 +3,12 @@ import Foundation
 /// Agent 事件枚举 — AgentLoop 通过 AsyncThrowingStream<AgentEvent> 向 UI 推送事件
 /// 每个 AgentEvent 对应 Agent Loop 中的一步状态变化
 /// UI 层订阅此事件流，实现流式文本显示、工具调用状态可视化、权限弹窗等
-enum AgentEvent: Sendable {
+/// W20 fix: 使用 @unchecked Sendable 而非 Sendable
+/// 原因：.error(Error) 中的 Error 协议本身不是 Sendable，
+/// 但实际使用中只会传递 BaizeError（enum，符合 Sendable）或
+/// Swift 并发框架中的 Sendable Error（如 CancellationError），
+/// 跨隔离边界传递后仅做 localizedDescription 读取，不会产生数据竞争
+enum AgentEvent: @unchecked Sendable {
     /// LLM 文本增量输出（SSE stream content delta）
     case textDelta(String)
 

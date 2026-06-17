@@ -3,14 +3,15 @@ import SwiftUI
 /// 工具调用状态可视化视图 — 显示工具执行过程的详细状态
 /// 独立组件，也可在 MessageBubble 内嵌使用
 /// 支持 4 种状态：pending（等待）/ executing（执行中）/ completed（完成）/ denied（拒绝）
+/// W12 fix: ToolCallStatus 定义在此处为唯一来源，其他文件引用此类型而非重复定义
 struct ToolCallView: View {
     let toolCall: ToolCall
-    let status: ToolCallStatus
+    let status: ToolCallView.ToolCallStatus
     let result: ToolResult?
     let denialReason: String?
 
-    /// 工具调用状态
-    enum ToolCallStatus {
+    /// 工具调用状态 — W12 fix: 从 DisplayMessage 移至此处作为唯一定义
+    enum ToolCallStatus: Sendable {
         case pending
         case executing
         case completed

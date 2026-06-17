@@ -107,7 +107,8 @@ private struct AssistantMessageBubble: View {
 /// 工具调用气泡 — 显示工具名 + 参数摘要 + 执行状态
 private struct ToolCallBubble: View {
     let toolCall: ToolCall
-    let status: DisplayMessage.ToolCallStatus
+    /// W12 fix: 使用 ToolCallView.ToolCallStatus（唯一定义）而非 DisplayMessage.ToolCallStatus
+    let status: ToolCallView.ToolCallStatus
     let result: ToolResult?
     let denialReason: String?
 

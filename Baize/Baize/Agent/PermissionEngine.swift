@@ -6,13 +6,13 @@ import Foundation
 ///   destructive 工具 → ask（需要确认）
 ///   删除关键文件 → deny（直接拒绝）
 /// 支持 4 种权限模式切换（default/acceptEdits/plan/bypass）
-/// 使用 class（引用语义）确保权限模式变更在 AgentLoop 持有期间即时生效
-/// @unchecked Sendable：内部状态变更通过 Actor 隔离保证线程安全
-class PermissionEngine: @unchecked Sendable {
+/// W4 fix: 改为 actor 确保状态共享 + 线程安全
+/// 权限模式变更通过 actor isolation 保证即时传播且无数据竞争
+actor PermissionEngine {
 
     // MARK: - Properties
 
-    /// 当前权限模式
+    /// 当前权限模式（actor 隔离保护，线程安全）
     private var mode: PermissionMode
 
     /// 始终拒绝的操作模式（不可通过权限模式绕过）
@@ -29,7 +29,7 @@ class PermissionEngine: @unchecked Sendable {
 
     // MARK: - Public API
 
-    /// 设置权限模式（class 引用语义，变更即时传播）
+    /// 设置权限模式（actor 引用语义，变更即时传播，线程安全）
     func setMode(_ newMode: PermissionMode) {
         mode = newMode
         baizeLogger.info("Permission mode changed to: \(newMode.rawValue)")

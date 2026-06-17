@@ -1,8 +1,7 @@
 import SwiftUI
 
 /// 文件浏览器完整视图 — 树形目录结构 + 文件搜索 + 右键菜单 + BAIZE.md 高亮
-/// 使用 FileSystemService 加载真实文件系统
-/// OutlineGroup 递归展示目录结构，延迟加载子节点
+/// W5 fix: 使用 AppState 共享的 FileSystemService，避免创建独立实例
 struct FileExplorerView: View {
     @ObservedObject var appState: AppState
     @State private var rootItems: [FileItem] = []
@@ -11,7 +10,16 @@ struct FileExplorerView: View {
     @State private var searchText = ""
     @State private var expandedPaths: Set<String> = []
 
-    private let fileSystemService = FileSystemService()
+    /// W5 fix: 从 AppState 获取共享 FileSystemService（延迟初始化）
+    /// W15/W21 fix: fallback 使用 appState.currentProjectPath 而非默认路径
+    private var fileSystemService: FileSystemService {
+        guard let shared = appState.fileSystemService else {
+            let fallback = FileSystemService(rootPath: appState.currentProjectPath)
+            fallback.setRootPath(appState.currentProjectPath)
+            return fallback
+        }
+        return shared
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -197,13 +205,23 @@ struct FileItemRow: View {
 // MARK: - File Item Context Menu
 
 /// 文件/目录右键菜单 — 新建、重命名、删除
+/// W5 fix: FileItemContextMenu 也使用 AppState 共享 FileSystemService
 struct FileItemContextMenu: View {
     let item: FileItem
     @ObservedObject var appState: AppState
     @State private var isShowingNewFileSheet = false
     @State private var isShowingDeleteConfirmation = false
 
-    private let fileSystemService = FileSystemService()
+    /// W5 fix: 从 AppState 获取共享 FileSystemService
+    /// W15/W21 fix: fallback 使用 appState.currentProjectPath 而非默认路径
+    private var fileSystemService: FileSystemService {
+        guard let shared = appState.fileSystemService else {
+            let fallback = FileSystemService(rootPath: appState.currentProjectPath)
+            fallback.setRootPath(appState.currentProjectPath)
+            return fallback
+        }
+        return shared
+    }
 
     var body: some View {
         Group {
@@ -289,13 +307,24 @@ struct FileSearchBar: View {
 // MARK: - New File Sheet
 
 /// 新建文件/文件夹弹窗
+/// W5 fix: NewFileSheet 也使用共享 FileSystemService（通过环境注入）
 struct NewFileSheet: View {
     let parentPath: String
     @State private var fileName = ""
     @State private var isFolder = false
     @Environment(\.dismiss) private var dismiss
+    /// W5 fix: 通过 @EnvironmentObject 获取 AppState 的共享 FileSystemService
+    /// W15/W21 fix: fallback 使用 appState.currentProjectPath 而非默认路径
+    @EnvironmentObject private var appState: AppState
 
-    private let fileSystemService = FileSystemService()
+    private var fileSystemService: FileSystemService {
+        guard let shared = appState.fileSystemService else {
+            let fallback = FileSystemService(rootPath: appState.currentProjectPath)
+            fallback.setRootPath(appState.currentProjectPath)
+            return fallback
+        }
+        return shared
+    }
 
     var body: some View {
         NavigationStack {

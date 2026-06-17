@@ -61,6 +61,10 @@ struct PermissionSettingsView: View {
             Button("取消", role: .cancel) { selectedMode = BaizePermission.defaultMode }
             Button("确认开启", role: .destructive) {
                 appState.permissionMode = .bypass
+                // W4 fix: 同步权限模式变更到 PermissionEngine actor
+                if let engine = appState.permissionEngine {
+                    Task { await engine.setMode(.bypass) }
+                }
             }
         } message: {
             Text("绕过模式将自动执行所有 Agent 操作（包括文件删除、命令执行），不再弹出确认对话框。这可能导致不可逆的数据丢失。确定要开启吗？")
@@ -75,6 +79,10 @@ struct PermissionSettingsView: View {
         } else {
             selectedMode = mode
             appState.permissionMode = mode
+            // W4 fix: 同步权限模式变更到 PermissionEngine actor
+            if let engine = appState.permissionEngine {
+                Task { await engine.setMode(mode) }
+            }
         }
     }
 

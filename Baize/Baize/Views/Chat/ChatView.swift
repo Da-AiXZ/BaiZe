@@ -212,7 +212,7 @@ struct ChatView: View {
     /// 更新工具调用状态
     private func updateToolCallStatus(
         id: String,
-        status: ToolCallStatus,
+        status: ToolCallView.ToolCallStatus,
         result: ToolResult? = nil,
         denialReason: String? = nil
     ) {
@@ -246,7 +246,8 @@ struct DisplayMessage: Identifiable {
     var content: String
     let timestamp: Date
     var toolCall: ToolCall?
-    var toolStatus: ToolCallStatus?
+    /// W12 fix: ToolCallStatus 从 ToolCallView 引入，不再在 DisplayMessage 中重复定义
+    var toolStatus: ToolCallView.ToolCallStatus?
     var toolResult: ToolResult?
     var denialReason: String?
 
@@ -257,12 +258,7 @@ struct DisplayMessage: Identifiable {
         case error
     }
 
-    enum ToolCallStatus {
-        case pending    // 已调用，等待执行
-        case executing  // 正在执行
-        case completed  // 执行完成
-        case denied     // 被拒绝
-    }
+// W12 fix: 删除重复的 ToolCallStatus enum，使用 ToolCallView.ToolCallStatus
 }
 
 // MARK: - Pending Confirmation
