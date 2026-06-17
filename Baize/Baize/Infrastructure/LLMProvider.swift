@@ -11,9 +11,9 @@ protocol LLMProvider: Sendable {
 
     func streamComplete(
         messages: [Message],
-        tools: [APIGateway.ToolDefinition],
+        tools: [ToolDefinition],
         model: String
-    ) -> AsyncThrowingStream<APIGateway.LLMChunk, Error>
+    ) -> AsyncThrowingStream<LLMChunk, Error>
 
     func verifyConnection() async -> Bool
 }

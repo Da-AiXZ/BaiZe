@@ -32,9 +32,9 @@ struct AnthropicProvider: LLMProvider {
     /// - Returns: AsyncThrowingStream<LLMChunk> 供 AgentLoop for-await 消费
     func streamComplete(
         messages: [Message],
-        tools: [APIGateway.ToolDefinition],
+        tools: [ToolDefinition],
         model: String
-    ) -> AsyncThrowingStream<APIGateway.LLMChunk, Error> {
+    ) -> AsyncThrowingStream<LLMChunk, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
@@ -209,7 +209,7 @@ struct AnthropicProvider: LLMProvider {
     private func interpretSSEEvent(
         _ event: SSEStream.SSEEvent,
         context: inout AnthropicStreamContext
-    ) -> [APIGateway.LLMChunk] {
+    ) -> [LLMChunk] {
         let eventType = event.event
         let data = event.data
 
@@ -220,7 +220,7 @@ struct AnthropicProvider: LLMProvider {
             return []
         }
 
-        var chunks: [APIGateway.LLMChunk] = []
+        var chunks: [LLMChunk] = []
 
         switch eventType {
         case "message_start":

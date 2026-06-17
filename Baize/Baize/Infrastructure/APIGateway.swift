@@ -1,5 +1,17 @@
 import Foundation
 
+/// LLM 响应增量 chunk — AgentLoop 消费的类型
+enum LLMChunk: Sendable {
+    /// 文本增量
+    case textDelta(String)
+    /// 工具调用开始（id + name）
+    case toolCallBegin(id: String, name: String)
+    /// 工具调用参数增量
+    case toolCallDelta(id: String, argumentsDelta: String)
+    /// 流式完成
+    case done(finishReason: String)
+}
+
 /// LLM API 调用网关 — Actor 并发模型
 /// Phase 2C 重构：委托到 LLMProvider 协议，支持多 Provider 切换
 /// 负责：Provider 注册、Provider/模型切换、流式请求委托
@@ -27,20 +39,6 @@ actor APIGateway {
     /// 当前活跃的模型名称
     private var activeModel: String = BaizeAPI.defaultModel
 
-    // MARK: - LLM Chunk Types
-
-    /// LLM 响应增量 chunk — AgentLoop 消费的类型
-    enum LLMChunk: Sendable {
-        /// 文本增量
-        case textDelta(String)
-        /// 工具调用开始（id + name）
-        case toolCallBegin(id: String, name: String)
-        /// 工具调用参数增量
-        case toolCallDelta(id: String, argumentsDelta: String)
-        /// 流式完成
-        case done(finishReason: String)
-    }
-
     // MARK: - Initialization
 
     init(keychainService: KeychainService) {
@@ -55,7 +53,8 @@ actor APIGateway {
         providers[anthropicProvider.id] = anthropicProvider
         providers[openRouterProvider.id] = openRouterProvider
 
-        apiLogger.info("APIGateway initialized with providers: \(providers.keys.joined(separator: ", "))")
+        let providerNames = providers.keys.joined(separator: ", ")
+        apiLogger.info("APIGateway initialized with providers: \(providerNames)")
     }
 
     // MARK: - Public API
@@ -73,16 +72,17 @@ actor APIGateway {
         model: String? = nil
     ) -> AsyncThrowingStream<LLMChunk, Error> {
         let resolvedModel = model ?? activeModel
+        let currentProviderId = activeProviderId
 
         // 委托到活跃 Provider
         guard let provider = providers[activeProviderId] else {
-            apiLogger.error("No active provider registered with id: \(activeProviderId)")
+            apiLogger.error("No active provider registered with id: \(currentProviderId)")
             return AsyncThrowingStream { continuation in
-                continuation.finish(throwing: ProviderError.notRegistered(activeProviderId))
+                continuation.finish(throwing: ProviderError.notRegistered(currentProviderId))
             }
         }
 
-        apiLogger.info("APIGateway: delegating to provider '\(activeProviderId)' with model '\(resolvedModel)'")
+        apiLogger.info("APIGateway: delegating to provider '\(currentProviderId)' with model '\(resolvedModel)'")
         return provider.streamComplete(messages: messages, tools: tools, model: resolvedModel)
     }
 
@@ -120,7 +120,8 @@ actor APIGateway {
             activeModel = firstModel.id
         }
 
-        apiLogger.info("Active provider set to '\(providerId)', model: \(activeModel)")
+        let currentModel = activeModel
+        apiLogger.info("Active provider set to '\(providerId)', model: \(currentModel)")
     }
 
     /// 获取当前活跃的 Provider

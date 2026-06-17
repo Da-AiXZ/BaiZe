@@ -76,7 +76,7 @@ enum OpenAICompatibleHelper {
     /// }
     /// - Parameter event: SSE 原始事件
     /// - Returns: 解释后的 LLMChunk 数组
-    static func interpretSSEEvent(_ event: SSEStream.SSEEvent) -> [APIGateway.LLMChunk] {
+    static func interpretSSEEvent(_ event: SSEStream.SSEEvent) -> [LLMChunk] {
         let data = event.data
 
         // [DONE] 标记流结束
@@ -98,7 +98,7 @@ enum OpenAICompatibleHelper {
                 return []
             }
 
-            var chunks: [APIGateway.LLMChunk] = []
+            var chunks: [LLMChunk] = []
             let delta = firstChoice["delta"] as? [String: Any] ?? [:]
 
             // 1. 处理 content delta

@@ -38,9 +38,9 @@ struct OpenRouterProvider: LLMProvider {
     /// - Returns: AsyncThrowingStream<LLMChunk> 供 AgentLoop for-await 消费
     func streamComplete(
         messages: [Message],
-        tools: [APIGateway.ToolDefinition],
+        tools: [ToolDefinition],
         model: String
-    ) -> AsyncThrowingStream<APIGateway.LLMChunk, Error> {
+    ) -> AsyncThrowingStream<LLMChunk, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
