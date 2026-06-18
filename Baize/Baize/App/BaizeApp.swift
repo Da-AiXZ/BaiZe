@@ -162,12 +162,12 @@ struct BaizeApp: App {
                         // 等 App 完全启动（framework 加载完成 + UI 就绪）
                         try? await Task.sleep(nanoseconds: 1_000_000_000) // 1s
                         baizeLogger.info("Starting Node.js engine (deferred)...")
-                        nodeEngine.start()
+                        nodeRuntimeEngine.start()
 
                         // Node 引擎启动后再等 2 秒启动 Python，避免资源竞争
                         try? await Task.sleep(nanoseconds: 2_000_000_000) // 2s
                         baizeLogger.info("Starting Python engine (deferred)...")
-                        pythonEngine.start()
+                        pythonRuntimeEngine.start()
                     }
                 }
         }
