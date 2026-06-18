@@ -61,10 +61,11 @@ final class NodeRuntimeEngine: @unchecked Sendable {
         }
 
         // 构建 node argv: ["node", "/path/to/bootstrap.js", "--port=48213"]
+        let enginePort = self.port
         let arguments: [String] = [
             "node",
             bootstrapPath,
-            "--port=\(port)"
+            "--port=\(enginePort)"
         ]
 
         // 在 2MB 栈空间的后台线程启动 Node.js
@@ -83,7 +84,7 @@ final class NodeRuntimeEngine: @unchecked Sendable {
         thread.start()
 
         isStarted = true
-        runtimeLogger.info("Node.js engine start requested on port \(port), bootstrap: \(bootstrapPath)")
+        runtimeLogger.info("Node.js engine start requested on port \(enginePort), bootstrap: \(bootstrapPath)")
     }
 
     // MARK: - Script Execution
