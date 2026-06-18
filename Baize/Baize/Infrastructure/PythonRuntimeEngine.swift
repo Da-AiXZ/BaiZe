@@ -228,6 +228,46 @@ final class PythonRuntimeEngine: @unchecked Sendable {
         setDiagnosticEnv(home: homeVerify, path: pathVerify)
         recordStep("envReadback", success: true, message: "PYTHONHOME=\(homeVerify), PYTHONPATH=\(pathVerify), PYTHONDONTWRITEBYTECODE=\(dontWriteVerify)")
 
+        // ── P3 fix: 启动前验证标准库关键文件是否存在 ──
+        // CPython 在 Py_InitializeFromConfig 过程中会自动导入 encodings 模块。
+        // 如果标准库未正确安装到 PYTHONHOME/lib/python3.13/，会报
+        // "Failed to import encodings module" 错误。
+        // 此检查在初始化前验证文件系统，提供精确的诊断信息。
+        let fm = FileManager.default
+        let stdlibBasePath = "\(homeVerify)/lib/python\(BaizePython.pythonVersionTag)"
+        let encodingsInitPath = "\(stdlibBasePath)/encodings/__init__.py"
+
+        if fm.fileExists(atPath: encodingsInitPath) {
+            runtimeLogger.info("Pre-init check: encodings module found at \(encodingsInitPath)")
+            recordStep("verifyStdlib", success: true, message: "encodings/__init__.py found at \(encodingsInitPath)")
+        } else {
+            runtimeLogger.error("Pre-init check: encodings module NOT found at \(encodingsInitPath)")
+            recordStep("verifyStdlib", success: false, message: "encodings/__init__.py NOT found at \(encodingsInitPath)")
+
+            // 记录 pythonHome 目录内容，帮助诊断
+            if let homeContents = try? fm.contentsOfDirectory(atPath: homeVerify) {
+                runtimeLogger.error("pythonHome (\(homeVerify)) contents: \(homeContents.joined(separator: ", "))")
+                recordStep("verifyStdlib", success: false, message: "pythonHome contents: \(homeContents.joined(separator: ", "))")
+            } else {
+                runtimeLogger.error("pythonHome (\(homeVerify)) directory not accessible or empty")
+                recordStep("verifyStdlib", success: false, message: "pythonHome directory not accessible or empty")
+            }
+
+            // 检查 lib/ 目录
+            let libPath = "\(homeVerify)/lib"
+            if let libContents = try? fm.contentsOfDirectory(atPath: libPath) {
+                runtimeLogger.error("lib/ contents: \(libContents.joined(separator: ", "))")
+                recordStep("verifyStdlib", success: false, message: "lib/ contents: \(libContents.joined(separator: ", "))")
+
+                // 如果 lib/python3.13 存在，列出其内容
+                if libContents.contains("python\(BaizePython.pythonVersionTag)") {
+                    let stdlibContents = (try? fm.contentsOfDirectory(atPath: stdlibBasePath)) ?? []
+                    runtimeLogger.error("python\(BaizePython.pythonVersionTag)/ contents: \(stdlibContents.joined(separator: ", "))")
+                    recordStep("verifyStdlib", success: false, message: "stdlib contents: \(stdlibContents.joined(separator: ", "))")
+                }
+            }
+        }
+
         // ── P3 fix: 使用 PyConfig(install_signal_handlers=0) 初始化 Python ──
         // 根因：Py_Initialize() 默认 install_signal_handlers=1，会覆盖 Node.js V8
         //       已注册的信号处理器，导致 V8 后续 EXC_BAD_ACCESS 崩溃。

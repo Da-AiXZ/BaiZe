@@ -76,34 +76,98 @@ targets:
           set -e
           PYTHON_XCFW="$PROJECT_DIR/Baize/Baize/Frameworks/Python.xcframework"
           APP_BUNDLE="$TARGET_BUILD_DIR/$PRODUCT_NAME.app"
+          PYTHON_VERSION_TAG="3.13"
+
+          # install_stdlib from utils.sh uses $CODESIGNING_FOLDER_PATH
+          export CODESIGNING_FOLDER_PATH="$APP_BUNDLE"
+
+          echo "=== Install Python Stdlib ==="
+          echo "PYTHON_XCFW: $PYTHON_XCFW"
+          echo "APP_BUNDLE: $APP_BUNDLE"
+          echo "ARCHS: $ARCHS"
+          echo "EFFECTIVE_PLATFORM_NAME: $EFFECTIVE_PLATFORM_NAME"
+
           if [ -d "$PYTHON_XCFW" ]; then
-            if [ -f "$PYTHON_XCFW/build/build_utils.sh" ]; then
-              source "$PYTHON_XCFW/build/build_utils.sh"
-              install_python "$PYTHON_XCFW" "$APP_BUNDLE"
-              echo "install_python: Python stdlib installed to $APP_BUNDLE/python/"
-            else
-              echo "build_utils.sh not found, manually copying Python stdlib..."
-              PYTHON_VERSION_TAG="3.13"
-              PYTHON_STDLIB_SRC=""
-              for slice_dir in "$PYTHON_XCFW"/*/; do
-                slice_name=$(basename "$slice_dir")
-                if [[ "$slice_name" == ios-arm64* ]]; then
-                  stdlib_path="$slice_dir/Python.framework/Versions/Current/lib/python$PYTHON_VERSION_TAG"
-                  if [ -d "$stdlib_path" ]; then
-                    PYTHON_STDLIB_SRC="$stdlib_path"
-                    break
-                  fi
+            # === Path 1: Use official install_stdlib from utils.sh ===
+            # NOTE: The file is named "utils.sh" in the BeeWare xcframework,
+            #       NOT "build_utils.sh" (the comments inside utils.sh reference
+            #       "build_utils.sh" but that's a documentation error in CPython).
+            #       Previous code checked for "build_utils.sh" and always fell through
+            #       to the fallback, which looked in the wrong path.
+            if [ -f "$PYTHON_XCFW/build/utils.sh" ]; then
+              echo "✅ Found utils.sh — using official install_stdlib..."
+              source "$PYTHON_XCFW/build/utils.sh"
+
+              # install_stdlib takes the xcframework path RELATIVE to $PROJECT_DIR
+              # It copies stdlib to $CODESIGNING_FOLDER_PATH/python/lib/
+              install_stdlib "Baize/Baize/Frameworks/Python.xcframework"
+              echo "install_stdlib: Python stdlib installed to $APP_BUNDLE/python/"
+
+              # Process dylibs (.so → framework conversion) only if codesign is available.
+              # For TrollStore builds (CODE_SIGNING_ALLOWED=NO), skip this step —
+              # unsigned .so files work fine on TrollStore.
+              PYTHON_VER_INSTALLED=$(ls -1 "$APP_BUNDLE/python/lib" 2>/dev/null | grep -E "^python3\.\d+$" || echo "")
+              if [ -n "$PYTHON_VER_INSTALLED" ]; then
+                echo "Python version detected in bundle: $PYTHON_VER_INSTALLED"
+                if [ -n "$EXPANDED_CODE_SIGN_IDENTITY" ] && [ "$EXPANDED_CODE_SIGN_IDENTITY" != "-" ]; then
+                  echo "Processing dylibs (codesign available)..."
+                  process_dylibs "Baize/Baize/Frameworks/Python.xcframework" "python/lib/$PYTHON_VER_INSTALLED/lib-dynload"
+                else
+                  echo "Skipping dylib processing (no codesign identity — TrollStore mode)"
                 fi
-              done
-              if [ -n "$PYTHON_STDLIB_SRC" ]; then
-                mkdir -p "$APP_BUNDLE/python/lib"
-                cp -r "$PYTHON_STDLIB_SRC" "$APP_BUNDLE/python/lib/"
-                echo "Manually copied Python stdlib (fallback)"
+              fi
+
+            else
+              # === Path 2: Manual fallback copy ===
+              # The BeeWare xcframework has a two-part stdlib:
+              #   1. Shared pure-Python stdlib:  $XCFW/lib/python3.13/  (at xcframework ROOT)
+              #   2. Arch-specific binary mods:  $XCFW/ios-arm64/lib-arm64/  (inside the slice)
+              # Both must be merged into $APP_BUNDLE/python/lib/python3.13/
+              #
+              # Previous fallback looked in Python.framework/Versions/Current/lib/ — WRONG.
+              echo "⚠️ utils.sh not found — manually copying Python stdlib..."
+
+              SHARED_STDLIB="$PYTHON_XCFW/lib/python$PYTHON_VERSION_TAG"
+              ARCH_STDLIB="$PYTHON_XCFW/ios-arm64/lib-arm64"
+
+              mkdir -p "$APP_BUNDLE/python/lib"
+
+              # Copy shared pure-Python stdlib (encodings, os.py, json/, etc.)
+              if [ -d "$SHARED_STDLIB" ]; then
+                echo "   Copying shared stdlib from $SHARED_STDLIB..."
+                cp -r "$SHARED_STDLIB" "$APP_BUNDLE/python/lib/"
               else
-                echo "WARNING: Could not find Python stdlib in xcframework"
+                echo "   ❌ Shared stdlib not found at $SHARED_STDLIB"
+                echo "   Searching for encodings in xcframework..."
+                find "$PYTHON_XCFW" -name "__init__.py" -path "*/encodings/*" 2>/dev/null | head -5
+              fi
+
+              # Merge arch-specific modules (lib-dynload, _sysconfigdata) on top
+              if [ -d "$ARCH_STDLIB" ]; then
+                echo "   Copying arch-specific modules from $ARCH_STDLIB..."
+                cp -r "$ARCH_STDLIB/"* "$APP_BUNDLE/python/lib/python$PYTHON_VERSION_TAG/" 2>/dev/null || true
+              else
+                echo "   ⚠️ Arch-specific stdlib not found at $ARCH_STDLIB (binary extensions may be missing)"
               fi
             fi
+
+            # === Verification ===
+            ENC_PATH="$APP_BUNDLE/python/lib/python$PYTHON_VERSION_TAG/encodings/__init__.py"
+            if [ -f "$ENC_PATH" ]; then
+              echo "✅ encodings module verified: $ENC_PATH"
+            else
+              echo "❌ CRITICAL: encodings module NOT found at $ENC_PATH"
+              echo "   Contents of python/lib/:"
+              ls -la "$APP_BUNDLE/python/lib/" 2>/dev/null || true
+              echo "   Contents of python/lib/python$PYTHON_VERSION_TAG/ (if exists):"
+              ls -la "$APP_BUNDLE/python/lib/python$PYTHON_VERSION_TAG/" 2>/dev/null || true
+            fi
+
+            # Count total stdlib files installed
+            STDLIB_COUNT=$(find "$APP_BUNDLE/python/lib/python$PYTHON_VERSION_TAG" -type f 2>/dev/null | wc -l | tr -d ' ')
+            echo "   Total stdlib files installed: $STDLIB_COUNT"
+
           else
-            echo "WARNING: Python.xcframework not found at $PYTHON_XCFW"
+            echo "❌ WARNING: Python.xcframework not found at $PYTHON_XCFW"
           fi
         basedOnDependencyAnalysis: false
