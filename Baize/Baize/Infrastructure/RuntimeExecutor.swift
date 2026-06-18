@@ -49,17 +49,19 @@ class RuntimeExecutor: @unchecked Sendable {
 
         // 初始化 ios_system 环境（安全可重入，多次调用无害）
         // ios_system 将 70+ Unix 命令编译为进程内函数，无需 fork()
-        // ios_setMiniRoot 设置沙箱根目录，禁止 cd 到此目录之上
+        // 注意：不调用 ios_setMiniRoot —— 它需要实际可访问的路径，
+        // 但 RuntimeExecutor 在 App 启动时初始化，此时工作目录尚未解析
+        // （TrollStore no-sandbox 路径可能不存在，需 fallback 到沙箱路径）
+        // ios_system 默认不限制路径，安全由 PermissionEngine 负责
         initializeEnvironment()
-        _ = ios_setMiniRoot(BaizePath.projectRoot)
     }
 
     // MARK: - Shell Command Execution (ios_system)
 
-    /// 执行 Shell 命令 — 优先使用 ios_system 库的 ios_popen
+    /// 执行 Shell 命令 — 使用 ios_system 库的 ios_popen
     /// ios_system 不需要 fork()，每个命令编译为独立函数直接在进程内调用
     /// 支持 ls/cat/grep/find/rm/mv/cp/tar/curl 等 70+ Unix 命令
-    /// 如果 ios_popen 返回 nil（命令不可用），降级到 posix_spawn
+    /// 如果 ios_popen 返回 nil（命令不可用），返回清晰的错误信息
     /// - Parameters:
     ///   - command: 命令字符串（如 "ls -la /var/mobile/Documents/Baize/"）
     ///   - workingDir: 工作目录（可选）
@@ -69,8 +71,17 @@ class RuntimeExecutor: @unchecked Sendable {
 
         let workingDirectory = workingDir ?? BaizePath.projectRoot
 
-        // 构建完整命令：cd 到工作目录，合并 stderr 到 stdout 以捕获全部输出
-        let fullCommand = "cd '\(workingDirectory)' && \(command) 2>&1"
+        // 构建完整命令：仅当工作目录存在且可访问时才 cd
+        // TrollStore no-sandbox 路径可能不存在（会 fallback 到沙箱路径），
+        // cd 到不存在的路径会导致 && 后的命令不执行，ios_popen 返回 nil
+        let fullCommand: String
+        if !workingDirectory.isEmpty && fileManager.fileExists(atPath: workingDirectory) {
+            fullCommand = "cd '\(workingDirectory)' && \(command) 2>&1"
+        } else {
+            // 工作目录不存在或不可访问，直接执行命令（在默认目录运行）
+            runtimeLogger.warning("Working directory not accessible: \(workingDirectory), running in default dir")
+            fullCommand = "\(command) 2>&1"
+        }
 
         // 优先使用 ios_popen 执行命令（ios_system 库内置命令，进程内调用）
         // ios_system 是同步阻塞调用，通过 DispatchQueue.global() 调度到后台线程
@@ -80,28 +91,17 @@ class RuntimeExecutor: @unchecked Sendable {
                 let fp = ios_popen(fullCommand, "r")
 
                 guard let filePtr = fp else {
-                    // ios_popen 返回 nil — 命令不可用，降级到 posix_spawn
-                    runtimeLogger.warning("ios_popen returned nil for: \(command), falling back to posix_spawn")
-
-                    // 拆分命令为程序 + 参数（用于 posix_spawn fallback）
-                    let parts = command.split(separator: " ", omittingEmptySubsequences: true)
-                    guard let program = parts.first else {
-                        continuation.resume(returning: ExecutionResult(
-                            stdout: "",
-                            stderr: "Empty command",
-                            exitCode: -1,
-                            isError: true
-                        ))
-                        return
-                    }
-                    let args = parts.dropFirst().map { String($0) }
-
-                    let result = self.spawnProcessBlocking(
-                        path: String(program),
-                        args: args,
-                        workingDir: workingDirectory
-                    )
-                    continuation.resume(returning: result)
+                    // ios_popen 返回 nil — 命令在 ios_system 中不可用
+                    // 不再降级到 posix_spawn（posix_spawn 对裸命令名如 "ls" 必然失败，
+                    // 因为 iOS 上 /usr/bin/ls 不存在）
+                    runtimeLogger.error("ios_popen returned nil for: \(fullCommand)")
+                    runtimeLogger.error("This usually means ios_system command dictionary not loaded, or command not supported")
+                    continuation.resume(returning: ExecutionResult(
+                        stdout: "",
+                        stderr: "命令不可用: ios_system 不支持 '\(command)'。可能原因: ios_system 未正确初始化，或该命令不在内置命令列表中。支持的命令: ls, cat, grep, find, rm, mv, cp, tar, curl 等 70+ Unix 命令。",
+                        exitCode: -1,
+                        isError: true
+                    ))
                     return
                 }
 
