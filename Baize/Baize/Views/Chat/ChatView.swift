@@ -10,6 +10,7 @@ struct ChatView: View {
     @State private var isStreaming: Bool = false
     @State private var pendingConfirmation: PendingConfirmation?
     @State private var streamingText: String = ""
+    @State private var hasReceivedAnyResponse: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -66,6 +67,7 @@ struct ChatView: View {
         inputText = ""
         isStreaming = true
         streamingText = ""
+        hasReceivedAnyResponse = false
 
         // W9 fix: 在 Task 之前同步设置 isAgentRunning = true，防止时序竞争
         appState.isAgentRunning = true
@@ -107,7 +109,22 @@ struct ChatView: View {
             )
         } catch {
             baizeLogger.error("Failed to sync APIGateway before message: \(error.localizedDescription)")
+            await MainActor.run {
+                displayMessages.append(DisplayMessage(
+                    role: .error,
+                    content: "Provider 同步失败: \(error.localizedDescription)。请到设置页点击「应用选择」后重试。",
+                    timestamp: Date()
+                ))
+                isStreaming = false
+                appState.isAgentRunning = false
+            }
+            return
         }
+
+        // 诊断：记录当前 Provider 和模型
+        let providerId = await apiGateway.getActiveProviderId()
+        let activeModel = await apiGateway.getActiveModel()
+        baizeLogger.info("ChatView: sending message with provider=\(providerId), model=\(activeModel)")
 
         let agentLoop = AgentLoop(
             apiGateway: apiGateway,
@@ -153,6 +170,7 @@ struct ChatView: View {
         switch event {
         case .textDelta(let text):
             streamingText += text
+            hasReceivedAnyResponse = true
 
         case .toolCall(let toolCall):
             // 将当前流式文本转为正式消息
@@ -193,6 +211,7 @@ struct ChatView: View {
             pendingConfirmation = PendingConfirmation(toolCall: toolCall, reason: reason)
 
         case .error(let error):
+            hasReceivedAnyResponse = true
             if !streamingText.isEmpty {
                 displayMessages.append(DisplayMessage(
                     role: .assistant,
@@ -215,6 +234,15 @@ struct ChatView: View {
                     timestamp: Date()
                 ))
                 streamingText = ""
+            } else if !hasReceivedAnyResponse {
+                // 空响应兜底：AgentLoop 完成但未收到任何文本或错误
+                let providerId = appState.activeProvider.providerId
+                let model = appState.activeModel
+                displayMessages.append(DisplayMessage(
+                    role: .error,
+                    content: "未收到任何响应。当前 Provider: \(providerId), 模型: \(model)。请到设置页确认配置正确后点击「应用选择」，然后重试。",
+                    timestamp: Date()
+                ))
             }
             appState.isAgentRunning = false
         }

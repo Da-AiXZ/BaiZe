@@ -32,7 +32,18 @@ struct SSEStream {
                     guard let httpResponse = response as? HTTPURLResponse,
                           (200...299).contains(httpResponse.statusCode) else {
                         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-                        throw BaizeError.apiError("HTTP 状态码异常: \(statusCode)")
+                        // 读取错误响应体，获取 API 返回的具体错误信息
+                        var errorBody = ""
+                        var collected = 0
+                        let maxErrorBytes = 4096
+                        for try await byte in bytes {
+                            if collected >= maxErrorBytes { break }
+                            errorBody.append(Character(UnicodeScalar(byte)))
+                            collected += 1
+                        }
+                        let displayBody = errorBody.isEmpty ? "(空响应体)" : errorBody
+                        apiLogger.error("SSE HTTP \(statusCode) error body: \(displayBody)")
+                        throw BaizeError.apiError("HTTP \(statusCode): \(displayBody)")
                     }
 
                     apiLogger.info("SSE stream connected, status: \(httpResponse.statusCode)")

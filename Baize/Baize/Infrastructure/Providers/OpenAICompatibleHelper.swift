@@ -91,10 +91,23 @@ enum OpenAICompatibleHelper {
         }
 
         do {
-            guard let json = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-                  let choices = json["choices"] as? [[String: Any]],
+            guard let json = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+                apiLogger.debug("SSE JSON parse failed, data: \(data.prefix(200))")
+                return []
+            }
+
+            // 先检查是否为 API 错误响应（某些 API 在 SSE 流中返回错误）
+            if let errorInfo = json["error"] as? [String: Any] {
+                let message = errorInfo["message"] as? String ?? "未知错误"
+                let errorType = errorInfo["type"] as? String ?? "api_error"
+                apiLogger.error("SSE API error: \(errorType) — \(message)")
+                // 返回一个特殊的 done chunk，附带错误信息作为 finishReason
+                return [.done(finishReason: "error: \(message)")]
+            }
+
+            guard let choices = json["choices"] as? [[String: Any]],
                   let firstChoice = choices.first else {
-                apiLogger.debug("SSE JSON: no choices array found")
+                apiLogger.debug("SSE JSON: no choices array found, data: \(data.prefix(200))")
                 return []
             }
 

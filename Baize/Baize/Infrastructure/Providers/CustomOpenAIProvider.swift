@@ -38,18 +38,20 @@ struct CustomOpenAIProvider: LLMProvider {
             let task = Task {
                 do {
                     guard let apiKey = self.getAPIKey() else {
+                        apiLogger.error("Custom provider: API key not found in keychain")
                         continuation.finish(throwing: ProviderError.notConfigured("custom"))
                         return
                     }
 
                     let endpoint = self.getEndpoint()
                     // 使用 UserDefaults 中的模型名，而非 APIGateway 传入的参数
-                    // 修复：APIGateway 的 activeModel 可能还是默认值 "gpt-4.1"
                     let actualModel = self.getModel()
-                    apiLogger.info("Custom provider: starting stream for model: \(actualModel) at endpoint: \(endpoint)")
+                    apiLogger.info("Custom provider: starting stream — model=\(actualModel), endpoint=\(endpoint), messages=\(messages.count), tools=\(tools.count)")
 
                     let openAIMessages = messages.toOpenAIMergedFormat()
                     let openAITools = tools.isEmpty ? nil : tools.map { $0.toOpenAIFormat() }
+
+                    apiLogger.debug("Custom provider: request messages count=\(openAIMessages.count), tools count=\(openAITools?.count ?? 0)")
 
                     let urlRequest = try OpenAICompatibleHelper.buildRequest(
                         endpoint: endpoint,
@@ -62,14 +64,38 @@ struct CustomOpenAIProvider: LLMProvider {
                     let sseStream = SSEStream()
                     let sseEvents = sseStream.parse(urlRequest: urlRequest)
 
+                    var hasContent = false
+                    var hasError = false
+                    var errorDetail = ""
+
                     for try await event in sseEvents {
                         let chunks = OpenAICompatibleHelper.interpretSSEEvent(event)
                         for chunk in chunks {
+                            // 检测错误响应
+                            if case .done(let finishReason) = chunk, finishReason.hasPrefix("error:") {
+                                hasError = true
+                                errorDetail = finishReason
+                                apiLogger.error("Custom provider: API returned error in SSE: \(finishReason)")
+                            }
+                            // 检测有内容
+                            if case .textDelta = chunk {
+                                hasContent = true
+                            }
                             continuation.yield(chunk)
                         }
                     }
 
-                    continuation.finish()
+                    // 空响应检测：流结束但没有任何内容
+                    if hasError {
+                        let msg = errorDetail.replacingOccurrences(of: "error:", with: "").trimmingCharacters(in: .whitespaces)
+                        apiLogger.error("Custom provider: stream ended with API error: \(msg)")
+                        continuation.finish(throwing: ProviderError.apiError("API 返回错误: \(msg)"))
+                    } else if !hasContent {
+                        apiLogger.error("Custom provider: stream completed but no content received (model=\(actualModel), endpoint=\(endpoint))")
+                        continuation.finish(throwing: ProviderError.apiError("API 返回了空响应（无内容）。请检查模型名是否正确、API Key 是否有效、端点是否支持流式输出。模型: \(actualModel), 端点: \(endpoint)"))
+                    } else {
+                        continuation.finish()
+                    }
                 } catch {
                     apiLogger.error("Custom provider stream error: \(error.localizedDescription)")
                     continuation.finish(throwing: error)
