@@ -3,7 +3,7 @@ set -euo pipefail
 
 # download-runtime.sh — 下载/创建 Runtime 二进制
 # Node.js: nodejs-mobile NodeMobile.framework v18.20.4 (real)
-# Python: placeholder binary (future CPython iOS integration)
+# Python: BeeWare Python-Apple-support 3.13-b14 (CPython iOS embed)
 
 RUNTIME_DIR="Baize/Baize/Frameworks"
 mkdir -p "$RUNTIME_DIR"
@@ -71,22 +71,83 @@ else
 fi
 
 # ============================================
-# Python Runtime (CPython iOS embed)
+# Python Runtime (BeeWare Python-Apple-support 3.13-b14)
 # ============================================
-if [ -f "$RUNTIME_DIR/python3" ]; then
-    echo "✅ Python binary already exists"
+PYTHON_XCFRAMEWORK="$RUNTIME_DIR/Python.xcframework"
+if [ -d "$PYTHON_XCFRAMEWORK" ]; then
+    echo "✅ Python.xcframework already exists"
 else
-    echo "Creating Python placeholder binary (Phase 2B)..."
-    cat > "$RUNTIME_DIR/python3" << 'PYEOF'
-#!/bin/sh
-# Python placeholder - Phase 2B
-# Phase 2D: Replace with real CPython iOS arm64 binary
-echo "Python placeholder - Phase 2B"
-echo "This binary will be replaced with CPython iOS arm64 in Phase 2D"
-exit 0
-PYEOF
-    chmod +x "$RUNTIME_DIR/python3"
-    echo "✅ Python placeholder binary created"
+    echo "📥 Downloading BeeWare Python 3.13-b14 iOS support..."
+    PYTHON_URL="https://github.com/beeware/Python-Apple-support/releases/download/3.13-b14/Python-3.13-iOS-support.b14.tar.gz"
+    curl -fL --retry 3 --retry-delay 5 -o /tmp/python-ios.tar.gz "$PYTHON_URL"
+
+    # Verify download
+    TAR_SIZE=$(stat -f%z /tmp/python-ios.tar.gz 2>/dev/null || stat -c%s /tmp/python-ios.tar.gz 2>/dev/null || echo 0)
+    if [ "$TAR_SIZE" -lt 5000000 ]; then
+        echo "❌ ERROR: Downloaded file is only $TAR_SIZE bytes (expected ~31MB)"
+        rm -f /tmp/python-ios.tar.gz
+        exit 1
+    fi
+    echo "   Downloaded $(( TAR_SIZE / 1024 )) KB"
+
+    echo "📂 Extracting BeeWare Python..."
+    mkdir -p /tmp/python-ios
+    tar -xzf /tmp/python-ios.tar.gz -C /tmp/python-ios
+
+    # Find Python.xcframework in extracted contents
+    EXTRACTED_XCFW=$(find /tmp/python-ios -maxdepth 1 -type d -name "Python.xcframework" | head -n 1)
+    if [ -n "$EXTRACTED_XCFW" ]; then
+        cp -r "$EXTRACTED_XCFW" "$RUNTIME_DIR/"
+        echo "✅ Python.xcframework extracted to $RUNTIME_DIR/"
+    else
+        echo "❌ ERROR: Python.xcframework not found in tarball"
+        echo "   Contents of extracted directory:"
+        ls -1 /tmp/python-ios/ 2>/dev/null || true
+        echo "   Searching for Python.xcframework anywhere..."
+        find /tmp/python-ios -name "Python.xcframework" -type d 2>/dev/null || true
+        rm -f /tmp/python-ios.tar.gz
+        rm -rf /tmp/python-ios
+        exit 1
+    fi
+
+    # Verify xcframework structure
+    if [ ! -d "$PYTHON_XCFRAMEWORK" ]; then
+        echo "❌ ERROR: Python.xcframework not properly copied"
+        rm -f /tmp/python-ios.tar.gz
+        rm -rf /tmp/python-ios
+        exit 1
+    fi
+
+    # Verify Headers/Python.h exists (needed for Bridging Header)
+    PYTHON_H_FOUND=""
+    for slice_dir in "$PYTHON_XCFRAMEWORK"/*/; do
+        if [ -f "$slice_dir/Python.framework/Headers/Python.h" ]; then
+            PYTHON_H_FOUND="$slice_dir/Python.framework/Headers/Python.h"
+            break
+        fi
+    done
+    if [ -n "$PYTHON_H_FOUND" ]; then
+        echo "✅ Python.h found: $PYTHON_H_FOUND"
+    else
+        echo "⚠️ WARNING: Python.h not found in any slice of Python.xcframework"
+        echo "   Bridging Header import may fail. Check xcframework structure:"
+        find "$PYTHON_XCFRAMEWORK" -name "Python.h" 2>/dev/null || true
+    fi
+
+    # Verify build_utils.sh exists (needed for install_python Build Phase)
+    BUILD_UTILS="$PYTHON_XCFRAMEWORK/build/build_utils.sh"
+    if [ -f "$BUILD_UTILS" ]; then
+        echo "✅ build_utils.sh found (install_python available)"
+    else
+        echo "⚠️ WARNING: build_utils.sh not found at $BUILD_UTILS"
+        echo "   install_python Build Phase will use fallback stdlib copy"
+    fi
+
+    # Clean up
+    rm -f /tmp/python-ios.tar.gz
+    rm -rf /tmp/python-ios
+
+    echo "✅ Python.xcframework installed to $RUNTIME_DIR/"
 fi
 
 # ============================================
@@ -100,7 +161,15 @@ if [ -d "$RUNTIME_DIR/NodeMobile.framework" ]; then
     echo "=== NodeMobile.framework ==="
     ls -la "$RUNTIME_DIR/NodeMobile.framework/"
 fi
+if [ -d "$RUNTIME_DIR/Python.xcframework" ]; then
+    echo ""
+    echo "=== Python.xcframework ==="
+    ls -la "$RUNTIME_DIR/Python.xcframework/"
+    echo ""
+    echo "=== Python.xcframework slices ==="
+    ls -1 "$RUNTIME_DIR/Python.xcframework/" | grep -v "\.txt\|build" || true
+fi
 
 echo ""
 echo "✅ Node.js: NodeMobile.framework (nodejs-mobile v18.20.4, arm64 device)"
-echo "⚠️ Python: placeholder binary (CPython iOS integration in future phase)"
+echo "✅ Python: Python.xcframework (BeeWare Python 3.13-b14, CPython iOS embed)"

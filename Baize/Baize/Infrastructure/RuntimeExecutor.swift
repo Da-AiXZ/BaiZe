@@ -6,7 +6,7 @@ import ios_system
 /// 对外接口不变（executeNode/executePython/executeCommand），内部通过策略委托：
 /// - executeCommand → ios_system（进程内命令执行，不变）
 /// - executeNode → NodeMobileStrategy → NodeRuntimeEngine → HTTP → Node.js（进程内）
-/// - executePython → PythonSpawnStrategy → posix_spawn（暂保留，后续替换为 CPython Embedding）
+/// - executePython → PythonEmbeddingStrategy → PythonRuntimeEngine → HTTP → Python（进程内，CPython 3.13 嵌入模式）
 ///
 /// @unchecked Sendable：内部状态通过 Actor 隔离保证线程安全
 class RuntimeExecutor: @unchecked Sendable {
@@ -46,7 +46,7 @@ class RuntimeExecutor: @unchecked Sendable {
     /// 主初始化器 — 接受策略注入
     /// - Parameters:
     ///   - nodeStrategy: Node.js 执行策略（NodeMobileStrategy 或 NodeUnavailableStrategy）
-    ///   - pythonStrategy: Python 执行策略（PythonSpawnStrategy）
+    ///   - pythonStrategy: Python 执行策略（PythonEmbeddingStrategy 或 PythonUnavailableStrategy）
     init(
         nodeStrategy: RuntimeStrategy,
         pythonStrategy: RuntimeStrategy
@@ -71,7 +71,7 @@ class RuntimeExecutor: @unchecked Sendable {
     convenience init() {
         self.init(
             nodeStrategy: NodeUnavailableStrategy(),
-            pythonStrategy: PythonSpawnStrategy()
+            pythonStrategy: PythonUnavailableStrategy()
         )
     }
 

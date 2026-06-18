@@ -34,12 +34,17 @@ targets:
       - path: Baize/Baize/Resources/nodejs
         type: folder
         buildPhase: resources
+      - path: Baize/Baize/Resources/python_scripts
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: ios_system
         product: ios_system
       - package: KeychainAccess
         product: KeychainAccess
       - framework: Baize/Baize/Frameworks/NodeMobile.framework
+        embed: true
+      - framework: Baize/Baize/Frameworks/Python.xcframework
         embed: true
     settings:
       base:
@@ -59,5 +64,46 @@ targets:
         ENABLE_PREVIEWS: NO
         SWIFT_OBJC_BRIDGING_HEADER: Baize/Baize/Infrastructure/Baize-Bridging-Header.h
         ENABLE_BITCODE: NO
+        USER_SCRIPT_SANDBOXING: NO
+        HEADER_SEARCH_PATHS:
+          - "$(inherited)"
+          - "$(BUILT_PRODUCTS_DIR)/Python.framework/Headers"
     entitlements:
       path: Baize/Baize/Baize.entitlements
+    postBuildScripts:
+      - name: Install Python Stdlib
+        script: |
+          set -e
+          PYTHON_XCFW="$PROJECT_DIR/Baize/Baize/Frameworks/Python.xcframework"
+          APP_BUNDLE="$TARGET_BUILD_DIR/$PRODUCT_NAME.app"
+          if [ -d "$PYTHON_XCFW" ]; then
+            if [ -f "$PYTHON_XCFW/build/build_utils.sh" ]; then
+              source "$PYTHON_XCFW/build/build_utils.sh"
+              install_python "$PYTHON_XCFW" "$APP_BUNDLE"
+              echo "install_python: Python stdlib installed to $APP_BUNDLE/python/"
+            else
+              echo "build_utils.sh not found, manually copying Python stdlib..."
+              PYTHON_VERSION_TAG="3.13"
+              PYTHON_STDLIB_SRC=""
+              for slice_dir in "$PYTHON_XCFW"/*/; do
+                slice_name=$(basename "$slice_dir")
+                if [[ "$slice_name" == ios-arm64* ]]; then
+                  stdlib_path="$slice_dir/Python.framework/Versions/Current/lib/python$PYTHON_VERSION_TAG"
+                  if [ -d "$stdlib_path" ]; then
+                    PYTHON_STDLIB_SRC="$stdlib_path"
+                    break
+                  fi
+                fi
+              done
+              if [ -n "$PYTHON_STDLIB_SRC" ]; then
+                mkdir -p "$APP_BUNDLE/python/lib"
+                cp -r "$PYTHON_STDLIB_SRC" "$APP_BUNDLE/python/lib/"
+                echo "Manually copied Python stdlib (fallback)"
+              else
+                echo "WARNING: Could not find Python stdlib in xcframework"
+              fi
+            fi
+          else
+            echo "WARNING: Python.xcframework not found at $PYTHON_XCFW"
+          fi
+        basedOnDependencyAnalysis: false

@@ -366,6 +366,30 @@ enum BaizeNode {
     static let bootstrapFileName = "bootstrap"
 }
 
+// MARK: - Python Engine Configuration
+
+/// Python 引擎配置（CPython 3.13 嵌入模式）
+enum BaizePython {
+    /// HTTP server 监听端口（127.0.0.1，与 Node.js 48213 不冲突）
+    static let enginePort = 48214
+
+    /// 引擎启动等待超时（秒）
+    static let startupWaitTimeout: TimeInterval = 15.0
+
+    /// 健康检查轮询间隔（毫秒）
+    static let healthCheckIntervalMs: UInt64 = 200
+
+    /// bootstrap.py 在 App Bundle 中的目录名
+    /// 注意：不使用 "python" 以避免与 install_python 创建的 python/ 目录冲突
+    static let bootstrapResourceDir = "python_scripts"
+
+    /// bootstrap.py 文件名（不含扩展名）
+    static let bootstrapFileName = "bootstrap"
+
+    /// Python 版本标签（用于路径拼接，如 lib/python3.13）
+    static let pythonVersionTag = "3.13"
+}
+
 // MARK: - Permission Defaults
 
 /// 权限引擎默认配置

@@ -39,6 +39,9 @@ struct BaizeApp: App {
     /// Node.js Runtime Engine (nodejs-mobile 进程内运行时)
     private let nodeRuntimeEngine: NodeRuntimeEngine
 
+    /// Python Runtime Engine (CPython 3.13 嵌入模式)
+    private let pythonRuntimeEngine: PythonRuntimeEngine
+
     // MARK: - Initialization
 
     init() {
@@ -51,14 +54,18 @@ struct BaizeApp: App {
         let nodeEngine = NodeRuntimeEngine()
         nodeEngine.start()
         let nodeStrategy = NodeMobileStrategy(engine: nodeEngine)
-        let pythonStrategy = PythonSpawnStrategy()
+
+        let pythonEngine = PythonRuntimeEngine()
+        pythonEngine.start()
+        let pythonStrategy = PythonEmbeddingStrategy(engine: pythonEngine)
+
         let runtime = RuntimeExecutor(nodeStrategy: nodeStrategy, pythonStrategy: pythonStrategy)
         let permission = PermissionEngine(mode: BaizePermission.defaultMode)
         let projectCtx = ProjectContext(rootPath: workingRoot, fileSystemService: fsService)
         let contextMgr = ContextManager(projectContext: projectCtx)
         let conversation = ConversationStore()
         let api = APIGateway(keychainService: keychain)
-        let registry = ToolRegistry(fileSystemService: fsService, runtimeExecutor: runtime, nodeEngine: nodeEngine)
+        let registry = ToolRegistry(fileSystemService: fsService, runtimeExecutor: runtime, nodeEngine: nodeEngine, pythonEngine: pythonEngine)
 
         self.keychainService = keychain
         self.apiGateway = api
@@ -70,6 +77,7 @@ struct BaizeApp: App {
         self.fileSystemService = fsService
         self.runtimeExecutor = runtime
         self.nodeRuntimeEngine = nodeEngine
+        self.pythonRuntimeEngine = pythonEngine
 
         // W22 fix: 将所有服务实例注入 AppState，供 ChatView 等视图共享
         _appState = StateObject(wrappedValue: {

@@ -7,3 +7,5 @@
 //
 
 #import "NodeEngineBridge.h"
+
+#import <Python/Python.h>

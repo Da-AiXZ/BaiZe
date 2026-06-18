@@ -33,15 +33,6 @@ cp -r "$APP_PATH" "$OUTPUT_DIR/ipa/Payload/"
 
 # 3. Insert runtime binaries into Frameworks/
 mkdir -p "$OUTPUT_DIR/ipa/Payload/$PRODUCT_NAME.app/Frameworks"
-# Python3 is still a standalone binary (placeholder for future CPython integration)
-for binary in python3; do
-    if [ -f "Baize/Baize/Frameworks/$binary" ]; then
-        cp "Baize/Baize/Frameworks/$binary" "$OUTPUT_DIR/ipa/Payload/$PRODUCT_NAME.app/Frameworks/"
-        echo "✅ Copied $binary to Frameworks/"
-    else
-        echo "⚠️ $binary not found in Baize/Baize/Frameworks/"
-    fi
-done
 
 # 3b. Download and embed missing ios_system runtime dependencies (libssh2, openssl)
 # These are dynamic frameworks required by curl_ios.framework and ssh_cmd.framework at runtime,
@@ -148,6 +139,40 @@ else
     echo "✅ NodeMobile.framework already embedded by Xcode"
 fi
 
+# 3d. Ensure Python.framework is embedded
+# Declared as embed:true in project.yml, Xcode should embed it during archive.
+# Verify and fallback-copy from xcframework if missing.
+PYTHON_FW_APP="$OUTPUT_DIR/ipa/Payload/$PRODUCT_NAME.app/Frameworks/Python.framework"
+if [ ! -d "$PYTHON_FW_APP" ]; then
+    echo "⚠️ Python.framework not found in .app, copying from xcframework..."
+    PYTHON_XCFW="Baize/Baize/Frameworks/Python.xcframework"
+    if [ -d "$PYTHON_XCFW" ]; then
+        # Find the arm64-ios slice and extract Python.framework
+        PYTHON_SLICE=""
+        for slice_dir in "$PYTHON_XCFW"/*/; do
+            slice_name=$(basename "$slice_dir")
+            if [[ "$slice_name" == ios-arm64* ]] && [ -d "$slice_dir/Python.framework" ]; then
+                PYTHON_SLICE="$slice_dir"
+                break
+            fi
+        done
+        if [ -n "$PYTHON_SLICE" ]; then
+            cp -r "$PYTHON_SLICE/Python.framework" "$FRAMEWORKS_DIR/"
+            echo "✅ Copied Python.framework from $(basename "$PYTHON_SLICE") slice to Frameworks/"
+        else
+            echo "❌ ERROR: No ios-arm64 slice with Python.framework found in xcframework"
+            echo "   Run scripts/download-runtime.sh first."
+            exit 1
+        fi
+    else
+        echo "❌ ERROR: Python.xcframework not found at $PYTHON_XCFW"
+        echo "   Run scripts/download-runtime.sh first."
+        exit 1
+    fi
+else
+    echo "✅ Python.framework already embedded by Xcode"
+fi
+
 # 4. Fakesign main executable WITH entitlements (W14 fix: sign executable, not IPA)
 # ldid 2.1.5+ assertion fix: strip Xcode's signature first, then fakesign
 EXECUTABLE="$OUTPUT_DIR/ipa/Payload/$PRODUCT_NAME.app/$PRODUCT_NAME"
@@ -162,7 +187,7 @@ fi
 
 # 5. Fakesign runtime binaries (ad-hoc, no entitlements)
 # Only sign actual Mach-O binaries — skip placeholder shell scripts
-# Covers both standalone binaries (node, python3) and .framework bundles (libssh2, openssl)
+# Covers both standalone binaries (node) and .framework bundles (libssh2, openssl, Python)
 FW_BASE="$OUTPUT_DIR/ipa/Payload/$PRODUCT_NAME.app/Frameworks"
 
 # 5a. Standalone binaries in Frameworks/
@@ -177,7 +202,7 @@ for binary in "$FW_BASE/"*; do
     fi
 done
 
-# 5b. Framework bundle binaries (e.g. libssh2.framework/libssh2)
+# 5b. Framework bundle binaries (e.g. libssh2.framework/libssh2, Python.framework/Python)
 for fw_bundle in "$FW_BASE/"*.framework; do
     if [ ! -d "$fw_bundle" ]; then
         continue
@@ -192,7 +217,64 @@ for fw_bundle in "$FW_BASE/"*.framework; do
     fi
 done
 
-# 6. Create IPA
+# 6. Install Python standard library to .app/python/
+# This copies the Python stdlib from Python.xcframework into the app bundle
+# so that PYTHONHOME can find it at runtime.
+APP_BUNDLE="$OUTPUT_DIR/ipa/Payload/$PRODUCT_NAME.app"
+PYTHON_XCFW_SRC="Baize/Baize/Frameworks/Python.xcframework"
+if [ -d "$PYTHON_XCFW_SRC" ]; then
+    echo ""
+    echo "📦 Installing Python standard library..."
+    if [ -f "$PYTHON_XCFW_SRC/build/build_utils.sh" ]; then
+        # Use BeeWare's install_python script (preferred)
+        source "$PYTHON_XCFW_SRC/build/build_utils.sh"
+        install_python "$PYTHON_XCFW_SRC" "$APP_BUNDLE"
+        echo "✅ install_python: Python stdlib installed to $APP_BUNDLE/python/"
+    else
+        # Fallback: manually copy stdlib from Python.framework
+        echo "⚠️ build_utils.sh not found, manually copying Python stdlib..."
+        PYTHON_VERSION_TAG="3.13"
+        PYTHON_STDLIB_SRC=""
+        for slice_dir in "$PYTHON_XCFW_SRC"/*/; do
+            slice_name=$(basename "$slice_dir")
+            if [[ "$slice_name" == ios-arm64* ]]; then
+                stdlib_path="$slice_dir/Python.framework/Versions/Current/lib/python$PYTHON_VERSION_TAG"
+                if [ -d "$stdlib_path" ]; then
+                    PYTHON_STDLIB_SRC="$stdlib_path"
+                    break
+                fi
+                # Also check without Versions/Current
+                stdlib_path="$slice_dir/Python.framework/lib/python$PYTHON_VERSION_TAG"
+                if [ -d "$stdlib_path" ]; then
+                    PYTHON_STDLIB_SRC="$stdlib_path"
+                    break
+                fi
+            fi
+        done
+        if [ -n "$PYTHON_STDLIB_SRC" ]; then
+            mkdir -p "$APP_BUNDLE/python/lib"
+            cp -r "$PYTHON_STDLIB_SRC" "$APP_BUNDLE/python/lib/"
+            echo "✅ Manually copied Python stdlib (fallback) to $APP_BUNDLE/python/lib/"
+        else
+            echo "⚠️ WARNING: Could not find Python stdlib in xcframework"
+            echo "   Python execution may fail at runtime (import errors)"
+        fi
+    fi
+else
+    echo "⚠️ WARNING: Python.xcframework not found at $PYTHON_XCFW_SRC"
+    echo "   Python stdlib will not be installed. Run scripts/download-runtime.sh first."
+fi
+
+# 7. Verify bootstrap.py is in the app bundle
+BOOTSTRAP_PY="$APP_BUNDLE/python_scripts/bootstrap.py"
+if [ -f "$BOOTSTRAP_PY" ]; then
+    echo "✅ bootstrap.py found in app bundle"
+else
+    echo "⚠️ WARNING: bootstrap.py not found at $BOOTSTRAP_PY"
+    echo "   Python engine may fail to start. Check project.yml python_scripts resource."
+fi
+
+# 8. Create IPA
 cd "$OUTPUT_DIR/ipa"
 zip -r "$PRODUCT_NAME.ipa" Payload
 cd -

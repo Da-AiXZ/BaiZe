@@ -1,12 +1,12 @@
 import Foundation
 
-/// 运行 Python 脚本工具 — ⚠️ placeholder（Python 运行时暂未集成）
+/// 运行 Python 脚本工具 — CPython 3.13 嵌入模式
 /// 破坏性工具，权限引擎需要 ask
-/// 当前：posix_spawn placeholder binary → 后续将集成 CPython iOS 嵌入模式
+/// 通过 PythonRuntimeEngine HTTP server 执行 Python 代码，返回 stdout 和 stderr
 struct RunPythonTool: Tool {
 
     let name = "run_python"
-    let description = "运行 Python 脚本。⚠️ Python 运行时暂未集成，当前为 placeholder。后续将通过 CPython iOS 嵌入模式执行 Python 代码，返回 stdout 和 stderr 输出。"
+    let description = "运行 Python 脚本。通过 CPython 3.13 嵌入模式执行 Python 代码，返回 stdout 和 stderr 输出。支持标准库模块（json、os、sys、re、math 等）。"
     let isReadOnly = false
     let isDestructive = true
 

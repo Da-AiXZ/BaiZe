@@ -59,6 +59,50 @@ struct NodeUnavailableStrategy: RuntimeStrategy {
     }
 }
 
+// MARK: - PythonEmbeddingStrategy
+
+/// Python 嵌入模式执行策略 — 通过 CPython HTTP server 执行脚本
+///
+/// 委托 PythonRuntimeEngine 发送 HTTP POST 请求到本地 Python server，
+/// server 使用 exec() 执行脚本并返回 stdout/stderr。
+struct PythonEmbeddingStrategy: RuntimeStrategy {
+
+    /// Python 运行时引擎实例
+    private let engine: PythonRuntimeEngine
+
+    /// 创建 PythonEmbeddingStrategy
+    /// - Parameter engine: 已启动的 PythonRuntimeEngine 实例
+    init(engine: PythonRuntimeEngine) {
+        self.engine = engine
+    }
+
+    func execute(script: String, workingDir: String?) async -> RuntimeExecutor.ExecutionResult {
+        return await engine.executeScript(
+            script: script,
+            workingDir: workingDir,
+            timeout: BaizeRuntime.pythonTimeout
+        )
+    }
+}
+
+// MARK: - PythonUnavailableStrategy
+
+/// 降级策略 — Python 引擎未注入时返回友好错误
+///
+/// 当 BaizeApp 未能创建 PythonRuntimeEngine 时（如 framework 缺失），
+/// RuntimeExecutor 使用此策略，所有 execute 调用返回错误信息。
+struct PythonUnavailableStrategy: RuntimeStrategy {
+
+    func execute(script: String, workingDir: String?) async -> RuntimeExecutor.ExecutionResult {
+        return RuntimeExecutor.ExecutionResult(
+            stdout: "",
+            stderr: "Python 运行时未初始化。请重启 App。如问题持续，请检查 Python.framework 是否正确嵌入，以及 install_python Build Phase 是否正常运行。",
+            exitCode: -1,
+            isError: true
+        )
+    }
+}
+
 // MARK: - PythonSpawnStrategy
 
 /// Python 执行策略 — 保留现有 posix_spawn 逻辑

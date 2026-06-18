@@ -103,8 +103,9 @@ struct SettingsView: View {
         let bundlePath = Bundle.main.bundlePath
         let nodeFrameworkPath = (bundlePath as NSString).appendingPathComponent("Frameworks/NodeMobile.framework")
         let nodeFrameworkExists = fm.fileExists(atPath: nodeFrameworkPath)
-        let pythonExists = fm.fileExists(atPath: BaizePath.pythonBinary)
-        return "Node.js \(nodeFrameworkExists ? "✅" : "❌")  Python \(pythonExists ? "✅" : "❌")"
+        let pythonFrameworkPath = (bundlePath as NSString).appendingPathComponent("Frameworks/Python.framework")
+        let pythonFrameworkExists = fm.fileExists(atPath: pythonFrameworkPath)
+        return "Node.js \(nodeFrameworkExists ? "✅" : "❌")  Python \(pythonFrameworkExists ? "✅" : "❌")"
     }
 }
 
@@ -262,7 +263,10 @@ private struct StorageSettingsPlaceholder: View {
         let nodeFrameworkExists = fm.fileExists(atPath: nodeFrameworkPath)
         let bootstrapPath = Bundle.main.path(forResource: "bootstrap", ofType: "js", inDirectory: "nodejs")
         let bootstrapExists = bootstrapPath != nil
-        let pythonExists = fm.fileExists(atPath: BaizePath.pythonBinary)
+        let pythonFrameworkPath = (bundlePath as NSString).appendingPathComponent("Frameworks/Python.framework")
+        let pythonFrameworkExists = fm.fileExists(atPath: pythonFrameworkPath)
+        let pythonBootstrapPath = Bundle.main.path(forResource: "bootstrap", ofType: "py", inDirectory: "python_scripts")
+        let pythonBootstrapExists = pythonBootstrapPath != nil
 
         Form {
             Section(header: Text("项目目录")) {
@@ -295,11 +299,25 @@ private struct StorageSettingsPlaceholder: View {
 
             Section(header: Text("Python 运行时")) {
                 HStack {
-                    Text("Python")
+                    Text("Python.framework")
                     Spacer()
-                    Text(pythonExists ? "✅ 可用" : "❌ 不可用 (placeholder)")
-                        .foregroundColor(pythonExists ? .green : .red)
+                    Text(pythonFrameworkExists ? "✅ 已嵌入" : "❌ 未找到")
+                        .foregroundColor(pythonFrameworkExists ? .green : .red)
                 }
+                HStack {
+                    Text("bootstrap.py")
+                    Spacer()
+                    Text(pythonBootstrapExists ? "✅ 已找到" : "❌ 未找到")
+                        .foregroundColor(pythonBootstrapExists ? .green : .red)
+                }
+                if let pyBsPath = pythonBootstrapPath {
+                    Text("路径: \(pyBsPath)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+                Text("引擎端口: \(BaizePython.enginePort)")
+                    .font(.system(size: 13))
+                    .foregroundColor(.secondary)
             }
 
             Section(header: Text("App Bundle 路径")) {

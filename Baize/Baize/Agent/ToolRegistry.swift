@@ -15,18 +15,19 @@ actor ToolRegistry {
     /// W22 fix: 接受注入的 FileSystemService、RuntimeExecutor 和 NodeRuntimeEngine
     /// Swift 6 模式下 actor init 是 nonisolated，不能调 actor-isolated 方法
     /// 改用 static 工厂方法构建工具字典，init 直接赋值给 self.tools
-    /// nodeEngine 参数用于未来扩展（当前 RuntimeExecutor 已封装策略）
-    init(fileSystemService: FileSystemService? = nil, runtimeExecutor: RuntimeExecutor? = nil, nodeEngine: NodeRuntimeEngine? = nil) {
+    /// nodeEngine/pythonEngine 参数用于未来扩展（当前 RuntimeExecutor 已封装策略）
+    init(fileSystemService: FileSystemService? = nil, runtimeExecutor: RuntimeExecutor? = nil, nodeEngine: NodeRuntimeEngine? = nil, pythonEngine: PythonRuntimeEngine? = nil) {
         self.tools = Self.buildDefaultTools(
             fs: fileSystemService ?? FileSystemService(rootPath: BaizePath.projectRoot),
             rt: runtimeExecutor ?? RuntimeExecutor(),
-            nodeEngine: nodeEngine
+            nodeEngine: nodeEngine,
+            pythonEngine: pythonEngine
         )
     }
 
     /// 静态工厂 — 构建默认工具字典，供 init 使用
     /// Swift 6 模式下 actor init 不能直接调 actor-isolated 方法
-    private static func buildDefaultTools(fs: FileSystemService, rt: RuntimeExecutor, nodeEngine: NodeRuntimeEngine?) -> [String: Tool] {
+    private static func buildDefaultTools(fs: FileSystemService, rt: RuntimeExecutor, nodeEngine: NodeRuntimeEngine?, pythonEngine: PythonRuntimeEngine?) -> [String: Tool] {
         var tools: [String: Tool] = [:]
         // 文件操作工具 (7 个)
         let readFile = ReadFileTool(fileSystemService: fs);    tools[readFile.name] = readFile
