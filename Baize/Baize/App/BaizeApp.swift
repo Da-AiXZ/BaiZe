@@ -92,6 +92,7 @@ struct BaizeApp: App {
             state.conversationStore = conversation
             state.fileSystemService = fsService
             state.runtimeExecutor = runtime
+            state.pythonRuntimeEngine = pythonEngine
             state.currentProjectPath = workingRoot
 
             // Phase 2C: 恢复上次 Provider/Model 选择

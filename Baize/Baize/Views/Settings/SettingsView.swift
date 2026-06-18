@@ -220,7 +220,7 @@ private struct SettingsSubPage: View {
             PermissionSettingsView(appState: appState)
 
         case .storage:
-            StorageSettingsPlaceholder()
+            StorageSettingsPlaceholder(appState: appState)
 
         case .about:
             AboutView()
@@ -244,7 +244,7 @@ private struct SettingsDetail: View {
             PermissionSettingsView(appState: appState)
 
         case .storage:
-            StorageSettingsPlaceholder()
+            StorageSettingsPlaceholder(appState: appState)
 
         case .about:
             AboutView()
@@ -256,6 +256,21 @@ private struct SettingsDetail: View {
 
 /// 存储与运行时设置占位
 private struct StorageSettingsPlaceholder: View {
+    /// AppState（用于访问 pythonRuntimeEngine 诊断状态）
+    let appState: AppState
+
+    /// Python 引擎诊断状态（由 Timer 每 0.5 秒刷新）
+    @State private var diagnostic: PythonDiagnosticState = PythonDiagnosticState()
+
+    /// 引擎状态对应的颜色
+    private var statusColor: Color {
+        switch diagnostic.status {
+        case .started: return .green
+        case .failed: return .red
+        case .starting, .notStarted: return .orange
+        }
+    }
+
     var body: some View {
         let fm = FileManager.default
         let bundlePath = Bundle.main.bundlePath
@@ -320,11 +335,75 @@ private struct StorageSettingsPlaceholder: View {
                     .foregroundColor(.secondary)
             }
 
+            // P3: Python 引擎诊断面板 — 显示引擎启动状态和错误信息
+            // 用户无需 Mac/Console.app 即可在 iPad 上查看引擎诊断
+            Section(header: Text("Python 引擎诊断")) {
+                // 引擎状态
+                HStack {
+                    Text("引擎状态")
+                    Spacer()
+                    Text(diagnostic.status.rawValue)
+                        .foregroundColor(statusColor)
+                        .fontWeight(.medium)
+                }
+
+                // PYTHONHOME 路径
+                if let home = diagnostic.pythonHome {
+                    Text("PYTHONHOME: \(home)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+
+                // PYTHONPATH 路径
+                if let path = diagnostic.pythonPath {
+                    Text("PYTHONPATH: \(path)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+
+                // 最后一条错误信息
+                if let err = diagnostic.lastError {
+                    Text("错误: \(err)")
+                        .font(.system(size: 11))
+                        .foregroundColor(.red)
+                }
+
+                // 启动步骤时间线
+                if diagnostic.steps.isEmpty {
+                    Text("暂无诊断信息（引擎尚未启动）")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
+
+                ForEach(diagnostic.steps) { step in
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text(step.success ? "✅" : "❌")
+                            Text(step.step)
+                                .font(.system(size: 12))
+                            Spacer()
+                            Text(step.timestamp, style: .time)
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                        }
+                        Text(step.message)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+
             Section(header: Text("App Bundle 路径")) {
                 Text(bundlePath)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(.secondary)
             }
+        }
+        .onAppear {
+            diagnostic = appState.pythonRuntimeEngine?.getDiagnostic() ?? PythonDiagnosticState()
+        }
+        .onReceive(Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()) { _ in
+            diagnostic = appState.pythonRuntimeEngine?.getDiagnostic() ?? PythonDiagnosticState()
         }
     }
 }

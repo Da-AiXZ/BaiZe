@@ -1,5 +1,42 @@
 import Foundation
 
+// MARK: - Diagnostic Types
+
+/// Python 引擎诊断步骤 — 记录启动过程中每一步的状态
+struct PythonDiagnosticStep: Identifiable {
+    let id = UUID()
+    /// 步骤名（如 "configurePythonHome"）
+    let step: String
+    /// 是否成功
+    let success: Bool
+    /// 详情或错误信息
+    let message: String
+    /// 记录时间
+    let timestamp: Date
+}
+
+/// Python 引擎诊断状态（线程安全，通过 NSLock 保护读写）
+struct PythonDiagnosticState {
+    /// 引擎整体状态
+    enum EngineStatus: String {
+        case notStarted = "未启动"
+        case starting = "启动中"
+        case started = "已启动"
+        case failed = "启动失败"
+    }
+
+    /// 引擎整体状态
+    var status: EngineStatus = .notStarted
+    /// 启动步骤列表（按时间顺序）
+    var steps: [PythonDiagnosticStep] = []
+    /// 最后一条错误信息
+    var lastError: String? = nil
+    /// PYTHONHOME 环境变量值
+    var pythonHome: String? = nil
+    /// PYTHONPATH 环境变量值
+    var pythonPath: String? = nil
+}
+
 /// Python 运行时引擎 — 管理 CPython 单实例生命周期
 ///
 /// App 启动时调一次 start()，在后台线程执行：
@@ -36,6 +73,14 @@ final class PythonRuntimeEngine: @unchecked Sendable {
     /// 缓存的 Python 版本字符串（如 "3.13.14"）
     private var cachedVersion: String?
 
+    // MARK: - Diagnostic State (P3: 引擎诊断面板)
+
+    /// 引擎诊断状态（子线程写，主线程读，需加锁）
+    private var diagnostic = PythonDiagnosticState()
+
+    /// 诊断状态读写锁
+    private let diagnosticLock = NSLock()
+
     // MARK: - Initialization
 
     /// 创建 Python 运行时引擎
@@ -47,6 +92,57 @@ final class PythonRuntimeEngine: @unchecked Sendable {
         config.timeoutIntervalForRequest = BaizeRuntime.pythonTimeout + 5
         config.timeoutIntervalForResource = BaizeRuntime.pythonTimeout + 10
         self.session = URLSession(configuration: config)
+    }
+
+    // MARK: - Diagnostic Helpers (P3: 引擎诊断面板)
+
+    /// 获取当前诊断状态快照（线程安全，返回副本）
+    /// 供设置页调用，在主线程读取
+    func getDiagnostic() -> PythonDiagnosticState {
+        diagnosticLock.lock()
+        defer { diagnosticLock.unlock() }
+        return diagnostic
+    }
+
+    /// 记录一个诊断步骤（线程安全）
+    /// - Parameters:
+    ///   - step: 步骤名
+    ///   - success: 是否成功
+    ///   - message: 详情或错误信息
+    private func recordStep(_ step: String, success: Bool, message: String) {
+        diagnosticLock.lock()
+        diagnostic.steps.append(PythonDiagnosticStep(
+            step: step,
+            success: success,
+            message: message,
+            timestamp: Date()
+        ))
+        if !success {
+            diagnostic.lastError = "\(step): \(message)"
+        }
+        diagnosticLock.unlock()
+    }
+
+    /// 更新引擎状态（线程安全）
+    private func updateStatus(_ status: PythonDiagnosticState.EngineStatus) {
+        diagnosticLock.lock()
+        diagnostic.status = status
+        diagnosticLock.unlock()
+    }
+
+    /// 设置环境变量诊断值（线程安全）
+    private func setDiagnosticEnv(home: String?, path: String?) {
+        diagnosticLock.lock()
+        diagnostic.pythonHome = home
+        diagnostic.pythonPath = path
+        diagnosticLock.unlock()
+    }
+
+    /// 设置最后错误信息（线程安全）
+    private func setLastError(_ error: String) {
+        diagnosticLock.lock()
+        diagnostic.lastError = error
+        diagnosticLock.unlock()
     }
 
     // MARK: - Engine Lifecycle
@@ -76,15 +172,24 @@ final class PythonRuntimeEngine: @unchecked Sendable {
             inDirectory: BaizePython.bootstrapResourceDir
         ) else {
             runtimeLogger.error("bootstrap.py not found in App Bundle (directory: \(BaizePython.bootstrapResourceDir))")
+            recordStep("findBootstrap", success: false, message: "bootstrap.py not found in directory: \(BaizePython.bootstrapResourceDir)")
+            updateStatus(.failed)
             return
         }
+        recordStep("findBootstrap", success: true, message: "Found at \(bootstrapPath)")
 
         guard let bootstrapCode = try? String(contentsOfFile: bootstrapPath, encoding: .utf8) else {
             runtimeLogger.error("Failed to read bootstrap.py at \(bootstrapPath)")
+            recordStep("readBootstrap", success: false, message: "Cannot read bootstrap.py at \(bootstrapPath)")
+            updateStatus(.failed)
             return
         }
+        recordStep("readBootstrap", success: true, message: "Bootstrap code loaded (\(bootstrapCode.count) bytes)")
 
         let enginePort = self.port
+
+        // 标记引擎为启动中（子线程尚未完成初始化）
+        updateStatus(.starting)
 
         // 3. 在 2MB 栈后台线程启动 Python
         // 闭包体提取为独立方法 runPythonBootstrap()，避免 Swift 类型推断器在复杂闭包中超时
@@ -96,6 +201,7 @@ final class PythonRuntimeEngine: @unchecked Sendable {
         thread.start()
 
         isStarted = true
+        recordStep("startThread", success: true, message: "Background thread started (2MB stack, QoS=userInitiated), port=\(enginePort)")
         runtimeLogger.info("Python engine start requested on port \(enginePort), bootstrap: \(bootstrapPath)")
     }
 
@@ -110,12 +216,17 @@ final class PythonRuntimeEngine: @unchecked Sendable {
     /// 3. PyRun_SimpleString(bootstrap.py)
     private func runPythonBootstrap(bootstrapCode: String) {
         runtimeLogger.info("Python engine thread started (2MB stack, QoS=userInitiated)")
+        recordStep("threadStarted", success: true, message: "Background thread running (2MB stack, QoS=userInitiated)")
 
         // ── 诊断：读回环境变量确认（setenv 在主线程执行，子线程应可见）──
         let homeVerify = getenv("PYTHONHOME").map { String(cString: $0) } ?? "(not set)"
         let pathVerify = getenv("PYTHONPATH").map { String(cString: $0) } ?? "(not set)"
         let dontWriteVerify = getenv("PYTHONDONTWRITEBYTECODE").map { String(cString: $0) } ?? "(not set)"
         runtimeLogger.info("Env readback — PYTHONHOME=\(homeVerify), PYTHONPATH=\(pathVerify), PYTHONDONTWRITEBYTECODE=\(dontWriteVerify)")
+
+        // 记录环境变量到诊断状态
+        setDiagnosticEnv(home: homeVerify, path: pathVerify)
+        recordStep("envReadback", success: true, message: "PYTHONHOME=\(homeVerify), PYTHONPATH=\(pathVerify), PYTHONDONTWRITEBYTECODE=\(dontWriteVerify)")
 
         // ── P3 fix: 使用 PyConfig(install_signal_handlers=0) 初始化 Python ──
         // 根因：Py_Initialize() 默认 install_signal_handlers=1，会覆盖 Node.js V8
@@ -127,6 +238,7 @@ final class PythonRuntimeEngine: @unchecked Sendable {
         config.install_signal_handlers = 0
 
         runtimeLogger.info("about to init python with install_signal_handlers=0 (Py_InitializeFromConfig)")
+        recordStep("aboutToInit", success: true, message: "Calling Py_InitializeFromConfig (install_signal_handlers=0)")
 
         let status = Py_InitializeFromConfig(&config)
         PyConfig_Clear(&config)
@@ -134,6 +246,9 @@ final class PythonRuntimeEngine: @unchecked Sendable {
         if PyStatus_Exception(status) != 0 {
             let errMsg = status.err_msg.map { String(cString: $0) } ?? "(no error message)"
             runtimeLogger.error("Py_InitializeFromConfig FAILED: \(errMsg), exitcode=\(status.exitcode)")
+            recordStep("pyInitialize", success: false, message: "Py_InitializeFromConfig FAILED: \(errMsg), exitcode=\(status.exitcode)")
+            setLastError("Py_InitializeFromConfig FAILED: \(errMsg), exitcode=\(status.exitcode)")
+            updateStatus(.failed)
             startLock.lock()
             isStarted = false
             startLock.unlock()
@@ -141,18 +256,26 @@ final class PythonRuntimeEngine: @unchecked Sendable {
         }
 
         runtimeLogger.info("python initialized, status OK (install_signal_handlers=0)")
+        recordStep("pyInitialize", success: true, message: "Py_InitializeFromConfig OK (install_signal_handlers=0)")
+        updateStatus(.started)
 
         // ── 执行 bootstrap.py — 启动 HTTP server（阻塞调用）──
         // PyRun_SimpleString 返回 0 表示成功，-1 表示异常
         runtimeLogger.info("about to run bootstrap.py (PyRun_SimpleString)")
+        recordStep("aboutToRunBootstrap", success: true, message: "Calling PyRun_SimpleString(bootstrap.py)")
+
         let result = PyRun_SimpleString(bootstrapCode)
         runtimeLogger.info("bootstrap.py executed, result=\(result)")
+        recordStep("runBootstrap", success: result == 0, message: "PyRun_SimpleString returned \(result) (0=success, -1=exception)")
 
         if result != 0 {
             runtimeLogger.error("bootstrap.py execution failed (PyRun_SimpleString returned \(result))")
+            setLastError("bootstrap.py execution failed (PyRun_SimpleString returned \(result))")
         }
 
         runtimeLogger.error("Python engine thread exited (should not happen during app lifecycle)")
+        recordStep("threadExited", success: false, message: "Python engine thread exited unexpectedly (should not happen during app lifecycle)")
+        updateStatus(.failed)
 
         // 引擎退出后标记为未启动
         startLock.lock()
@@ -164,6 +287,9 @@ final class PythonRuntimeEngine: @unchecked Sendable {
     private func configurePythonHome() {
         guard let resourcePath = Bundle.main.resourcePath else {
             runtimeLogger.error("Cannot get Bundle.main.resourcePath for PYTHONHOME")
+            recordStep("configurePythonHome", success: false, message: "Cannot get Bundle.main.resourcePath")
+            setLastError("Cannot get Bundle.main.resourcePath for PYTHONHOME")
+            updateStatus(.failed)
             return
         }
 
@@ -186,6 +312,10 @@ final class PythonRuntimeEngine: @unchecked Sendable {
         let homeCheck = getenv("PYTHONHOME").map { String(cString: $0) } ?? "(not set)"
         let pathCheck = getenv("PYTHONPATH").map { String(cString: $0) } ?? "(not set)"
         runtimeLogger.info("Env verify — PYTHONHOME=\(homeCheck), PYTHONPATH=\(pathCheck)")
+
+        // 记录诊断状态
+        setDiagnosticEnv(home: homeCheck, path: pathCheck)
+        recordStep("configurePythonHome", success: true, message: "PYTHONHOME=\(homeCheck), PYTHONPATH=\(pathCheck)")
     }
 
     // MARK: - Script Execution

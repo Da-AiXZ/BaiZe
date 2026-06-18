@@ -77,6 +77,9 @@ class AppState: ObservableObject {
     /// Runtime Executor
     var runtimeExecutor: RuntimeExecutor?
 
+    /// Python Runtime Engine（P3 诊断面板：供设置页读取引擎诊断状态）
+    var pythonRuntimeEngine: PythonRuntimeEngine?
+
     // MARK: - Error State
 
     /// 最近错误消息（用于全局 Alert）
