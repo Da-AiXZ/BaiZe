@@ -6,49 +6,51 @@ struct SettingsView: View {
     @ObservedObject var appState: AppState
 
     var body: some View {
-        List {
-            // AI 模型配置（合并 API Key + 默认模型）
-            SettingsSectionLink(
-                icon: "brain.head.profile.fill",
-                iconColor: .purple,
-                title: "AI 模型配置",
-                subtitle: aiModelSubtitle,
-                section: .aiModel,
-                appState: appState
-            )
+        NavigationStack {
+            List {
+                // AI 模型配置（合并 API Key + 默认模型）
+                SettingsSectionLink(
+                    icon: "brain.head.profile.fill",
+                    iconColor: .purple,
+                    title: "AI 模型配置",
+                    subtitle: aiModelSubtitle,
+                    section: .aiModel,
+                    appState: appState
+                )
 
-            // 权限模式 → 完整的 PermissionSettingsView
-            SettingsSectionLink(
-                icon: "shield.fill",
-                iconColor: appState.permissionMode.badgeColor,
-                title: "权限模式",
-                subtitle: appState.permissionMode.displayName,
-                section: .permission,
-                appState: appState
-            )
+                // 权限模式 → 完整的 PermissionSettingsView
+                SettingsSectionLink(
+                    icon: "shield.fill",
+                    iconColor: appState.permissionMode.badgeColor,
+                    title: "权限模式",
+                    subtitle: appState.permissionMode.displayName,
+                    section: .permission,
+                    appState: appState
+                )
 
-            // 存储与运行时
-            SettingsSectionLink(
-                icon: "internaldrive.fill",
-                iconColor: .green,
-                title: "存储与运行时",
-                subtitle: runtimeSubtitle,
-                section: .storage,
-                appState: appState
-            )
+                // 存储与运行时
+                SettingsSectionLink(
+                    icon: "internaldrive.fill",
+                    iconColor: .green,
+                    title: "存储与运行时",
+                    subtitle: runtimeSubtitle,
+                    section: .storage,
+                    appState: appState
+                )
 
-            // 关于白泽
-            SettingsSectionLink(
-                icon: "info.circle.fill",
-                iconColor: .gray,
-                title: "关于白泽",
-                subtitle: "版本 1.0.0  |  TrollStore ✅  |  iPad Pro M1",
-                section: .about,
-                appState: appState
-            )
+                // 关于白泽
+                SettingsSectionLink(
+                    icon: "info.circle.fill",
+                    iconColor: .gray,
+                    title: "关于白泽",
+                    subtitle: "版本 1.0.0  |  TrollStore ✅  |  iPad Pro M1",
+                    section: .about,
+                    appState: appState
+                )
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("设置")
         }
-        .listStyle(.insetGrouped)
-        .navigationTitle("设置")
     }
 
     /// AI 模型配置状态描述（Provider/Model + Key 配置情况）
