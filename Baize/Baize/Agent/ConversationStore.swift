@@ -79,8 +79,8 @@ actor ConversationStore {
     func load(id: UUID) -> ConversationSession? {
         var filePath = sessionFilePath(for: id)
 
-        guard fileManager.fileExists(atPath: filePath) else {
-            // 主路径找不到，尝试 fallback 路径
+        // 主路径不存在时尝试 fallback 路径
+        if !fileManager.fileExists(atPath: filePath) {
             if !isUsingFallback {
                 let fallbackPath = (fallbackStoreDirectory as NSString).appendingPathComponent("\(id.uuidString).json")
                 if fileManager.fileExists(atPath: fallbackPath) {
