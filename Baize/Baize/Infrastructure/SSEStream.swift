@@ -68,6 +68,8 @@ struct SSEStream {
                     }
 
                     // 逐行解析 SSE 事件
+                    // DeepSeek/OpenAI SSE 格式：每行一个 "data: {...}"，事件之间用 \n\n 分隔
+                    // 但有些实现不严格遵循双换行分隔，每行 data: 就是一个独立事件
                     var buffer = ""
                     var totalEventsYielded = 0
                     var lineCount = 0
@@ -80,18 +82,34 @@ struct SSEStream {
                             firstLinesLog.append(line)
                         }
 
-                        buffer += line + "\n"
-
-                        // SSE 事件以双换行符分隔
+                        // 空行：触发缓冲区中的事件处理（标准 SSE 分隔符）
                         if line.isEmpty {
-                            // 处理缓冲区中的完整事件
-                            let events = parseBuffer(buffer)
-                            for event in events {
-                                continuation.yield(event)
-                                totalEventsYielded += 1
+                            if !buffer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                let events = parseBuffer(buffer)
+                                for event in events {
+                                    continuation.yield(event)
+                                    totalEventsYielded += 1
+                                }
+                                buffer = ""
                             }
-                            buffer = ""
+                            continue
                         }
+
+                        // 遇到新的 data: 行时，如果缓冲区已有完整事件，先处理掉
+                        // 这样即使服务器不发空行分隔符，也能逐事件处理
+                        if line.hasPrefix("data:") && !buffer.isEmpty {
+                            let bufferTrimmed = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !bufferTrimmed.isEmpty {
+                                let events = parseBuffer(buffer)
+                                for event in events {
+                                    continuation.yield(event)
+                                    totalEventsYielded += 1
+                                }
+                                buffer = ""
+                            }
+                        }
+
+                        buffer += line + "\n"
                     }
 
                     // 处理缓冲区中剩余的数据
