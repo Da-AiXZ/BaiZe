@@ -124,11 +124,13 @@ actor AgentLoop {
     private func agentLoop(continuation: AsyncThrowingStream<AgentEvent, Error>.Continuation) async throws {
         // 安全限制：最大循环次数防止无限循环
         let maxIterations = 50
+        let maxConsecutiveFailures = 3
         var iterationCount = 0
+        var consecutiveFailures = 0
 
         while isRunning && iterationCount < maxIterations {
             iterationCount += 1
-            agentLogger.info("Agent Loop iteration \(iterationCount)")
+            agentLogger.info("Agent Loop iteration \(iterationCount), consecutive failures: \(consecutiveFailures)")
 
             // 1. 构建上下文（系统提示 + BAIZE.md + 对话历史 + 工具定义）
             let promptContext = contextManager.buildContext(messages: session.messages)
@@ -203,6 +205,9 @@ actor AgentLoop {
                     let name = toolCallNames[id] ?? "unknown"
                     let toolCall = ToolCall(id: id, name: name, arguments: arguments)
 
+                    // 诊断：记录工具调用的原始参数
+                    agentLogger.info("Executing tool: \(name), id=\(id), arguments='\(arguments)'")
+
                     // 注意：不再添加 .toolCall 消息到历史
                     // tool_call 信息已包含在 .assistantWithToolCalls 消息中（修复 C1/C2）
 
@@ -231,23 +236,36 @@ actor AgentLoop {
                         // 将结果注入对话历史
                         session.messages.append(.toolResult(id: id, content: result.toToolResultContent()))
 
+                        // 失败计数：如果工具执行返回错误，增加连续失败计数
+                        if result.isError {
+                            consecutiveFailures += 1
+                            agentLogger.warning("Tool \(name) failed (\(consecutiveFailures)/\(maxConsecutiveFailures)): \(result.toToolResultContent())")
+                        } else {
+                            consecutiveFailures = 0
+                        }
+
                     case .ask:
                         // 需要用户确认
                         continuation.yield(.askConfirmation(toolCall, decision.reason))
-
-                        // 等待用户确认（Phase 1: 默认拒绝，UI 层会处理确认逻辑）
-                        // 在实际 UI 集成中，这里会暂停等待用户操作
-                        // Phase 1: 自动 deny（后续 T04/T05 会实现真正的 UI 交互）
                         let deniedResult = ToolResult.denied(reason: decision.reason)
                         continuation.yield(.denied(toolCall, decision.reason))
                         session.messages.append(.toolResult(id: id, content: deniedResult.toToolResultContent()))
+                        consecutiveFailures += 1
 
                     case .deny:
                         // 直接拒绝
                         let deniedResult = ToolResult.denied(reason: decision.reason)
                         continuation.yield(.denied(toolCall, decision.reason))
                         session.messages.append(.toolResult(id: id, content: deniedResult.toToolResultContent()))
+                        consecutiveFailures += 1
                     }
+                }
+
+                // 连续失败检查：超过阈值则停止循环
+                if consecutiveFailures >= maxConsecutiveFailures {
+                    agentLogger.error("Agent Loop: \(consecutiveFailures) consecutive failures, stopping")
+                    continuation.yield(.textDelta("\n\n[系统提示：连续 \(consecutiveFailures) 次工具调用失败，Agent 循环已停止。请检查工具参数是否正确。]"))
+                    break
                 }
 
                 // 继续循环（工具结果注入后，LLM 需要继续推理）

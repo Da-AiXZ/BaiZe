@@ -56,6 +56,9 @@ struct CustomOpenAIProvider: LLMProvider {
                         apiLogger.info("Custom provider: thinking mode DISABLED (tools present, avoids 400 on multi-turn)")
                     }
 
+                    // 重置流式状态（index → id 映射）
+                    OpenAICompatibleHelper.resetStreamState()
+
                     let urlRequest = try OpenAICompatibleHelper.buildRequest(
                         endpoint: endpoint,
                         apiKey: apiKey,

@@ -5,6 +5,17 @@ import Foundation
 /// 被 OpenAIProvider 和 OpenRouterProvider 共用
 enum OpenAICompatibleHelper {
 
+    // MARK: - Stream State (per-request)
+    // OpenAI 流式 tool_calls 用 index 标识，后续 chunk 没有 id，只有 index
+    // 需要维护 index → id 映射，否则 arguments delta 会丢失
+    // 注意：每次新请求前需要清空
+    static var toolCallIndexMap: [Int: String] = [:]
+
+    /// 重置流式状态（每次 streamComplete 调用前由 Provider 调用）
+    static func resetStreamState() {
+        toolCallIndexMap.removeAll()
+    }
+
     // MARK: - Request Building
 
     /// 构建 OpenAI Chat Completions 兼容的 URLRequest
@@ -142,10 +153,13 @@ enum OpenAICompatibleHelper {
                 chunks.append(.textDelta(content))
             }
 
-            // 2. 处理 tool_calls delta
+            // 3. 处理 tool_calls delta
+            // OpenAI 流式格式：第一个 chunk 有 id+name，后续 chunk 只有 index+arguments delta
+            // 必须用 index 跟踪，因为后续 chunk 没有 id
             if let toolCalls = delta["tool_calls"] as? [[String: Any]] {
                 for toolCall in toolCalls {
                     let id = toolCall["id"] as? String ?? ""
+                    let index = toolCall["index"] as? Int ?? 0
                     let function = toolCall["function"] as? [String: Any] ?? [:]
                     let name = function["name"] as? String ?? ""
                     // arguments 可能是 String（标准 OpenAI 流式 delta）或已序列化的对象
@@ -153,7 +167,6 @@ enum OpenAICompatibleHelper {
                     if let argsStr = function["arguments"] as? String {
                         argumentsDelta = argsStr
                     } else if let argsObj = function["arguments"] as? [String: Any] {
-                        // 非标准：arguments 作为对象返回（某些 API 这么做）
                         if let data = try? JSONSerialization.data(withJSONObject: argsObj),
                            let str = String(data: data, encoding: .utf8) {
                             argumentsDelta = str
@@ -164,21 +177,25 @@ enum OpenAICompatibleHelper {
                         argumentsDelta = ""
                     }
 
-                    // 诊断日志：记录 tool_call chunk 原始数据
+                    // 诊断日志
                     if !name.isEmpty {
-                        apiLogger.debug("SSE tool_call begin: id=\(id), name=\(name)")
+                        apiLogger.info("SSE tool_call begin: id=\(id), index=\(index), name=\(name)")
                     }
                     if !argumentsDelta.isEmpty {
-                        apiLogger.debug("SSE tool_call delta: id=\(id), args_delta=\(argumentsDelta.prefix(100))")
+                        apiLogger.info("SSE tool_call delta: index=\(index), args=\(argumentsDelta.prefix(100))")
                     }
 
                     if !name.isEmpty && !id.isEmpty {
-                        // 工具调用开始
+                        // 工具调用开始 — 注册 index → id 映射
+                        Self.toolCallIndexMap[index] = id
                         chunks.append(.toolCallBegin(id: id, name: name))
                     }
                     if !argumentsDelta.isEmpty {
-                        // 工具调用参数增量
-                        chunks.append(.toolCallDelta(id: id, argumentsDelta: argumentsDelta))
+                        // 参数增量 — 用 index 查找对应的 id
+                        let resolvedId = id.isEmpty ? (Self.toolCallIndexMap[index] ?? id) : id
+                        if !resolvedId.isEmpty {
+                            chunks.append(.toolCallDelta(id: resolvedId, argumentsDelta: argumentsDelta))
+                        }
                     }
                 }
             }
