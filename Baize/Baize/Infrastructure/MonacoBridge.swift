@@ -395,8 +395,8 @@ class MonacoBridge: NSObject, ObservableObject, WKScriptMessageHandler, WKNaviga
 extension MonacoBridge {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         Task { @MainActor in
-            diagnostic.navigationCount += 1
-            uiLogger.info("Monaco WebView navigation completed (count: \(diagnostic.navigationCount))")
+            self.diagnostic.navigationCount += 1
+            uiLogger.info("Monaco WebView navigation completed (count: \(self.diagnostic.navigationCount))")
             // Note: isEditorLoaded is set by JS editorReady message, not here
             // because AMD require() is async — the page loads first, then Monaco initializes
         }
@@ -404,9 +404,9 @@ extension MonacoBridge {
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         Task { @MainActor in
-            diagnostic.status = .failed
-            diagnostic.lastError = "导航失败: \(error.localizedDescription)"
-            isEditorLoaded = false
+            self.diagnostic.status = .failed
+            self.diagnostic.lastError = "导航失败: \(error.localizedDescription)"
+            self.isEditorLoaded = false
             uiLogger.error("Monaco WebView navigation failed: \(error.localizedDescription)")
         }
     }
@@ -414,9 +414,9 @@ extension MonacoBridge {
     /// 捕获初始页面加载失败（如 index.html 找不到、文件权限问题等）
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         Task { @MainActor in
-            diagnostic.status = .failed
-            diagnostic.lastError = "页面加载失败: \(error.localizedDescription)"
-            isEditorLoaded = false
+            self.diagnostic.status = .failed
+            self.diagnostic.lastError = "页面加载失败: \(error.localizedDescription)"
+            self.isEditorLoaded = false
             uiLogger.error("Monaco WebView provisional navigation failed: \(error.localizedDescription)")
         }
     }
