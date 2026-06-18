@@ -18,8 +18,10 @@ import sys
 import io
 import os
 import time
-import signal
 import traceback
+
+# 注意：不导入 signal 模块 — signal.alarm 与 Node.js V8 的信号处理冲突
+# 超时控制依赖 Swift 侧 URLSession timeout
 
 # ============================================
 # 配置
@@ -37,20 +39,6 @@ PYTHON_VERSION = "{}.{}.{}".format(
     sys.version_info.minor,
     sys.version_info.micro
 )
-
-
-# ============================================
-# 超时控制
-# ============================================
-
-class ScriptTimeoutError(Exception):
-    """脚本执行超时异常"""
-    pass
-
-
-def _timeout_handler(signum, frame):
-    """SIGALRM 信号处理器 — 中断脚本执行"""
-    raise ScriptTimeoutError("Script execution timed out")
 
 
 # ============================================
@@ -93,7 +81,6 @@ class BaizeHandler(http.server.BaseHTTPRequestHandler):
 
             script = request.get("script", "")
             working_dir = request.get("workingDir", "")
-            timeout = request.get("timeout", 30)
 
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             self._send_json(400, {
@@ -113,14 +100,8 @@ class BaizeHandler(http.server.BaseHTTPRequestHandler):
         exit_code = 0
         error = None
 
-        # 设置 signal.alarm 超时（Python 侧双重保障）
-        # signal.alarm 只在主线程（调用 Py_Initialize 的线程）有效
-        # serve_forever() 运行在此线程，do_POST 回调也在同一线程
-        timeout_seconds = int(timeout) if timeout and timeout > 0 else 0
-        old_handler = None
-        if timeout_seconds > 0:
-            old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-            signal.alarm(timeout_seconds)
+        # 注意：不使用 signal.alarm — 与 Node.js V8 信号处理冲突
+        # 超时控制完全依赖 Swift 侧 URLSession timeout
 
         try:
             # 切换工作目录
@@ -137,18 +118,10 @@ class BaizeHandler(http.server.BaseHTTPRequestHandler):
         except SystemExit as e:
             # 脚本调用 sys.exit()
             exit_code = e.code if isinstance(e.code, int) else 1
-        except ScriptTimeoutError as e:
-            exit_code = -1
-            error = str(e)
         except Exception:
             exit_code = 1
             error = traceback.format_exc()
         finally:
-            # 取消超时定时器
-            if timeout_seconds > 0:
-                signal.alarm(0)
-                if old_handler is not None:
-                    signal.signal(signal.SIGALRM, old_handler)
             # 恢复 stdout/stderr 和工作目录
             sys.stdout = old_stdout
             sys.stderr = old_stderr

@@ -164,12 +164,10 @@ struct BaizeApp: App {
                         baizeLogger.info("Starting Node.js engine (deferred)...")
                         nodeRuntimeEngine.start()
 
-                        // Python 引擎暂时禁用 — Py_Initialize 与 V8 同进程运行时存在冲突
-                        // 导致 App 启动几秒后闪退。待排查后重新启用。
-                        // try? await Task.sleep(nanoseconds: 2_000_000_000) // 2s
-                        // baizeLogger.info("Starting Python engine (deferred)...")
-                        // pythonRuntimeEngine.start()
-                        baizeLogger.warning("Python engine start DISABLED — under investigation for crash")
+                        // Node 引擎启动后再等 2 秒启动 Python，避免资源竞争
+                        try? await Task.sleep(nanoseconds: 2_000_000_000) // 2s
+                        baizeLogger.info("Starting Python engine (deferred)...")
+                        pythonRuntimeEngine.start()
                     }
                 }
         }
