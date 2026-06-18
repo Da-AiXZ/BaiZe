@@ -1,4 +1,5 @@
 import Foundation
+import ios_system
 
 /// 代码执行引擎 — 封装 posix_spawn + ios_system + nodejs-mobile + CPython
 /// 支持 Shell 命令执行（ios_system）、Node.js 脚本、Python 脚本
@@ -45,12 +46,19 @@ class RuntimeExecutor: @unchecked Sendable {
     ) {
         self.nodeBinaryPath = nodeBinaryPath
         self.pythonBinaryPath = pythonBinaryPath
+
+        // 初始化 ios_system 环境（安全可重入，多次调用无害）
+        // ios_system 将 70+ Unix 命令编译为进程内函数，无需 fork()
+        initializeEnvironment()
+        ios_setMiniRoot(BaizePath.projectRoot as NSString)
     }
 
     // MARK: - Shell Command Execution (ios_system)
 
-    /// 执行 Shell 命令 — 使用 ios_system 函数直接调用
+    /// 执行 Shell 命令 — 优先使用 ios_system 库的 ios_popen
     /// ios_system 不需要 fork()，每个命令编译为独立函数直接在进程内调用
+    /// 支持 ls/cat/grep/find/rm/mv/cp/tar/curl 等 70+ Unix 命令
+    /// 如果 ios_popen 返回 nil（命令不可用），降级到 posix_spawn
     /// - Parameters:
     ///   - command: 命令字符串（如 "ls -la /var/mobile/Documents/Baize/"）
     ///   - workingDir: 工作目录（可选）
@@ -58,24 +66,71 @@ class RuntimeExecutor: @unchecked Sendable {
     func executeCommand(command: String, workingDir: String? = nil) async -> ExecutionResult {
         runtimeLogger.info("Execute command: \(command)")
 
-        // Phase 1: 使用 posix_spawn 执行命令
-        // ios_system 的 SPM 集成将在 T05 端到端集成时完善
-        // 当前使用 posix_spawn 执行命令
-
         let workingDirectory = workingDir ?? BaizePath.projectRoot
 
-        // 拆分命令为程序 + 参数
-        let parts = command.split(separator: " ", omittingEmptySubsequences: true)
-        guard let program = parts.first else {
-            return ExecutionResult(stdout: "", stderr: "Empty command", exitCode: -1, isError: true)
-        }
-        let args = parts.dropFirst().map { String($0) }
+        // 构建完整命令：cd 到工作目录，合并 stderr 到 stdout 以捕获全部输出
+        let fullCommand = "cd '\(workingDirectory)' && \(command) 2>&1"
 
-        return await spawnProcess(
-            path: String(program),
-            args: args,
-            workingDir: workingDirectory
-        )
+        // 优先使用 ios_popen 执行命令（ios_system 库内置命令，进程内调用）
+        // ios_system 是同步阻塞调用，通过 DispatchQueue.global() 调度到后台线程
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                // 尝试 ios_popen 获取管道 FILE*
+                let fp = ios_popen(fullCommand, "r")
+
+                guard let filePtr = fp else {
+                    // ios_popen 返回 nil — 命令不可用，降级到 posix_spawn
+                    runtimeLogger.warning("ios_popen returned nil for: \(command), falling back to posix_spawn")
+
+                    // 拆分命令为程序 + 参数（用于 posix_spawn fallback）
+                    let parts = command.split(separator: " ", omittingEmptySubsequences: true)
+                    guard let program = parts.first else {
+                        continuation.resume(returning: ExecutionResult(
+                            stdout: "",
+                            stderr: "Empty command",
+                            exitCode: -1,
+                            isError: true
+                        ))
+                        return
+                    }
+                    let args = parts.dropFirst().map { String($0) }
+
+                    let result = self.spawnProcessBlocking(
+                        path: String(program),
+                        args: args,
+                        workingDir: workingDirectory
+                    )
+                    continuation.resume(returning: result)
+                    return
+                }
+
+                // 通过 fgets 循环读取 stdout（已含 stderr 重定向）
+                var buffer = [CChar](repeating: 0, count: 4096)
+                var output = ""
+                while fgets(&buffer, Int32(buffer.count), filePtr) != nil {
+                    output += String(cString: buffer)
+                }
+
+                // 关闭管道并获取退出状态
+                let status = pclose(filePtr)
+                let exitCode: Int32
+                if status == -1 {
+                    exitCode = -1
+                } else {
+                    // pclose 返回值格式与 waitpid 相同，提取退出码
+                    exitCode = (status >> 8) & 0xFF
+                }
+
+                runtimeLogger.info("ios_popen completed: exit code \(exitCode), output \(output.utf8.count) bytes")
+
+                continuation.resume(returning: ExecutionResult(
+                    stdout: output,
+                    stderr: "",
+                    exitCode: exitCode,
+                    isError: exitCode != 0
+                ))
+            }
+        }
     }
 
     // MARK: - Node.js Script Execution

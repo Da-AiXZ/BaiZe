@@ -2,7 +2,7 @@ import Foundation
 
 /// 工具注册表 — 管理所有工具的注册、查找和执行
 /// AgentLoop 通过 ToolRegistry 根据 tool_call.name 查找对应 Tool 实例
-/// Phase 1 注册 9 个内置工具（6 文件工具 + 3 运行时工具）
+/// Phase 1 注册 10 个内置工具（7 文件工具 + 3 运行时工具）
 actor ToolRegistry {
 
     // MARK: - Properties
@@ -26,13 +26,14 @@ actor ToolRegistry {
     /// Swift 6 模式下 actor init 不能直接调 actor-isolated 方法
     private static func buildDefaultTools(fs: FileSystemService, rt: RuntimeExecutor) -> [String: Tool] {
         var tools: [String: Tool] = [:]
-        // 文件操作工具 (6 个)
+        // 文件操作工具 (7 个)
         let readFile = ReadFileTool(fileSystemService: fs);    tools[readFile.name] = readFile
         let writeFile = WriteFileTool(fileSystemService: fs);  tools[writeFile.name] = writeFile
         let editFile = EditFileTool(fileSystemService: fs);    tools[editFile.name] = editFile
         let listDir = ListDirectoryTool(fileSystemService: fs); tools[listDir.name] = listDir
         let searchFiles = SearchFilesTool(fileSystemService: fs); tools[searchFiles.name] = searchFiles
         let searchContent = SearchContentTool(fileSystemService: fs); tools[searchContent.name] = searchContent
+        let deleteFile = DeleteFileTool(fileSystemService: fs); tools[deleteFile.name] = deleteFile
         // 运行时工具 (3 个)
         let execCmd = ExecuteCommandTool(runtimeExecutor: rt);  tools[execCmd.name] = execCmd
         let runNode = RunNodeTool(runtimeExecutor: rt);         tools[runNode.name] = runNode

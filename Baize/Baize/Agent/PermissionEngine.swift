@@ -136,8 +136,8 @@ actor PermissionEngine {
             }
         }
 
-        // 检查文件删除是否涉及关键系统路径
-        if toolCall.name == "write_file" || toolCall.name == "edit_file" {
+        // 检查文件操作是否涉及关键系统路径（写入/编辑/删除）
+        if toolCall.name == "write_file" || toolCall.name == "edit_file" || toolCall.name == "delete_file" {
             let path = toolCall.argumentString(for: "path") ?? ""
             let criticalPaths = ["/System", "/usr", "/bin", "/sbin", "/var/mobile/Library"]
             for criticalPath in criticalPaths {
@@ -177,6 +177,9 @@ actor PermissionEngine {
         case "edit_file":
             let path = args["path"] as? String ?? "未知路径"
             return "将修改文件: \(path)"
+        case "delete_file":
+            let path = args["path"] as? String ?? "未知路径"
+            return "将删除文件/目录: \(path)"
         case "execute_command":
             let command = args["command"] as? String ?? "未知命令"
             return "将执行命令: \(command)"
@@ -206,6 +209,7 @@ actor PermissionEngine {
             "list_directory": ToolInfo(name: "list_directory", isReadOnly: true, isDestructive: false),
             "search_files": ToolInfo(name: "search_files", isReadOnly: true, isDestructive: false),
             "search_content": ToolInfo(name: "search_content", isReadOnly: true, isDestructive: false),
+            "delete_file": ToolInfo(name: "delete_file", isReadOnly: false, isDestructive: true),
             "execute_command": ToolInfo(name: "execute_command", isReadOnly: false, isDestructive: true),
             "run_node": ToolInfo(name: "run_node", isReadOnly: false, isDestructive: true),
             "run_python": ToolInfo(name: "run_python", isReadOnly: false, isDestructive: true),
