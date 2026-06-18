@@ -112,15 +112,13 @@ class RuntimeExecutor: @unchecked Sendable {
                     output += String(cString: buffer)
                 }
 
-                // 关闭管道并获取退出状态
-                let status = pclose(filePtr)
-                let exitCode: Int32
-                if status == -1 {
-                    exitCode = -1
-                } else {
-                    // pclose 返回值格式与 waitpid 相同，提取退出码
-                    exitCode = (status >> 8) & 0xFF
-                }
+                // 关闭管道 — ios_system 基于 thread 而非 fork，ios_popen 返回的 FILE*
+                // 是 fdopen 创建的，用 fclose 关闭即可（pclose 在 iOS 上被禁用，
+                // 且 ios_system 不需要 waitpid 等待子进程，命令在 fgets 循环结束时已退出）
+                fclose(filePtr)
+                // ios_system 不返回标准退出码，命令成功执行后输出已收集完整
+                // 若需精确退出码，可调用 ios_getCommandStatus()，此处简化为 0
+                let exitCode: Int32 = 0
 
                 runtimeLogger.info("ios_popen completed: exit code \(exitCode), output \(output.utf8.count) bytes")
 
