@@ -24,11 +24,6 @@ struct CustomOpenAIProvider: LLMProvider {
     // MARK: - Stream Complete
 
     /// 发送 Chat Completions 请求，返回 SSE 流式响应
-    /// - Parameters:
-    ///   - messages: 对话消息数组
-    ///   - tools: 工具定义数组
-    ///   - model: 模型名称
-    /// - Returns: AsyncThrowingStream<LLMChunk> 供 AgentLoop for-await 消费
     func streamComplete(
         messages: [Message],
         tools: [ToolDefinition],
@@ -44,21 +39,30 @@ struct CustomOpenAIProvider: LLMProvider {
                     }
 
                     let endpoint = self.getEndpoint()
-                    // 使用 UserDefaults 中的模型名，而非 APIGateway 传入的参数
                     let actualModel = self.getModel()
                     apiLogger.info("Custom provider: starting stream — model=\(actualModel), endpoint=\(endpoint), messages=\(messages.count), tools=\(tools.count)")
 
                     let openAIMessages = messages.toOpenAIMergedFormat()
                     let openAITools = tools.isEmpty ? nil : tools.map { $0.toOpenAIFormat() }
 
-                    apiLogger.debug("Custom provider: request messages count=\(openAIMessages.count), tools count=\(openAITools?.count ?? 0)")
+                    // DeepSeek V4 thinking mode 策略：
+                    // - thinking mode 默认开启，reasoning_content 在独立字段
+                    // - thinking mode 下 tool calls 的 reasoning_content 必须多轮传回，否则 400 错误
+                    // - AgentLoop 目前不支持 reasoning_content 多轮传回
+                    // - 因此：带 tools 时关闭 thinking mode（避免 400），不带 tools 时保持默认（让用户看到思维链）
+                    var extraBody: [String: Any] = [:]
+                    if !tools.isEmpty {
+                        extraBody["thinking"] = ["type": "disabled"]
+                        apiLogger.info("Custom provider: thinking mode DISABLED (tools present, avoids 400 on multi-turn)")
+                    }
 
                     let urlRequest = try OpenAICompatibleHelper.buildRequest(
                         endpoint: endpoint,
                         apiKey: apiKey,
                         messages: openAIMessages,
                         tools: openAITools,
-                        model: actualModel
+                        model: actualModel,
+                        extraBody: extraBody.isEmpty ? nil : extraBody
                     )
 
                     let sseStream = SSEStream()
@@ -77,7 +81,7 @@ struct CustomOpenAIProvider: LLMProvider {
                                 errorDetail = finishReason
                                 apiLogger.error("Custom provider: API returned error in SSE: \(finishReason)")
                             }
-                            // 检测有内容
+                            // 检测有内容（content 或 reasoning_content 都算）
                             if case .textDelta = chunk {
                                 hasContent = true
                             }
@@ -92,13 +96,7 @@ struct CustomOpenAIProvider: LLMProvider {
                         continuation.finish(throwing: ProviderError.apiError("API 返回错误: \(msg)"))
                     } else if !hasContent {
                         apiLogger.error("Custom provider: stream completed but no content (model=\(actualModel), endpoint=\(endpoint), tools=\(tools.count))")
-                        let hint: String
-                        if tools.count > 0 {
-                            hint = "可能原因：1) 此模型不支持 function calling（tools），尝试用不携带 tools 的请求；2) 模型名错误；3) API Key 权限不足。"
-                        } else {
-                            hint = "可能原因：模型名错误或 API Key 无效。"
-                        }
-                        continuation.finish(throwing: ProviderError.apiError("API 返回了空响应。\(hint) 模型: \(actualModel), 端点: \(endpoint)"))
+                        continuation.finish(throwing: ProviderError.apiError("API 返回了空响应。模型: \(actualModel), 端点: \(endpoint)。请检查模型名是否正确。"))
                     } else {
                         continuation.finish()
                     }

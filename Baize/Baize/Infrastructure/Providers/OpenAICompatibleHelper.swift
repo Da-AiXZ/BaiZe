@@ -22,7 +22,8 @@ enum OpenAICompatibleHelper {
         additionalHeaders: [String: String] = [:],
         messages: [[String: Any]],
         tools: [[String: Any]]?,
-        model: String
+        model: String,
+        extraBody: [String: Any]? = nil
     ) throws -> URLRequest {
         guard let url = URL(string: endpoint) else {
             throw ProviderError.apiError("Invalid endpoint URL: \(endpoint)")
@@ -51,6 +52,13 @@ enum OpenAICompatibleHelper {
             body["tools"] = tools
         }
 
+        // 合并 extraBody 字段（如 DeepSeek V4 的 thinking 参数）
+        if let extra = extraBody {
+            for (key, value) in extra {
+                body[key] = value
+            }
+        }
+
         do {
             let bodyData = try JSONSerialization.data(withJSONObject: body)
             request.httpBody = bodyData
@@ -60,6 +68,9 @@ enum OpenAICompatibleHelper {
             if toolCount > 0 {
                 let toolNames = (tools ?? []).compactMap { $0["function"] as? [String: Any] }.compactMap { $0["name"] as? String }
                 apiLogger.debug("OpenAI-compat request tools: \(toolNames.joined(separator: ", "))")
+            }
+            if let extra = extraBody {
+                apiLogger.debug("OpenAI-compat request extraBody: \(extra)")
             }
         } catch {
             apiLogger.error("Failed to serialize request body for model: \(model) — \(error.localizedDescription)")
@@ -120,7 +131,13 @@ enum OpenAICompatibleHelper {
             var chunks: [LLMChunk] = []
             let delta = firstChoice["delta"] as? [String: Any] ?? [:]
 
-            // 1. 处理 content delta
+            // 1. 处理 reasoning_content delta（DeepSeek V4 thinking mode 的思维链内容）
+            // thinking mode 下，思维链在 reasoning_content 字段，不在 content 字段
+            if let reasoning = delta["reasoning_content"] as? String, !reasoning.isEmpty {
+                chunks.append(.textDelta(reasoning))
+            }
+
+            // 2. 处理 content delta（最终答案）
             if let content = delta["content"] as? String, !content.isEmpty {
                 chunks.append(.textDelta(content))
             }
