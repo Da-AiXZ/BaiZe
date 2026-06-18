@@ -69,6 +69,7 @@ struct CustomOpenAIProvider: LLMProvider {
                     let sseEvents = sseStream.parse(urlRequest: urlRequest)
 
                     var hasContent = false
+                    var hasToolCalls = false
                     var hasError = false
                     var errorDetail = ""
                     var eventCount = 0
@@ -87,9 +88,13 @@ struct CustomOpenAIProvider: LLMProvider {
                                 errorDetail = finishReason
                                 apiLogger.error("Custom provider: API returned error in SSE: \(finishReason)")
                             }
-                            // 检测有内容（content 或 reasoning_content 都算）
+                            // 检测有文本内容（content 或 reasoning_content）
                             if case .textDelta = chunk {
                                 hasContent = true
+                            }
+                            // 检测有工具调用
+                            if case .toolCallBegin = chunk {
+                                hasToolCalls = true
                             }
                             continuation.yield(chunk)
                         }
@@ -100,10 +105,9 @@ struct CustomOpenAIProvider: LLMProvider {
                         let msg = errorDetail.replacingOccurrences(of: "error:", with: "").trimmingCharacters(in: .whitespaces)
                         apiLogger.error("Custom provider: stream ended with API error: \(msg)")
                         continuation.finish(throwing: ProviderError.apiError("API 返回错误: \(msg)"))
-                    } else if !hasContent {
-                        apiLogger.error("Custom provider: stream completed but no content (model=\(actualModel), endpoint=\(endpoint), tools=\(tools.count), events=\(eventCount))")
+                    } else if !hasContent && !hasToolCalls {
+                        apiLogger.error("Custom provider: stream completed but no content or tool calls (model=\(actualModel), endpoint=\(endpoint), tools=\(tools.count), events=\(eventCount))")
                         if eventCount > 0 {
-                            // 有事件但没 content — 说明 SSE 格式有问题，暴露第一个事件的数据
                             continuation.finish(throwing: ProviderError.apiError("收到 \(eventCount) 个 SSE 事件但无内容。第一个事件数据: \(firstEventData.prefix(500))。模型: \(actualModel)"))
                         } else {
                             continuation.finish(throwing: ProviderError.apiError("API 返回了空响应（0 事件）。模型: \(actualModel), 端点: \(endpoint)"))

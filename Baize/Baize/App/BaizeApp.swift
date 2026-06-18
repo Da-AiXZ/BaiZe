@@ -40,10 +40,14 @@ struct BaizeApp: App {
 
     init() {
         let keychain = KeychainService()
-        let fsService = FileSystemService(rootPath: BaizePath.projectRoot)
+
+        // 检测可用的工作目录：优先 TrollStore no-sandbox 路径，失败则用沙箱 Documents
+        let workingRoot = BaizeApp.resolveWorkingDirectory()
+
+        let fsService = FileSystemService(rootPath: workingRoot)
         let runtime = RuntimeExecutor()
         let permission = PermissionEngine(mode: BaizePermission.defaultMode)
-        let projectCtx = ProjectContext(rootPath: BaizePath.projectRoot, fileSystemService: fsService)
+        let projectCtx = ProjectContext(rootPath: workingRoot, fileSystemService: fsService)
         let contextMgr = ContextManager(projectContext: projectCtx)
         let conversation = ConversationStore()
         let api = APIGateway(keychainService: keychain)
@@ -71,6 +75,7 @@ struct BaizeApp: App {
             state.conversationStore = conversation
             state.fileSystemService = fsService
             state.runtimeExecutor = runtime
+            state.currentProjectPath = workingRoot
 
             // Phase 2C: 恢复上次 Provider/Model 选择
             state.restoreProviderSelection()
@@ -85,6 +90,37 @@ struct BaizeApp: App {
 
             return state
         }())
+    }
+
+    /// 检测可用的工作目录
+    /// 优先尝试 TrollStore no-sandbox 路径，失败则使用 App 沙箱 Documents 目录
+    private static func resolveWorkingDirectory() -> String {
+        let fm = FileManager.default
+        let trollStorePath = BaizePath.projectRoot
+
+        // 尝试创建 TrollStore 路径
+        do {
+            try fm.ensureDirectoryExists(atPath: trollStorePath)
+            try fm.ensureDirectoryExists(atPath: BaizePath.internalData)
+            try fm.ensureDirectoryExists(atPath: BaizePath.conversations)
+            baizeLogger.info("Using TrollStore no-sandbox path: \(trollStorePath)")
+            return trollStorePath
+        } catch {
+            baizeLogger.warning("TrollStore path not accessible: \(trollStorePath) — \(error.localizedDescription)")
+        }
+
+        // Fallback: 使用 App 沙箱 Documents 目录
+        let docsDir = fm.urls(for: .documentDirectory, in: .userDomainMask).first!.path
+        let sandboxRoot = (docsDir as NSString).appendingPathComponent("Baize")
+        let sandboxInternal = (sandboxRoot as NSString).appendingPathComponent(".baize")
+        let sandboxConv = (sandboxInternal as NSString).appendingPathComponent("conversations")
+
+        try? fm.ensureDirectoryExists(atPath: sandboxRoot)
+        try? fm.ensureDirectoryExists(atPath: sandboxInternal)
+        try? fm.ensureDirectoryExists(atPath: sandboxConv)
+
+        baizeLogger.info("Using sandbox fallback path: \(sandboxRoot)")
+        return sandboxRoot + "/"
     }
 
     var body: some Scene {

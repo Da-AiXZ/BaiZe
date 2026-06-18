@@ -126,6 +126,10 @@ struct ChatView: View {
         let activeModel = await apiGateway.getActiveModel()
         baizeLogger.info("ChatView: sending message with provider=\(providerId), model=\(activeModel)")
 
+        // 使用 AppState 中的实际工作路径创建 session
+        let session = ConversationSession(projectPath: appState.currentProjectPath)
+        baizeLogger.info("ChatView: session projectPath=\(session.projectPath)")
+
         let agentLoop = AgentLoop(
             apiGateway: apiGateway,
             toolRegistry: toolRegistry,
@@ -133,7 +137,8 @@ struct ChatView: View {
             contextManager: contextManager,
             conversationStore: conversationStore,
             fileSystemService: fileSystemService,
-            runtimeExecutor: runtimeExecutor
+            runtimeExecutor: runtimeExecutor,
+            session: session
         )
 
         let eventStream = try await agentLoop.run(userMessage: userMessage)

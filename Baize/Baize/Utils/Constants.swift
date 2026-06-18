@@ -351,7 +351,8 @@ enum BaizeRuntime {
 /// 权限引擎默认配置
 enum BaizePermission {
     /// 默认权限模式
-    static let defaultMode = PermissionMode.default
+    /// 默认权限模式 — Phase 1 使用 bypass（无确认 UI，default 模式会自动拒绝所有非只读工具）
+    static let defaultMode = PermissionMode.bypass
 
     /// 始终拒绝的操作（不可通过权限模式绕过）
     static let alwaysDenyPatterns: Set<String> = [

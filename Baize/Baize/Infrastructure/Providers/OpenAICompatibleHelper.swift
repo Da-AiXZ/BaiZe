@@ -148,7 +148,29 @@ enum OpenAICompatibleHelper {
                     let id = toolCall["id"] as? String ?? ""
                     let function = toolCall["function"] as? [String: Any] ?? [:]
                     let name = function["name"] as? String ?? ""
-                    let argumentsDelta = function["arguments"] as? String ?? ""
+                    // arguments 可能是 String（标准 OpenAI 流式 delta）或已序列化的对象
+                    let argumentsDelta: String
+                    if let argsStr = function["arguments"] as? String {
+                        argumentsDelta = argsStr
+                    } else if let argsObj = function["arguments"] as? [String: Any] {
+                        // 非标准：arguments 作为对象返回（某些 API 这么做）
+                        if let data = try? JSONSerialization.data(withJSONObject: argsObj),
+                           let str = String(data: data, encoding: .utf8) {
+                            argumentsDelta = str
+                        } else {
+                            argumentsDelta = ""
+                        }
+                    } else {
+                        argumentsDelta = ""
+                    }
+
+                    // 诊断日志：记录 tool_call chunk 原始数据
+                    if !name.isEmpty {
+                        apiLogger.debug("SSE tool_call begin: id=\(id), name=\(name)")
+                    }
+                    if !argumentsDelta.isEmpty {
+                        apiLogger.debug("SSE tool_call delta: id=\(id), args_delta=\(argumentsDelta.prefix(100))")
+                    }
 
                     if !name.isEmpty && !id.isEmpty {
                         // 工具调用开始
