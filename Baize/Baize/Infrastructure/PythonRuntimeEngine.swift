@@ -87,56 +87,9 @@ final class PythonRuntimeEngine: @unchecked Sendable {
         let enginePort = self.port
 
         // 3. 在 2MB 栈后台线程启动 Python
+        // 闭包体提取为独立方法 runPythonBootstrap()，避免 Swift 类型推断器在复杂闭包中超时
         let thread = Thread { [weak self] in
-            runtimeLogger.info("Python engine thread started — stackSize=\(Thread.current.stackSize) bytes, QoS=\(Thread.current.qualityOfService)")
-
-            // ── 诊断：读回环境变量确认（setenv 在主线程执行，子线程应可见）──
-            let homeVerify = getenv("PYTHONHOME").map { String(cString: $0) } ?? "(not set)"
-            let pathVerify = getenv("PYTHONPATH").map { String(cString: $0) } ?? "(not set)"
-            let dontWriteVerify = getenv("PYTHONDONTWRITEBYTECODE").map { String(cString: $0) } ?? "(not set)"
-            runtimeLogger.info("Env readback — PYTHONHOME=\(homeVerify), PYTHONPATH=\(pathVerify), PYTHONDONTWRITEBYTECODE=\(dontWriteVerify)")
-
-            // ── P3 fix: 使用 PyConfig(install_signal_handlers=0) 初始化 Python ──
-            // 根因：Py_Initialize() 默认 install_signal_handlers=1，会覆盖 Node.js V8
-            //       已注册的信号处理器，导致 V8 后续 EXC_BAD_ACCESS 崩溃。
-            // 修复：PyConfig_InitPythonConfig 保留环境变量支持（PYTHONHOME via setenv 生效），
-            //       同时设 install_signal_handlers=0 不覆盖 V8 信号处理器。
-            var config = PyConfig()
-            PyConfig_InitPythonConfig(&config)
-            config.install_signal_handlers = 0
-
-            runtimeLogger.info("about to init python with install_signal_handlers=0 (Py_InitializeFromConfig)")
-
-            let status = Py_InitializeFromConfig(&config)
-            PyConfig_Clear(&config)
-
-            if PyStatus_Exception(status) != 0 {
-                let errMsg = status.err_msg.map { String(cString: $0) } ?? "(no error message)"
-                runtimeLogger.error("Py_InitializeFromConfig FAILED: \(errMsg), exitcode=\(status.exitcode)")
-                self?.startLock.lock()
-                self?.isStarted = false
-                self?.startLock.unlock()
-                return
-            }
-
-            runtimeLogger.info("python initialized, status OK (install_signal_handlers=0)")
-
-            // ── 执行 bootstrap.py — 启动 HTTP server（阻塞调用）──
-            // PyRun_SimpleString 返回 0 表示成功，-1 表示异常
-            runtimeLogger.info("about to run bootstrap.py (PyRun_SimpleString)")
-            let result = PyRun_SimpleString(bootstrapCode)
-            runtimeLogger.info("bootstrap.py executed, result=\(result)")
-
-            if result != 0 {
-                runtimeLogger.error("bootstrap.py execution failed (PyRun_SimpleString returned \(result))")
-            }
-
-            runtimeLogger.error("Python engine thread exited (should not happen during app lifecycle)")
-
-            // 引擎退出后标记为未启动
-            self?.startLock.lock()
-            self?.isStarted = false
-            self?.startLock.unlock()
+            self?.runPythonBootstrap(bootstrapCode: bootstrapCode)
         }
         thread.stackSize = 2 * 1024 * 1024  // 2MB
         thread.qualityOfService = .userInitiated
@@ -144,6 +97,67 @@ final class PythonRuntimeEngine: @unchecked Sendable {
 
         isStarted = true
         runtimeLogger.info("Python engine start requested on port \(enginePort), bootstrap: \(bootstrapPath)")
+    }
+
+    /// 在后台线程运行 Python 引擎（从 start() 的 Thread 闭包调用）
+    ///
+    /// 提取为独立方法以避免 Swift 类型推断器在复杂闭包中超时
+    /// （"type of expression is ambiguous without a type annotation"）
+    ///
+    /// 流程：
+    /// 1. 读回环境变量（诊断）
+    /// 2. Py_InitializeFromConfig（install_signal_handlers=0）
+    /// 3. PyRun_SimpleString(bootstrap.py)
+    private func runPythonBootstrap(bootstrapCode: String) {
+        runtimeLogger.info("Python engine thread started (2MB stack, QoS=userInitiated)")
+
+        // ── 诊断：读回环境变量确认（setenv 在主线程执行，子线程应可见）──
+        let homeVerify = getenv("PYTHONHOME").map { String(cString: $0) } ?? "(not set)"
+        let pathVerify = getenv("PYTHONPATH").map { String(cString: $0) } ?? "(not set)"
+        let dontWriteVerify = getenv("PYTHONDONTWRITEBYTECODE").map { String(cString: $0) } ?? "(not set)"
+        runtimeLogger.info("Env readback — PYTHONHOME=\(homeVerify), PYTHONPATH=\(pathVerify), PYTHONDONTWRITEBYTECODE=\(dontWriteVerify)")
+
+        // ── P3 fix: 使用 PyConfig(install_signal_handlers=0) 初始化 Python ──
+        // 根因：Py_Initialize() 默认 install_signal_handlers=1，会覆盖 Node.js V8
+        //       已注册的信号处理器，导致 V8 后续 EXC_BAD_ACCESS 崩溃。
+        // 修复：PyConfig_InitPythonConfig 保留环境变量支持（PYTHONHOME via setenv 生效），
+        //       同时设 install_signal_handlers=0 不覆盖 V8 信号处理器。
+        var config = PyConfig()
+        PyConfig_InitPythonConfig(&config)
+        config.install_signal_handlers = 0
+
+        runtimeLogger.info("about to init python with install_signal_handlers=0 (Py_InitializeFromConfig)")
+
+        let status = Py_InitializeFromConfig(&config)
+        PyConfig_Clear(&config)
+
+        if PyStatus_Exception(status) != 0 {
+            let errMsg = status.err_msg.map { String(cString: $0) } ?? "(no error message)"
+            runtimeLogger.error("Py_InitializeFromConfig FAILED: \(errMsg), exitcode=\(status.exitcode)")
+            startLock.lock()
+            isStarted = false
+            startLock.unlock()
+            return
+        }
+
+        runtimeLogger.info("python initialized, status OK (install_signal_handlers=0)")
+
+        // ── 执行 bootstrap.py — 启动 HTTP server（阻塞调用）──
+        // PyRun_SimpleString 返回 0 表示成功，-1 表示异常
+        runtimeLogger.info("about to run bootstrap.py (PyRun_SimpleString)")
+        let result = PyRun_SimpleString(bootstrapCode)
+        runtimeLogger.info("bootstrap.py executed, result=\(result)")
+
+        if result != 0 {
+            runtimeLogger.error("bootstrap.py execution failed (PyRun_SimpleString returned \(result))")
+        }
+
+        runtimeLogger.error("Python engine thread exited (should not happen during app lifecycle)")
+
+        // 引擎退出后标记为未启动
+        startLock.lock()
+        isStarted = false
+        startLock.unlock()
     }
 
     /// 配置 PYTHONHOME / PYTHONPATH 环境变量
