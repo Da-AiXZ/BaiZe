@@ -3,6 +3,7 @@ import SwiftUI
 /// 权限模式设置视图 — 选择 Agent 的操作确认策略
 /// 支持 4 种权限模式：default/acceptEdits/plan/bypass
 /// bypass 模式需要用户明确确认开启（安全底线）
+/// 配色适配 DeepSeek 蓝白（.red → baizeError, .blue → baizeAccent）
 struct PermissionSettingsView: View {
     @ObservedObject var appState: AppState
     @State private var selectedMode: PermissionMode = BaizePermission.defaultMode
@@ -37,20 +38,20 @@ struct PermissionSettingsView: View {
                 if selectedMode == .bypass {
                     HStack(spacing: 8) {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.red)
+                            .foregroundColor(Color.baizeError)
                         Text("⚠️ 绕过模式下 Agent 将自动执行所有操作，包括文件删除和命令执行。请仅在完全信任的场景中使用。")
                             .font(.callout)
-                            .foregroundColor(.red.opacity(0.8))
+                            .foregroundColor(Color.baizeError.opacity(0.8))
                     }
                 }
 
                 if selectedMode == .plan {
                     HStack(spacing: 8) {
                         Image(systemName: "info.circle.fill")
-                            .foregroundColor(.blue)
+                            .foregroundColor(Color.baizeAccent)
                         Text("只读规划模式下 Agent 只分析不执行任何操作。适用于代码审查和影响分析。")
                             .font(.callout)
-                            .foregroundColor(.blue.opacity(0.8))
+                            .foregroundColor(Color.baizeAccent.opacity(0.8))
                     }
                 }
             }

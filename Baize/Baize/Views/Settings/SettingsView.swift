@@ -1,52 +1,30 @@
 import SwiftUI
 
-/// 设置页完整视图 — 合并 API Key + 模型选择为统一的 AI 模型配置入口
-/// 链接到 UnifiedAIConfigView 和 PermissionSettingsView
-///
-/// 注意：不使用 NavigationLink 推子页面。
-/// NavigationSplitView 三栏布局下，嵌套 NavigationStack 的 NavigationLink
-/// 会被外层路由到 detail 列（聊天栏），导致子页面跑到错误位置。
-/// 改用 @State 切换内容 + 自定义返回按钮，完全绕开导航系统。
+/// 设置页完整视图 — 独立 Tab + NavigationStack + NavigationLink 导航
+/// 重构：从 @State selectedSection + 自定义返回按钮模式改为标准 NavigationLink + navigationDestination
+/// 设置作为独立 Tab 拥有自己的 NavigationStack，NavigationLink 自然推入当前 Stack，不会逃逸到对话面板
 struct SettingsView: View {
     @ObservedObject var appState: AppState
-    @State private var selectedSection: SettingsSection?
 
     var body: some View {
-        Group {
-            if let section = selectedSection {
-                // 子页面视图 — 带自定义返回按钮
-                SettingsSubPage(
-                    section: section,
-                    appState: appState,
-                    onBack: { selectedSection = nil }
-                )
-            } else {
-                // 设置列表
-                settingsList
-            }
-        }
+        settingsList
     }
 
-    /// 设置列表 — 显示所有分区入口
+    /// 设置列表 — 显示所有分区入口，使用 NavigationLink 推入子页面
     private var settingsList: some View {
         List {
             // AI 模型配置（合并 API Key + 默认模型）
-            Button {
-                selectedSection = .aiModel
-            } label: {
+            NavigationLink(value: SettingsSection.aiModel) {
                 SettingsRow(
                     icon: "brain.head.profile.fill",
-                    iconColor: .purple,
+                    iconColor: Color.baizeAccent,
                     title: "AI 模型配置",
                     subtitle: aiModelSubtitle
                 )
             }
-            .buttonStyle(.plain)
 
             // 权限模式
-            Button {
-                selectedSection = .permission
-            } label: {
+            NavigationLink(value: SettingsSection.permission) {
                 SettingsRow(
                     icon: "shield.fill",
                     iconColor: appState.permissionMode.badgeColor,
@@ -54,25 +32,19 @@ struct SettingsView: View {
                     subtitle: appState.permissionMode.displayName
                 )
             }
-            .buttonStyle(.plain)
 
             // 存储与运行时
-            Button {
-                selectedSection = .storage
-            } label: {
+            NavigationLink(value: SettingsSection.storage) {
                 SettingsRow(
                     icon: "internaldrive.fill",
-                    iconColor: .green,
+                    iconColor: Color.baizeSuccess,
                     title: "存储与运行时",
                     subtitle: runtimeSubtitle
                 )
             }
-            .buttonStyle(.plain)
 
             // 关于白泽
-            Button {
-                selectedSection = .about
-            } label: {
+            NavigationLink(value: SettingsSection.about) {
                 SettingsRow(
                     icon: "info.circle.fill",
                     iconColor: .gray,
@@ -80,10 +52,21 @@ struct SettingsView: View {
                     subtitle: "版本 1.0.0  |  TrollStore ✅  |  iPad Pro M1"
                 )
             }
-            .buttonStyle(.plain)
         }
         .listStyle(.insetGrouped)
         .navigationTitle("设置")
+        .navigationDestination(for: SettingsSection.self) { section in
+            switch section {
+            case .aiModel:
+                UnifiedAIConfigView(appState: appState)
+            case .permission:
+                PermissionSettingsView(appState: appState)
+            case .storage:
+                StorageSettingsView(appState: appState)
+            case .about:
+                AboutView()
+            }
+        }
     }
 
     /// AI 模型配置状态描述（Provider/Model + Key 配置情况）
@@ -131,9 +114,9 @@ enum SettingsSection: Hashable, Identifiable {
     }
 }
 
-// MARK: - Settings Row (列表行，不用 NavigationLink)
+// MARK: - Settings Row (列表行)
 
-/// 设置列表行 — 纯展示，点击由父视图 Button 处理
+/// 设置列表行 — 纯展示，点击由 NavigationLink 处理
 private struct SettingsRow: View {
     let icon: String
     let iconColor: Color
@@ -166,97 +149,11 @@ private struct SettingsRow: View {
     }
 }
 
-// MARK: - Settings Sub Page (子页面容器，带返回按钮)
+// MARK: - Storage Settings View
 
-/// 子页面容器 — 显示选中的设置分区内容 + 返回按钮
-/// 不使用 NavigationLink，用 @State 切换 + 自定义返回
-private struct SettingsSubPage: View {
-    let section: SettingsSection
-    let appState: AppState
-    let onBack: () -> Void
-
-    var body: some View {
-        VStack(spacing: 0) {
-            // 自定义导航栏 — 返回按钮 + 标题
-            HStack {
-                Button(action: onBack) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 16, weight: .semibold))
-                        Text("设置")
-                            .font(.system(size: 16))
-                    }
-                    .foregroundColor(Color.baizeAccent)
-                }
-
-                Spacer()
-
-                Text(section.title)
-                    .font(.headline)
-
-                Spacer()
-
-                // 占位，让标题居中
-                Color.clear.frame(width: 60, height: 20)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(Color.baizeCardBackground)
-
-            Divider()
-
-            // 子页面内容
-            settingsContent
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-
-    @ViewBuilder
-    private var settingsContent: some View {
-        switch section {
-        case .aiModel:
-            UnifiedAIConfigView(appState: appState)
-
-        case .permission:
-            PermissionSettingsView(appState: appState)
-
-        case .storage:
-            StorageSettingsPlaceholder(appState: appState)
-
-        case .about:
-            AboutView()
-        }
-    }
-}
-
-// MARK: - Settings Detail (保留供其他调用方使用)
-
-/// 设置详情页 — 集成 UnifiedAIConfigView 和 PermissionSettingsView
-private struct SettingsDetail: View {
-    let section: SettingsSection
-    @ObservedObject var appState: AppState
-
-    var body: some View {
-        switch section {
-        case .aiModel:
-            UnifiedAIConfigView(appState: appState)
-
-        case .permission:
-            PermissionSettingsView(appState: appState)
-
-        case .storage:
-            StorageSettingsPlaceholder(appState: appState)
-
-        case .about:
-            AboutView()
-        }
-    }
-}
-
-// MARK: - Storage Settings Placeholder
-
-/// 存储与运行时设置占位
-private struct StorageSettingsPlaceholder: View {
+/// 存储与运行时设置 — 诊断面板
+/// 保留 Python 引擎诊断 + Monaco 编辑器诊断（用户只有 iPad 无 Mac）
+struct StorageSettingsView: View {
     /// AppState（用于访问 pythonRuntimeEngine 诊断状态）
     let appState: AppState
 
@@ -269,18 +166,18 @@ private struct StorageSettingsPlaceholder: View {
     /// Python 引擎状态对应的颜色
     private var statusColor: Color {
         switch diagnostic.status {
-        case .started: return .green
-        case .failed: return .red
-        case .starting, .notStarted: return .orange
+        case .started: return Color.baizeSuccess
+        case .failed: return Color.baizeError
+        case .starting, .notStarted: return Color.baizeWarning
         }
     }
 
     /// Monaco 编辑器状态对应的颜色
     private var monacoStatusColor: Color {
         switch monacoDiagnostic.status {
-        case .loaded: return .green
-        case .failed: return .red
-        case .loading: return .orange
+        case .loaded: return Color.baizeSuccess
+        case .failed: return Color.baizeError
+        case .loading: return Color.baizeWarning
         case .notLoaded: return .gray
         }
     }
@@ -308,13 +205,13 @@ private struct StorageSettingsPlaceholder: View {
                     Text("NodeMobile.framework")
                     Spacer()
                     Text(nodeFrameworkExists ? "✅ 已嵌入" : "❌ 未找到")
-                        .foregroundColor(nodeFrameworkExists ? .green : .red)
+                        .foregroundColor(nodeFrameworkExists ? Color.baizeSuccess : Color.baizeError)
                 }
                 HStack {
                     Text("bootstrap.js")
                     Spacer()
                     Text(bootstrapExists ? "✅ 已找到" : "❌ 未找到")
-                        .foregroundColor(bootstrapExists ? .green : .red)
+                        .foregroundColor(bootstrapExists ? Color.baizeSuccess : Color.baizeError)
                 }
                 if let bsPath = bootstrapPath {
                     Text("路径: \(bsPath)")
@@ -331,13 +228,13 @@ private struct StorageSettingsPlaceholder: View {
                     Text("Python.framework")
                     Spacer()
                     Text(pythonFrameworkExists ? "✅ 已嵌入" : "❌ 未找到")
-                        .foregroundColor(pythonFrameworkExists ? .green : .red)
+                        .foregroundColor(pythonFrameworkExists ? Color.baizeSuccess : Color.baizeError)
                 }
                 HStack {
                     Text("bootstrap.py")
                     Spacer()
                     Text(pythonBootstrapExists ? "✅ 已找到" : "❌ 未找到")
-                        .foregroundColor(pythonBootstrapExists ? .green : .red)
+                        .foregroundColor(pythonBootstrapExists ? Color.baizeSuccess : Color.baizeError)
                 }
                 if let pyBsPath = pythonBootstrapPath {
                     Text("路径: \(pyBsPath)")
@@ -379,7 +276,7 @@ private struct StorageSettingsPlaceholder: View {
                 if let err = diagnostic.lastError {
                     Text("错误: \(err)")
                         .font(.system(size: 11))
-                        .foregroundColor(.red)
+                        .foregroundColor(Color.baizeError)
                 }
 
                 // 启动步骤时间线
@@ -424,7 +321,7 @@ private struct StorageSettingsPlaceholder: View {
                     Text("min/vs/loader.js")
                     Spacer()
                     Text(monacoDiagnostic.loaderExists ? "✅ 存在" : "❌ 缺失")
-                        .foregroundColor(monacoDiagnostic.loaderExists ? .green : .red)
+                        .foregroundColor(monacoDiagnostic.loaderExists ? Color.baizeSuccess : Color.baizeError)
                 }
 
                 // 编辑器就绪状态
@@ -432,7 +329,7 @@ private struct StorageSettingsPlaceholder: View {
                     Text("编辑器就绪")
                     Spacer()
                     Text(monacoDiagnostic.editorReady ? "✅ 是" : "❌ 否")
-                        .foregroundColor(monacoDiagnostic.editorReady ? .green : .red)
+                        .foregroundColor(monacoDiagnostic.editorReady ? Color.baizeSuccess : Color.baizeError)
                 }
 
                 // 加载耗时
@@ -463,7 +360,7 @@ private struct StorageSettingsPlaceholder: View {
                 } else {
                     Text("HTML: ❌ 未找到 index.html")
                         .font(.system(size: 11))
-                        .foregroundColor(.red)
+                        .foregroundColor(Color.baizeError)
                 }
 
                 // 当前选中文件
@@ -481,7 +378,7 @@ private struct StorageSettingsPlaceholder: View {
                 if let err = monacoDiagnostic.lastError {
                     Text("错误: \(err)")
                         .font(.system(size: 11))
-                        .foregroundColor(.red)
+                        .foregroundColor(Color.baizeError)
                 }
 
                 // 重新加载编辑器按钮
@@ -506,6 +403,8 @@ private struct StorageSettingsPlaceholder: View {
             diagnostic = appState.pythonRuntimeEngine?.getDiagnostic() ?? PythonDiagnosticState()
             monacoDiagnostic = appState.monacoBridge?.getDiagnostic() ?? MonacoDiagnosticState()
         }
+        .navigationTitle("存储与运行时")
+        .navigationBarTitleDisplayMode(.inline)
         .onReceive(Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()) { _ in
             diagnostic = appState.pythonRuntimeEngine?.getDiagnostic() ?? PythonDiagnosticState()
             monacoDiagnostic = appState.monacoBridge?.getDiagnostic() ?? MonacoDiagnosticState()
@@ -516,7 +415,7 @@ private struct StorageSettingsPlaceholder: View {
 // MARK: - About View
 
 /// 关于白泽页面
-private struct AboutView: View {
+struct AboutView: View {
     var body: some View {
         VStack(spacing: 24) {
             Image(systemName: "sparkles")
@@ -548,6 +447,8 @@ private struct AboutView: View {
 
             Spacer()
         }
+        .navigationTitle("关于白泽")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

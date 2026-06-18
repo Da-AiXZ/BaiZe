@@ -1,6 +1,58 @@
 import SwiftUI
 import Foundation
 
+// MARK: - App Tab Enum
+
+/// 顶层导航 Tab 枚举 — 底部 TabView 三 Tab
+enum AppTab: String, CaseIterable, Hashable {
+    case workspace
+    case dashboard
+    case settings
+
+    var title: String {
+        switch self {
+        case .workspace: return "工作区"
+        case .dashboard: return "首页"
+        case .settings: return "设置"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .workspace: return "hammer.fill"
+        case .dashboard: return "house.fill"
+        case .settings: return "gearshape.fill"
+        }
+    }
+}
+
+// MARK: - Focus Mode Enum
+
+/// 焦点模式枚举 — 控制编辑器与对话面板的宽度比
+enum FocusMode: String, CaseIterable, Hashable {
+    case code       // 编辑器获焦（默认）
+    case chat       // 对话面板获焦（Agent 运行时）
+    case balanced   // 平衡（P2 预留）
+
+    var editorRatio: CGFloat {
+        switch self {
+        case .code: return 0.65
+        case .chat: return 0.35
+        case .balanced: return 0.50
+        }
+    }
+
+    var chatRatio: CGFloat { 1.0 - editorRatio }
+
+    var label: String {
+        switch self {
+        case .code: return "代码"
+        case .chat: return "对话"
+        case .balanced: return "平衡"
+        }
+    }
+}
+
 /// 白泽全局 App 状态 — ObservableObject
 /// 管理 Agent 运行状态、当前项目、文件选择、API 配置状态等
 /// 所有视图通过 @EnvironmentObject 或 @ObservedObject 访问
@@ -16,6 +68,14 @@ class AppState: ObservableObject {
 
     /// 打开的文件 Tab 列表
     @Published var openFiles: [String] = []
+
+    // MARK: - UI Navigation State
+
+    /// 当前选中的 Tab（工作区/首页/设置）
+    @Published var selectedTab: AppTab = .workspace
+
+    /// 当前焦点模式（代码/对话/平衡）
+    @Published var focusMode: FocusMode = .code
 
     // MARK: - Agent State
 
@@ -170,6 +230,11 @@ class AppState: ObservableObject {
         if selectedFilePath == path {
             selectedFilePath = openFiles.last
         }
+    }
+
+    /// 切换到指定 Tab
+    func switchToTab(_ tab: AppTab) {
+        selectedTab = tab
     }
 
     /// 显示全局错误 Alert

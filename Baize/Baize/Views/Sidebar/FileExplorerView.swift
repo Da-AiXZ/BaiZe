@@ -160,7 +160,7 @@ struct FileItemRow: View {
             }
         }
         .padding(.vertical, 2)
-        .background(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
+        .background(isSelected ? Color.baizeAccent.opacity(0.15) : Color.clear)
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
     }

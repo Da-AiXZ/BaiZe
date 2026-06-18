@@ -1,21 +1,37 @@
 import SwiftUI
 
-/// 项目首页 Dashboard — 显示最近项目、连接状态、今日用量
+/// 项目首页 Dashboard — 独立 Tab，蓝白极简风格
+/// 显示最近项目、API 连接状态（真实 Keychain 数据）、今日用量
 struct DashboardView: View {
+    @EnvironmentObject var appState: AppState
     @State private var recentProjects: [ProjectEntry] = ProjectEntry.mockProjects
-    @State private var isShowingNewProject = false
+
+    private let keychain = KeychainService()
 
     var body: some View {
         ScrollView {
             VStack(spacing: 24) {
-                // 标题栏 + 新建项目按钮
-                DashboardHeader(onNewProject: { isShowingNewProject = true })
+                // 标题栏
+                DashboardHeader()
+
+                Divider()
+                    .background(Color.baizeBorder)
 
                 // 最近项目
                 RecentProjectsSection(projects: recentProjects)
 
-                // 连接状态
-                ConnectionStatusSection()
+                Divider()
+                    .background(Color.baizeBorder)
+
+                // 连接状态（使用真实 Keychain 数据）
+                ConnectionStatusSection(
+                    openAIConfigured: keychain.loadOpenAIKey() != nil,
+                    anthropicConfigured: keychain.loadAnthropicKey() != nil,
+                    openRouterConfigured: keychain.loadOpenRouterKey() != nil
+                )
+
+                Divider()
+                    .background(Color.baizeBorder)
 
                 // 今日用量
                 DailyUsageSection()
@@ -25,37 +41,26 @@ struct DashboardView: View {
         }
         .background(Color.baizeBackground)
         .navigationTitle("白泽")
-        .sheet(isPresented: $isShowingNewProject) {
-            NewProjectPlaceholderSheet()
-        }
     }
 }
 
 // MARK: - Dashboard Header
 
-/// Dashboard 标题栏
+/// Dashboard 标题栏 — 蓝白极简
 private struct DashboardHeader: View {
-    let onNewProject: () -> Void
-
     var body: some View {
         HStack {
-            Text("白泽")
-                .font(.largeTitle.bold())
-                .foregroundColor(Color.baizeAccent)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("白泽")
+                    .font(.largeTitle.bold())
+                    .foregroundColor(Color.baizeAccent)
 
-            Text("本地编程智能体")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
+                Text("本地编程智能体")
+                    .font(.subheadline)
+                    .foregroundColor(Color.baizeTextSecondary)
+            }
 
             Spacer()
-
-            Button(action: onNewProject) {
-                Label("新建项目", systemImage: "plus.circle.fill")
-                    .font(.headline)
-                    .foregroundColor(Color.baizeAccent)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(Color.baizeAccent.opacity(0.2))
         }
     }
 }
@@ -85,7 +90,7 @@ private struct RecentProjectsSection: View {
 
 // MARK: - Project Card
 
-/// 单个项目卡片
+/// 单个项目卡片 — 蓝白极简
 private struct ProjectCard: View {
     let project: ProjectEntry
 
@@ -99,17 +104,18 @@ private struct ProjectCard: View {
             // 项目名
             Text(project.name)
                 .font(.headline)
+                .foregroundColor(Color.baizeTextPrimary)
                 .lineLimit(1)
 
             // 技术栈
             Text(project.stack)
                 .font(.caption)
-                .foregroundColor(.secondary)
+                .foregroundColor(Color.baizeTextSecondary)
 
             // 时间
             Text(project.lastOpened.formatted(.relative(presentation: .named)))
                 .font(.caption2)
-                .foregroundColor(.secondary.opacity(0.6))
+                .foregroundColor(Color.baizeTextSecondary.opacity(0.6))
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -120,16 +126,20 @@ private struct ProjectCard: View {
 
 // MARK: - Connection Status Section
 
-/// API 连接状态
+/// API 连接状态 — 使用真实 Keychain 数据（从工具栏移入）
 private struct ConnectionStatusSection: View {
+    let openAIConfigured: Bool
+    let anthropicConfigured: Bool
+    let openRouterConfigured: Bool
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             SectionHeader(icon: "wifi", title: "连接状态")
 
             HStack(spacing: 16) {
-                ConnectionBadge(name: "OpenAI", isConnected: true)
-                ConnectionBadge(name: "Anthropic", isConnected: false)
-                ConnectionBadge(name: "OpenRouter", isConnected: false)
+                ConnectionBadge(name: "OpenAI", isConnected: openAIConfigured)
+                ConnectionBadge(name: "Anthropic", isConnected: anthropicConfigured)
+                ConnectionBadge(name: "OpenRouter", isConnected: openRouterConfigured)
             }
         }
     }
@@ -144,11 +154,11 @@ private struct ConnectionBadge: View {
         VStack(spacing: 4) {
             Image(systemName: isConnected ? "checkmark.circle.fill" : "xmark.circle.fill")
                 .font(.system(size: 16))
-                .foregroundColor(isConnected ? .green : .red.opacity(0.7))
+                .foregroundColor(isConnected ? Color.baizeSuccess : Color.baizeError.opacity(0.7))
 
             Text(name)
                 .font(.caption)
-                .foregroundColor(.secondary)
+                .foregroundColor(Color.baizeTextSecondary)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -184,11 +194,11 @@ private struct UsageStatItem: View {
         VStack(spacing: 4) {
             Text(value + unit)
                 .font(.title3.bold())
-                .foregroundColor(.primary)
+                .foregroundColor(Color.baizeTextPrimary)
 
             Text(label)
                 .font(.caption)
-                .foregroundColor(.secondary)
+                .foregroundColor(Color.baizeTextSecondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
@@ -210,6 +220,7 @@ private struct SectionHeader: View {
                 .foregroundColor(Color.baizeAccent)
             Text(title)
                 .font(.headline)
+                .foregroundColor(Color.baizeTextPrimary)
         }
     }
 }
@@ -226,15 +237,16 @@ struct ProjectEntry: Identifiable {
     let lastOpened: Date
 
     static let mockProjects: [ProjectEntry] = [
-        ProjectEntry(name: "my-app", stack: "React + TypeScript", icon: "globe", iconColor: .cyan, lastOpened: Date().addingTimeInterval(-120)),
-        ProjectEntry(name: "baize-core", stack: "Swift + SwiftUI", icon: "swift", iconColor: .orange, lastOpened: Date().addingTimeInterval(-3600)),
-        ProjectEntry(name: "data-pipeline", stack: "Python + pandas", icon: "chart.bar.fill", iconColor: .blue, lastOpened: Date().addingTimeInterval(-86400)),
+        ProjectEntry(name: "my-app", stack: "React + TypeScript", icon: "globe", iconColor: Color.baizePrimaryLight, lastOpened: Date().addingTimeInterval(-120)),
+        ProjectEntry(name: "baize-core", stack: "Swift + SwiftUI", icon: "swift", iconColor: Color.baizeWarning, lastOpened: Date().addingTimeInterval(-3600)),
+        ProjectEntry(name: "data-pipeline", stack: "Python + pandas", icon: "chart.bar.fill", iconColor: Color.baizeAccent, lastOpened: Date().addingTimeInterval(-86400)),
     ]
 }
 
 // MARK: - New Project Placeholder Sheet
 
 /// 新建项目弹窗占位 — Phase 1
+/// 保留定义但不在 Dashboard 中弹出（可从工具栏触发）
 struct NewProjectPlaceholderSheet: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -247,10 +259,11 @@ struct NewProjectPlaceholderSheet: View {
 
                 Text("新建项目")
                     .font(.title2)
+                    .foregroundColor(Color.baizeTextPrimary)
 
                 Text("完整项目创建流程将在后续版本实现")
                     .font(.body)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(Color.baizeTextSecondary)
                     .multilineTextAlignment(.center)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

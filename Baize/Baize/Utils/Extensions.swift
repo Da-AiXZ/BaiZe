@@ -3,29 +3,46 @@ import Foundation
 
 // MARK: - Color Extensions (App Theme)
 
-/// 白泽主题色扩展
+/// 白泽主题色扩展 — DeepSeek 蓝白配色系统
+/// 保持变量名不变，仅替换色值为 DeepSeek 风格蓝白极简
 extension Color {
-    // 品牌色
-    static let baizeAccent = Color(hex: "4A9EFF")          // 主强调色（蓝色系）
-    static let baizeBackground = Color(hex: "1A1A2E")      // 全局背景（深紫黑）
-    static let baizeCardBackground = Color(hex: "252540")   // 卡片背景
-    static let baizeEditorBackground = Color(hex: "1E1E1E") // 编辑器背景（VS Code Dark 风格）
+    // 主色调 (DeepSeek 蓝白)
+    static let baizeAccent = Color(hex: "2563EB")           // 主强调色 (blue-600, DeepSeek 主蓝)
+    static let baizePrimary = Color(hex: "2563EB")          // baizeAccent 语义别名
+    static let baizePrimaryLight = Color(hex: "3B82F6")     // 选中态高亮 (blue-500)
+
+    // 背景
+    static let baizeBackground = Color(hex: "0F172A")       // 全局背景 (slate-900, 深蓝黑)
+    static let baizeCardBackground = Color(hex: "1E293B")   // 卡片/面板背景 (slate-800)
+    static let baizeEditorBackground = Color(hex: "1E1E1E") // 编辑器背景 (VS Code Dark, 不变)
+    static let baizeChatBackground = Color(hex: "0F172A")   // 对话面板背景 (slate-900)
+
+    // 文字
+    static let baizeTextPrimary = Color(hex: "F1F5F9")      // 正文 (slate-100, 高对比)
+    static let baizeTextSecondary = Color(hex: "94A3B8")    // 次要文字 (slate-400)
+
+    // 边框/分割
+    static let baizeBorder = Color(hex: "334155")           // 分割线/边框 (slate-700)
+
+    // 状态色
+    static let baizeSuccess = Color(hex: "10B981")          // 成功 (emerald-500)
+    static let baizeWarning = Color(hex: "F59E0B")          // 警告 (amber-500)
+    static let baizeError = Color(hex: "EF4444")            // 错误 (red-500)
 
     // Tab 栏
-    static let baizeTabBarBackground = Color(hex: "2D2D2D")
-    static let baizeTabActive = Color(hex: "3C3C3C")
+    static let baizeTabBarBackground = Color(hex: "1E293B") // slate-800
+    static let baizeTabActive = Color(hex: "334155")        // slate-700
 
     // Chat 面板
-    static let baizeChatBackground = Color(hex: "1A1A2E")
-    static let baizeInputBackground = Color(hex: "2D2D44")
-    static let baizeInputFieldBackground = Color(hex: "252540")
-    static let baizeInputBorder = Color(hex: "444466")
-    static let baizeBubbleAssistant = Color(hex: "2A2A44")
-    static let baizeToolCallBackground = Color(hex: "3A2A1A")
-    static let baizeToolResultBackground = Color(hex: "1A3A2A")
+    static let baizeInputBackground = Color(hex: "1E293B")  // slate-800
+    static let baizeInputFieldBackground = Color(hex: "334155") // slate-700
+    static let baizeInputBorder = Color(hex: "475569")      // slate-600
+    static let baizeBubbleAssistant = Color(hex: "1E293B")  // slate-800
+    static let baizeToolCallBackground = Color(hex: "1E293B") // slate-800, 蓝白统一
+    static let baizeToolResultBackground = Color(hex: "064E3B") // emerald-900
 
     // 文件浏览器
-    static let baizeFolder = Color(hex: "DDC077")
+    static let baizeFolder = Color(hex: "FBBF24")           // amber-400
 
     /// 从十六进制字符串创建 Color
     init(hex: String) {

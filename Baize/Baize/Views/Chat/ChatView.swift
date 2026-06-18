@@ -72,6 +72,8 @@ struct ChatView: View {
 
         // W9 fix: 在 Task 之前同步设置 isAgentRunning = true，防止时序竞争
         appState.isAgentRunning = true
+        // 焦点自动切换：Agent 运行时切到对话面板焦点（双保险，ContentView 的 onChange 也会触发）
+        appState.focusMode = .chat
 
         // 启动 Agent Loop（异步任务）
         Task {
@@ -252,6 +254,7 @@ struct ChatView: View {
                 ))
             }
             appState.isAgentRunning = false
+            // Agent 完成后焦点保持 .chat，用户手动切回 .code
         }
     }
 
@@ -317,6 +320,7 @@ struct PendingConfirmation {
 // MARK: - Chat Header
 
 /// 对话面板标题栏 — 显示 Agent 运行状态
+/// 配色适配 DeepSeek 蓝白（.purple → baizeAccent）
 private struct ChatHeader: View {
     @ObservedObject var appState: AppState
     let isStreaming: Bool
@@ -338,13 +342,13 @@ private struct ChatHeader: View {
 
             Spacer()
 
-            // Phase 2C: 模型指示器
+            // Phase 2C: 模型指示器（baizeAccent 配色）
             Text("\(appState.activeProvider.displayName) / \(appState.activeModel)")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
-                .background(Color.purple.opacity(0.1))
+                .background(Color.baizeAccent.opacity(0.1))
                 .cornerRadius(4)
 
             Text(appState.permissionMode.displayName)

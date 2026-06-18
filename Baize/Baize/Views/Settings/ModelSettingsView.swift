@@ -2,6 +2,7 @@ import SwiftUI
 
 /// Unified AI configuration view — provider selection + API key + model selection + verification
 /// Merges APIKeySettingsView and ModelSettingsView into one page
+/// 配色适配 DeepSeek 蓝白（.purple → baizeAccent, .green → baizeSuccess, .red → baizeError）
 struct UnifiedAIConfigView: View {
     @ObservedObject var appState: AppState
 
@@ -34,8 +35,8 @@ struct UnifiedAIConfigView: View {
 
         var color: Color {
             switch self {
-            case .saved: return .green
-            case .unsaved: return .orange
+            case .saved: return Color.baizeSuccess
+            case .unsaved: return Color.baizeWarning
             case .empty: return .secondary
             case .unknown: return .secondary
             }
@@ -76,7 +77,7 @@ struct UnifiedAIConfigView: View {
                             Spacer()
                             if isProviderKeyConfigured(provider) {
                                 Image(systemName: "checkmark.circle.fill")
-                                    .foregroundColor(.green)
+                                    .foregroundColor(Color.baizeSuccess)
                                     .font(.caption)
                             }
                         }
@@ -191,7 +192,7 @@ struct UnifiedAIConfigView: View {
                     } label: {
                         HStack(spacing: 12) {
                             Image(systemName: selectedModel == model.id ? "checkmark.circle.fill" : "circle")
-                                .foregroundColor(selectedModel == model.id ? .purple : .secondary)
+                                .foregroundColor(selectedModel == model.id ? Color.baizeAccent : .secondary)
                                 .font(.system(size: 20))
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(model.displayName)
@@ -232,7 +233,7 @@ struct UnifiedAIConfigView: View {
                             result ? "连接成功" : "连接失败",
                             systemImage: result ? "checkmark.circle.fill" : "xmark.circle.fill"
                         )
-                        .foregroundColor(result ? .green : .red)
+                        .foregroundColor(result ? Color.baizeSuccess : Color.baizeError)
                         .font(.subheadline)
                     }
 

@@ -42,10 +42,10 @@ struct APIKeySettingsView: View {
         var color: Color {
             switch self {
             case .unknown: return .secondary
-            case .configured: return .yellow
-            case .verified: return .green
-            case .failed: return .red
-            case .missing: return .orange
+            case .configured: return Color.baizeWarning
+            case .verified: return Color.baizeSuccess
+            case .failed: return Color.baizeError
+            case .missing: return Color.baizeWarning
             }
         }
 
