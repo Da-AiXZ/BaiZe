@@ -74,6 +74,7 @@ struct BaizeApp: App {
 
             // Phase 2C: 恢复上次 Provider/Model 选择
             state.restoreProviderSelection()
+            state.restoreCustomConfig()
             Task {
                 do {
                     try await api.setActiveProvider(providerId: state.activeProvider.providerId, model: state.activeModel)

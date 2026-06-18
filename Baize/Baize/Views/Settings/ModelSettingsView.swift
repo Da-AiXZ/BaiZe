@@ -14,6 +14,8 @@ struct UnifiedAIConfigView: View {
     @State private var connectionResult: Bool? = nil
     @State private var showSaveError = false
     @State private var saveErrorMessage = ""
+    @State private var customEndpointInput: String = BaizeAPI.deepSeekEndpoint
+    @State private var customModelInput: String = "deepseek-chat"
 
     private let keychain = KeychainService()
 
@@ -46,6 +48,7 @@ struct UnifiedAIConfigView: View {
         case .openAI: return BaizeModels.OpenAI.allModels
         case .anthropic: return BaizeModels.Anthropic.allModels
         case .openRouter: return BaizeModels.OpenRouter.allModels
+        case .custom: return []
         }
     }
 
@@ -55,6 +58,7 @@ struct UnifiedAIConfigView: View {
         case .openAI: return BaizeAPI.openAIEndpoint
         case .anthropic: return BaizeAPI.anthropicEndpoint
         case .openRouter: return BaizeAPI.openRouterEndpoint
+        case .custom: return customEndpointInput
         }
     }
 
@@ -83,10 +87,17 @@ struct UnifiedAIConfigView: View {
                 .onChange(of: selectedProvider) { newProvider in
                     // Load the API key for this provider from keychain
                     loadApiKeyForProvider(newProvider)
-                    // Auto-select first model for this provider
-                    let models = providerModels(newProvider)
-                    if let first = models.first {
-                        selectedModel = first.id
+                    if newProvider == .custom {
+                        // 自定义 Provider：加载已保存的端点和模型名
+                        customEndpointInput = appState.customEndpoint
+                        customModelInput = appState.customModel
+                        selectedModel = customModelInput
+                    } else {
+                        // Auto-select first model for this provider
+                        let models = providerModels(newProvider)
+                        if let first = models.first {
+                            selectedModel = first.id
+                        }
                     }
                     connectionResult = nil
                 }
@@ -134,8 +145,46 @@ struct UnifiedAIConfigView: View {
                 }
             }
 
-            // Section 3: Model selection
-            Section(header: Text("选择模型")) {
+            // Section 3: Custom endpoint + model input (only for custom provider)
+            if selectedProvider == .custom {
+                Section(
+                    header: Text("端点 & 模型配置"),
+                    footer: Text("填入 OpenAI 兼容的 API 端点和模型名。例如 DeepSeek: 端点 https://api.deepseek.com/v1/chat/completions，模型 deepseek-chat")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                ) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("端点 URL")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        TextField("https://api.deepseek.com/v1/chat/completions", text: $customEndpointInput)
+                            .textFieldStyle(.roundedBorder)
+                            .autocapitalization(.none)
+                            .disableAutocorrection(true)
+                            .onChange(of: customEndpointInput) { _ in
+                                connectionResult = nil
+                            }
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("模型名")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        TextField("deepseek-chat", text: $customModelInput)
+                            .textFieldStyle(.roundedBorder)
+                            .autocapitalization(.none)
+                            .disableAutocorrection(true)
+                            .onChange(of: customModelInput) { newValue in
+                                selectedModel = newValue
+                                connectionResult = nil
+                            }
+                    }
+                }
+            }
+
+            // Section 4: Model selection (list for standard providers, hidden for custom)
+            if selectedProvider != .custom {
+                Section(header: Text("选择模型")) {
                 ForEach(currentModels) { model in
                     Button {
                         selectedModel = model.id
@@ -161,9 +210,10 @@ struct UnifiedAIConfigView: View {
                     }
                     .buttonStyle(.plain)
                 }
+                }
             }
 
-            // Section 4: Verify + Apply
+            // Section 5: Verify + Apply
             Section {
                 HStack(spacing: 12) {
                     Button(action: verifyConnection) {
@@ -175,7 +225,7 @@ struct UnifiedAIConfigView: View {
                         }
                     }
                     .buttonStyle(.bordered)
-                    .disabled(isVerifying || apiKeyInput.isEmpty)
+                    .disabled(isVerifying || apiKeyInput.isEmpty || (selectedProvider == .custom && (customEndpointInput.isEmpty || customModelInput.isEmpty)))
 
                     if let result = connectionResult {
                         Label(
@@ -201,6 +251,9 @@ struct UnifiedAIConfigView: View {
         .onAppear {
             selectedProvider = appState.activeProvider
             selectedModel = appState.activeModel
+            // 加载自定义端点和模型名到输入框
+            customEndpointInput = appState.customEndpoint
+            customModelInput = appState.customModel
             loadApiKeyForProvider(selectedProvider)
         }
         .onChange(of: apiKeyInput) { _ in
@@ -225,6 +278,7 @@ struct UnifiedAIConfigView: View {
         case .openAI: return BaizeModels.OpenAI.allModels
         case .anthropic: return BaizeModels.Anthropic.allModels
         case .openRouter: return BaizeModels.OpenRouter.allModels
+        case .custom: return []
         }
     }
 
@@ -234,6 +288,7 @@ struct UnifiedAIConfigView: View {
         case .openAI: return keychain.loadOpenAIKey() != nil
         case .anthropic: return keychain.loadAnthropicKey() != nil
         case .openRouter: return keychain.loadOpenRouterKey() != nil
+        case .custom: return keychain.loadCustomKey() != nil
         }
     }
 
@@ -244,6 +299,7 @@ struct UnifiedAIConfigView: View {
         case .openAI: key = keychain.loadOpenAIKey()
         case .anthropic: key = keychain.loadAnthropicKey()
         case .openRouter: key = keychain.loadOpenRouterKey()
+        case .custom: key = keychain.loadCustomKey()
         }
         if let k = key, !k.isEmpty {
             apiKeyInput = k
@@ -261,6 +317,7 @@ struct UnifiedAIConfigView: View {
             case .openAI: try keychain.saveOpenAIKey(apiKeyInput)
             case .anthropic: try keychain.saveAnthropicKey(apiKeyInput)
             case .openRouter: try keychain.saveOpenRouterKey(apiKeyInput)
+            case .custom: try keychain.saveCustomKey(apiKeyInput)
             }
             keyStatus = .saved
         } catch {
@@ -296,6 +353,12 @@ struct UnifiedAIConfigView: View {
                     apiKey: apiKeyInput,
                     additionalHeaders: ["HTTP-Referer": "https://baize.app", "X-Title": "Baize"],
                     model: "openai/gpt-4o-mini"
+                )
+            case .custom:
+                success = await OpenAICompatibleHelper.verifyConnection(
+                    endpoint: customEndpointInput,
+                    apiKey: apiKeyInput,
+                    model: customModelInput
                 )
             }
             await MainActor.run {
@@ -341,6 +404,13 @@ struct UnifiedAIConfigView: View {
         // Ensure key is saved before applying
         if keyStatus == .unsaved && !apiKeyInput.isEmpty {
             saveApiKey()
+        }
+        // 自定义 Provider：持久化端点和模型名到 AppState + UserDefaults
+        if selectedProvider == .custom {
+            appState.customEndpoint = customEndpointInput
+            appState.customModel = customModelInput
+            appState.persistCustomConfig()
+            selectedModel = customModelInput
         }
         appState.setActiveProvider(selectedProvider, model: selectedModel)
     }

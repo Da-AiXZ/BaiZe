@@ -112,8 +112,18 @@ struct KeychainService {
         load(key: BaizeAPI.openRouterKeyKeychainKey)
     }
 
+    /// 保存自定义 Provider API Key
+    func saveCustomKey(_ key: String) throws {
+        try save(key: BaizeAPI.customProviderKeyKeychainKey, value: key)
+    }
+
+    /// 读取自定义 Provider API Key
+    func loadCustomKey() -> String? {
+        load(key: BaizeAPI.customProviderKeyKeychainKey)
+    }
+
     /// 检查是否至少配置了一个 API Key
     func hasAnyAPIKey() -> Bool {
-        loadOpenAIKey() != nil || loadAnthropicKey() != nil || loadOpenRouterKey() != nil
+        loadOpenAIKey() != nil || loadAnthropicKey() != nil || loadOpenRouterKey() != nil || loadCustomKey() != nil
     }
 }

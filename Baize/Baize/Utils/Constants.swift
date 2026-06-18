@@ -60,6 +60,18 @@ enum BaizeAPI {
     /// OpenRouter API Key Keychain 存储键名
     static let openRouterKeyKeychainKey = "com.baize.openrouter-api-key"
 
+    /// DeepSeek 官方 API 端点（OpenAI 兼容格式）
+    static let deepSeekEndpoint = "https://api.deepseek.com/v1/chat/completions"
+
+    /// 自定义 Provider API Key Keychain 存储键名
+    static let customProviderKeyKeychainKey = "com.baize.custom-api-key"
+
+    /// UserDefaults: 自定义端点 URL
+    static let customEndpointUDKey = "com.baize.custom-endpoint"
+
+    /// UserDefaults: 自定义模型名
+    static let customModelUDKey = "com.baize.custom-model"
+
     /// SSE 流式请求超时（秒）
     static let streamTimeout: TimeInterval = 120.0
 

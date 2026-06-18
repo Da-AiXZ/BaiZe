@@ -48,10 +48,12 @@ actor APIGateway {
         let openAIProvider = OpenAIProvider(keychainService: keychainService)
         let anthropicProvider = AnthropicProvider(keychainService: keychainService)
         let openRouterProvider = OpenRouterProvider(keychainService: keychainService)
+        let customProvider = CustomOpenAIProvider(keychainService: keychainService)
 
         providers[openAIProvider.id] = openAIProvider
         providers[anthropicProvider.id] = anthropicProvider
         providers[openRouterProvider.id] = openRouterProvider
+        providers[customProvider.id] = customProvider
 
         let providerNames = providers.keys.joined(separator: ", ")
         apiLogger.info("APIGateway initialized with providers: \(providerNames)")

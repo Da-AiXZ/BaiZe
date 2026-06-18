@@ -42,6 +42,12 @@ class AppState: ObservableObject {
     /// 当前使用的模型
     @Published var activeModel: String = BaizeAPI.defaultModel
 
+    /// 自定义 Provider 的端点 URL
+    @Published var customEndpoint: String = BaizeAPI.deepSeekEndpoint
+
+    /// 自定义 Provider 的模型名
+    @Published var customModel: String = "deepseek-chat"
+
     // MARK: - Shared Services (W22 fix: DI 注入点)
 
     /// Keychain 安全存储服务
@@ -125,6 +131,22 @@ class AppState: ObservableObject {
         }
     }
 
+    /// 持久化自定义端点和模型名到 UserDefaults
+    func persistCustomConfig() {
+        UserDefaults.standard.set(customEndpoint, forKey: BaizeAPI.customEndpointUDKey)
+        UserDefaults.standard.set(customModel, forKey: BaizeAPI.customModelUDKey)
+    }
+
+    /// 从 UserDefaults 恢复自定义端点和模型名
+    func restoreCustomConfig() {
+        if let endpoint = UserDefaults.standard.string(forKey: BaizeAPI.customEndpointUDKey) {
+            customEndpoint = endpoint
+        }
+        if let model = UserDefaults.standard.string(forKey: BaizeAPI.customModelUDKey) {
+            customModel = model
+        }
+    }
+
     // MARK: - Methods
 
     /// 打开文件（添加到 Tab 列表 + 设为选中）
@@ -187,12 +209,14 @@ enum APIProvider: String, CaseIterable, Codable {
     case openAI
     case anthropic
     case openRouter
+    case custom
 
     var displayName: String {
         switch self {
         case .openAI: return "OpenAI"
         case .anthropic: return "Anthropic"
         case .openRouter: return "OpenRouter"
+        case .custom: return "自定义 (OpenAI 兼容)"
         }
     }
 
@@ -202,6 +226,7 @@ enum APIProvider: String, CaseIterable, Codable {
         case .openAI: return "openai"
         case .anthropic: return "anthropic"
         case .openRouter: return "openrouter"
+        case .custom: return "custom"
         }
     }
 
@@ -210,6 +235,7 @@ enum APIProvider: String, CaseIterable, Codable {
         case .openAI: return BaizeAPI.openAIKeyKeychainKey
         case .anthropic: return BaizeAPI.anthropicKeyKeychainKey
         case .openRouter: return BaizeAPI.openRouterKeyKeychainKey
+        case .custom: return BaizeAPI.customProviderKeyKeychainKey
         }
     }
 }
