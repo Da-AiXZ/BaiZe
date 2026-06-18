@@ -98,6 +98,17 @@ struct ChatView: View {
             return
         }
 
+        // 同步 APIGateway 与 AppState — 确保发送消息时使用正确的 Provider 和模型
+        // 修复：setActiveProvider 是异步 Task，可能在用户发消息时还没执行完
+        do {
+            try await apiGateway.setActiveProvider(
+                providerId: appState.activeProvider.providerId,
+                model: appState.activeModel
+            )
+        } catch {
+            baizeLogger.error("Failed to sync APIGateway before message: \(error.localizedDescription)")
+        }
+
         let agentLoop = AgentLoop(
             apiGateway: apiGateway,
             toolRegistry: toolRegistry,

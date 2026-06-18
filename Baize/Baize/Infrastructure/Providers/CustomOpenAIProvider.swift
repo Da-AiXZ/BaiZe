@@ -43,7 +43,10 @@ struct CustomOpenAIProvider: LLMProvider {
                     }
 
                     let endpoint = self.getEndpoint()
-                    apiLogger.info("Custom provider: starting stream for model: \(model) at endpoint: \(endpoint)")
+                    // 使用 UserDefaults 中的模型名，而非 APIGateway 传入的参数
+                    // 修复：APIGateway 的 activeModel 可能还是默认值 "gpt-4.1"
+                    let actualModel = self.getModel()
+                    apiLogger.info("Custom provider: starting stream for model: \(actualModel) at endpoint: \(endpoint)")
 
                     let openAIMessages = messages.toOpenAIMergedFormat()
                     let openAITools = tools.isEmpty ? nil : tools.map { $0.toOpenAIFormat() }
@@ -53,7 +56,7 @@ struct CustomOpenAIProvider: LLMProvider {
                         apiKey: apiKey,
                         messages: openAIMessages,
                         tools: openAITools,
-                        model: model
+                        model: actualModel
                     )
 
                     let sseStream = SSEStream()
