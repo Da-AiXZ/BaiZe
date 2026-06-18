@@ -13,8 +13,7 @@ actor ConversationStore {
     private var storeDirectory: String
 
     /// Fallback 存储目录（App 沙箱 Documents 目录下）
-    /// nonisolated: 不可变属性，安全地从任何上下文访问（避免 actor 隔离 autoclosure 报错）
-    private nonisolated let fallbackStoreDirectory: String
+    private let fallbackStoreDirectory: String
 
     /// Fallback 路径是否为当前活跃路径
     private var isUsingFallback: Bool = false
@@ -45,7 +44,7 @@ actor ConversationStore {
                 try fileManager.ensureDirectoryExists(atPath: fallbackStoreDirectory)
                 self.storeDirectory = fallbackStoreDirectory
                 self.isUsingFallback = true
-                agentLogger.info("ConversationStore: using fallback directory: \(fallbackStoreDirectory)")
+                agentLogger.info("ConversationStore: using fallback directory: \(fallbackConv)")
             } catch {
                 agentLogger.error("ConversationStore: fallback directory creation also failed: \(error.localizedDescription)")
                 // 两个路径都失败，保持原路径（save 时会再尝试）
