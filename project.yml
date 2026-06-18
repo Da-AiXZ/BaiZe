@@ -29,6 +29,8 @@ targets:
       - path: Baize/Baize/Resources/monaco-editor
         type: folder
         buildPhase: resources
+      - path: Baize/Baize/Resources/ios_system
+        buildPhase: resources
     dependencies:
       - package: ios_system
         product: ios_system

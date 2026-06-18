@@ -54,6 +54,15 @@ class RuntimeExecutor: @unchecked Sendable {
         // （TrollStore no-sandbox 路径可能不存在，需 fallback 到沙箱路径）
         // ios_system 默认不限制路径，安全由 PermissionEngine 负责
         initializeEnvironment()
+
+        // 诊断：检查 ios_system 命令字典是否加载成功
+        // commandDictionary.plist 必须在 App Bundle 资源里
+        let cmdCount = commandsAsString()
+        let lsAvailable = ios_executable("ls")
+        runtimeLogger.info("ios_system initialized: \(cmdCount.split(separator: " ").count) commands available, ls executable=\(lsAvailable)")
+        if lsAvailable == 0 {
+            runtimeLogger.error("ios_system: 'ls' not found! commandDictionary.plist may be missing from App Bundle resources")
+        }
     }
 
     // MARK: - Shell Command Execution (ios_system)
