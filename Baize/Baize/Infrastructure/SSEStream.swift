@@ -105,10 +105,12 @@ struct SSEStream {
 
                     apiLogger.info("SSE stream completed: \(lineCount) lines, \(totalEventsYielded) events")
 
-                    // 如果没有任何 SSE 事件被解析出来，记录原始数据用于诊断
+                    // 如果没有任何 SSE 事件被解析出来，抛出包含原始数据的错误
+                    // 这样用户能看到 DeepSeek 到底返回了什么
                     if totalEventsYielded == 0 {
-                        let rawPreview = firstLinesLog.joined(separator: " | ")
+                        let rawPreview = firstLinesLog.joined(separator: "\n")
                         apiLogger.error("SSE: 0 events parsed from \(lineCount) lines. First lines: \(rawPreview)")
+                        throw BaizeError.apiError("SSE 流解析出 0 个事件（共 \(lineCount) 行）。DeepSeek 原始返回前 5 行:\n\(rawPreview)")
                     }
 
                     continuation.finish()

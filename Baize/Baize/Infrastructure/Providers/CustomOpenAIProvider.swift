@@ -71,8 +71,14 @@ struct CustomOpenAIProvider: LLMProvider {
                     var hasContent = false
                     var hasError = false
                     var errorDetail = ""
+                    var eventCount = 0
+                    var firstEventData = ""
 
                     for try await event in sseEvents {
+                        eventCount += 1
+                        if eventCount == 1 {
+                            firstEventData = event.data
+                        }
                         let chunks = OpenAICompatibleHelper.interpretSSEEvent(event)
                         for chunk in chunks {
                             // 检测错误响应
@@ -95,8 +101,13 @@ struct CustomOpenAIProvider: LLMProvider {
                         apiLogger.error("Custom provider: stream ended with API error: \(msg)")
                         continuation.finish(throwing: ProviderError.apiError("API 返回错误: \(msg)"))
                     } else if !hasContent {
-                        apiLogger.error("Custom provider: stream completed but no content (model=\(actualModel), endpoint=\(endpoint), tools=\(tools.count))")
-                        continuation.finish(throwing: ProviderError.apiError("API 返回了空响应。模型: \(actualModel), 端点: \(endpoint)。请检查模型名是否正确。"))
+                        apiLogger.error("Custom provider: stream completed but no content (model=\(actualModel), endpoint=\(endpoint), tools=\(tools.count), events=\(eventCount))")
+                        if eventCount > 0 {
+                            // 有事件但没 content — 说明 SSE 格式有问题，暴露第一个事件的数据
+                            continuation.finish(throwing: ProviderError.apiError("收到 \(eventCount) 个 SSE 事件但无内容。第一个事件数据: \(firstEventData.prefix(500))。模型: \(actualModel)"))
+                        } else {
+                            continuation.finish(throwing: ProviderError.apiError("API 返回了空响应（0 事件）。模型: \(actualModel), 端点: \(endpoint)"))
+                        }
                     } else {
                         continuation.finish()
                     }
