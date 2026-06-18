@@ -67,9 +67,11 @@ struct SettingsView: View {
     /// 运行时状态描述
     private var runtimeSubtitle: String {
         let fm = FileManager.default
-        let nodeExists = fm.fileExists(atPath: BaizePath.nodeBinary)
+        let bundlePath = Bundle.main.bundlePath
+        let nodeFrameworkPath = (bundlePath as NSString).appendingPathComponent("Frameworks/NodeMobile.framework")
+        let nodeFrameworkExists = fm.fileExists(atPath: nodeFrameworkPath)
         let pythonExists = fm.fileExists(atPath: BaizePath.pythonBinary)
-        return "Node.js \(nodeExists ? "✅" : "❌")  Python \(pythonExists ? "✅" : "❌")"
+        return "Node.js \(nodeFrameworkExists ? "✅" : "❌")  Python \(pythonExists ? "✅" : "❌")"
     }
 }
 
@@ -153,25 +155,56 @@ private struct SettingsDetail: View {
 /// 存储与运行时设置占位
 private struct StorageSettingsPlaceholder: View {
     var body: some View {
+        let fm = FileManager.default
+        let bundlePath = Bundle.main.bundlePath
+        let nodeFrameworkPath = (bundlePath as NSString).appendingPathComponent("Frameworks/NodeMobile.framework")
+        let nodeFrameworkExists = fm.fileExists(atPath: nodeFrameworkPath)
+        let bootstrapPath = Bundle.main.path(forResource: "bootstrap", ofType: "js", inDirectory: "nodejs")
+        let bootstrapExists = bootstrapPath != nil
+        let pythonExists = fm.fileExists(atPath: BaizePath.pythonBinary)
+
         Form {
             Section(header: Text("项目目录")) {
                 Text(BaizePath.projectRoot)
                     .font(.system(size: 13, design: .monospaced))
             }
 
-            Section(header: Text("运行时状态")) {
+            Section(header: Text("Node.js 运行时")) {
                 HStack {
-                    Text("Node.js")
+                    Text("NodeMobile.framework")
                     Spacer()
-                    Text(FileManager.default.fileExists(atPath: BaizePath.nodeBinary) ? "可用" : "不可用")
-                        .foregroundColor(FileManager.default.fileExists(atPath: BaizePath.nodeBinary) ? .green : .red)
+                    Text(nodeFrameworkExists ? "✅ 已嵌入" : "❌ 未找到")
+                        .foregroundColor(nodeFrameworkExists ? .green : .red)
                 }
+                HStack {
+                    Text("bootstrap.js")
+                    Spacer()
+                    Text(bootstrapExists ? "✅ 已找到" : "❌ 未找到")
+                        .foregroundColor(bootstrapExists ? .green : .red)
+                }
+                if let bsPath = bootstrapPath {
+                    Text("路径: \(bsPath)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+                Text("引擎端口: \(BaizeNode.enginePort)")
+                    .font(.system(size: 13))
+                    .foregroundColor(.secondary)
+            }
+
+            Section(header: Text("Python 运行时")) {
                 HStack {
                     Text("Python")
                     Spacer()
-                    Text(FileManager.default.fileExists(atPath: BaizePath.pythonBinary) ? "可用" : "不可用")
-                        .foregroundColor(FileManager.default.fileExists(atPath: BaizePath.pythonBinary) ? .green : .red)
+                    Text(pythonExists ? "✅ 可用" : "❌ 不可用 (placeholder)")
+                        .foregroundColor(pythonExists ? .green : .red)
                 }
+            }
+
+            Section(header: Text("App Bundle 路径")) {
+                Text(bundlePath)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.secondary)
             }
         }
         .navigationTitle("存储与运行时")
