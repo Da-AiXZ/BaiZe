@@ -27,6 +27,12 @@ actor AgentLoop {
     /// 是否正在运行 Agent Loop
     private var isRunning: Bool = false
 
+    /// 用户确认的挂起 continuation — .ask 决策时挂起等待用户确认
+    private var pendingContinuation: CheckedContinuation<Bool, Never>?
+
+    /// 标记是否已被取消（用于处理 cancellation 与 setPendingContinuation 的竞态）
+    private var isCancelled: Bool = false
+
     // MARK: - Initialization
 
     init(
@@ -70,6 +76,7 @@ actor AgentLoop {
                 }
 
                 do {
+                    isCancelled = false
                     isRunning = true
                     agentLogger.info("Agent Loop started: processing user message")
 
@@ -115,6 +122,12 @@ actor AgentLoop {
     /// 停止 Agent Loop
     func stop() {
         isRunning = false
+        isCancelled = true
+        // 清理挂起的确认 continuation，防止泄漏和悬挂
+        if let cont = pendingContinuation {
+            pendingContinuation = nil
+            cont.resume(returning: false)
+        }
         agentLogger.info("Agent Loop stopped by user")
     }
 
@@ -245,12 +258,35 @@ actor AgentLoop {
                         }
 
                     case .ask:
-                        // 需要用户确认
+                        // 需要用户确认 — 挂起等待用户在 UI 上确认
                         continuation.yield(.askConfirmation(toolCall, decision.reason))
-                        let deniedResult = ToolResult.denied(reason: decision.reason)
-                        continuation.yield(.denied(toolCall, decision.reason))
-                        session.messages.append(.toolResult(id: id, content: deniedResult.toToolResultContent()))
-                        consecutiveFailures += 1
+                        let allowed = await withTaskCancellationHandler {
+                            await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+                                Task { await self.setPendingContinuation(cont) }
+                            }
+                        } onCancel: {
+                            // Task 被取消时恢复挂起的 continuation，防止泄漏
+                            Task { await self.cancelPendingConfirmation() }
+                        }
+                        if allowed {
+                            // 用户允许 — 执行工具（与 .allow 路径一致）
+                            continuation.yield(.toolExecuting(toolCall))
+                            let result = await toolRegistry.execute(toolCall: toolCall, context: executionContext)
+                            continuation.yield(.toolResult(toolCall, result))
+                            session.messages.append(.toolResult(id: id, content: result.toToolResultContent()))
+                            if result.isError {
+                                consecutiveFailures += 1
+                                agentLogger.warning("Tool \(name) failed (\(consecutiveFailures)/\(maxConsecutiveFailures)): \(result.toToolResultContent())")
+                            } else {
+                                consecutiveFailures = 0
+                            }
+                        } else {
+                            // 用户拒绝
+                            let deniedResult = ToolResult.denied(reason: decision.reason)
+                            continuation.yield(.denied(toolCall, decision.reason))
+                            session.messages.append(.toolResult(id: id, content: deniedResult.toToolResultContent()))
+                            consecutiveFailures += 1
+                        }
 
                     case .deny:
                         // 直接拒绝
@@ -286,25 +322,41 @@ actor AgentLoop {
     // MARK: - User Confirmation (for .ask decisions)
 
     /// 用户确认工具调用 — 在 UI 层调用
+    /// 恢复挂起的 continuation，传入用户的确认结果
+    /// 工具的实际执行在 agentLoop 的 .ask 分支内完成（唤醒后执行）
     /// - Parameters:
-    ///   - toolCall: 需确认的工具调用
+    ///   - toolCall: 需确认的工具调用（用于日志验证）
     ///   - allowed: 用户是否允许
-    func confirmToolCall(toolCall: ToolCall, allowed: Bool) async -> ToolResult {
-        if allowed {
-            // W22 fix: 使用注入的共享服务，而非创建新实例
-            let executionContext = ToolExecutionContext(
-                projectPath: session.projectPath,
-                fileSystemService: fileSystemService,
-                runtimeExecutor: runtimeExecutor,
-                permissionEngine: permissionEngine
-            )
-            let result = await toolRegistry.execute(toolCall: toolCall, context: executionContext)
-            session.messages.append(.toolResult(id: toolCall.id, content: result.toToolResultContent()))
-            return result
+    func confirmToolCall(toolCall: ToolCall, allowed: Bool) async {
+        guard let cont = pendingContinuation else {
+            agentLogger.warning("confirmToolCall called but no pending continuation (tool: \(toolCall.name))")
+            return
+        }
+        pendingContinuation = nil
+        cont.resume(returning: allowed)
+    }
+
+    /// 设置挂起的 continuation — 由 withCheckedContinuation 内部调用
+    /// 通过独立 actor 方法确保 actor isolation 正确
+    /// 如果 task 已被取消（竞态：onCancel 先于 setPendingContinuation 执行），立即 resume
+    private func setPendingContinuation(_ cont: CheckedContinuation<Bool, Never>) {
+        if isCancelled {
+            cont.resume(returning: false)
         } else {
-            let result = ToolResult.denied(reason: "用户拒绝执行")
-            session.messages.append(.toolResult(id: toolCall.id, content: result.toToolResultContent()))
-            return result
+            self.pendingContinuation = cont
+        }
+    }
+
+    /// 取消挂起的确认 — 由 withTaskCancellationHandler 的 onCancel 调用
+    /// 处理两种情况：
+    /// 1. pendingContinuation 已设置 → 直接 resume(returning: false)
+    /// 2. pendingContinuation 尚未设置（竞态）→ 设置 isCancelled 标志，
+    ///    setPendingContinuation 检测到后立即 resume
+    private func cancelPendingConfirmation() {
+        isCancelled = true
+        if let cont = pendingContinuation {
+            pendingContinuation = nil
+            cont.resume(returning: false)
         }
     }
 }

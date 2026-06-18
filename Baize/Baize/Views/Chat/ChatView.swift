@@ -9,6 +9,7 @@ struct ChatView: View {
     @State private var inputText: String = ""
     @State private var isStreaming: Bool = false
     @State private var pendingConfirmation: PendingConfirmation?
+    @State private var agentLoop: AgentLoop?
     @State private var streamingText: String = ""
     @State private var hasReceivedAnyResponse: Bool = false
 
@@ -130,7 +131,7 @@ struct ChatView: View {
         let session = ConversationSession(projectPath: appState.currentProjectPath)
         baizeLogger.info("ChatView: session projectPath=\(session.projectPath)")
 
-        let agentLoop = AgentLoop(
+        let loop = AgentLoop(
             apiGateway: apiGateway,
             toolRegistry: toolRegistry,
             permissionEngine: permissionEngine,
@@ -140,8 +141,9 @@ struct ChatView: View {
             runtimeExecutor: runtimeExecutor,
             session: session
         )
+        self.agentLoop = loop
 
-        let eventStream = try await agentLoop.run(userMessage: userMessage)
+        let eventStream = try await loop.run(userMessage: userMessage)
 
         do {
             for try await event in eventStream {
@@ -271,12 +273,11 @@ struct ChatView: View {
 
     /// 处理权限确认结果
     private func handleConfirmation(allowed: Bool) {
+        guard let confirmation = pendingConfirmation else { return }
+        guard let loop = agentLoop else { return }
         pendingConfirmation = nil
-        // TODO: 在 T05 集成时，将确认结果传递给 AgentLoop
-        if allowed {
-            baizeLogger.info("User allowed tool execution")
-        } else {
-            baizeLogger.info("User denied tool execution")
+        Task {
+            await loop.confirmToolCall(toolCall: confirmation.toolCall, allowed: allowed)
         }
     }
 }
