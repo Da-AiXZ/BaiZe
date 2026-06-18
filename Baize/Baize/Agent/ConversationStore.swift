@@ -9,8 +9,14 @@ actor ConversationStore {
 
     // MARK: - Properties
 
-    /// 存储目录路径
-    private let storeDirectory: String
+    /// 存储目录路径（可能被切换到 fallback 路径）
+    private var storeDirectory: String
+
+    /// Fallback 存储目录（App 沙箱 Documents 目录下）
+    private let fallbackStoreDirectory: String
+
+    /// Fallback 路径是否为当前活跃路径
+    private var isUsingFallback: Bool = false
 
     /// FileManager 实例
     private let fileManager = FileManager.default
@@ -19,8 +25,31 @@ actor ConversationStore {
 
     init(storeDirectory: String = BaizePath.conversations) {
         self.storeDirectory = storeDirectory
-        // 确保存储目录存在
-        try? fileManager.ensureDirectoryExists(atPath: storeDirectory)
+
+        // 计算 fallback 路径：App 沙箱 Documents/Baize/.baize/conversations/
+        let docsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.path ?? ""
+        let fallbackRoot = (docsDir as NSString).appendingPathComponent("Baize")
+        let fallbackInternal = (fallbackRoot as NSString).appendingPathComponent(".baize")
+        let fallbackConv = (fallbackInternal as NSString).appendingPathComponent("conversations")
+        self.fallbackStoreDirectory = fallbackConv
+
+        // 尝试创建主路径目录
+        do {
+            try fileManager.ensureDirectoryExists(atPath: storeDirectory)
+            agentLogger.info("ConversationStore: primary directory created/verified: \(storeDirectory)")
+        } catch {
+            agentLogger.error("ConversationStore: primary directory creation failed: \(error.localizedDescription), trying fallback")
+            // 主路径失败，切到 fallback
+            do {
+                try fileManager.ensureDirectoryExists(atPath: fallbackStoreDirectory)
+                self.storeDirectory = fallbackStoreDirectory
+                self.isUsingFallback = true
+                agentLogger.info("ConversationStore: using fallback directory: \(fallbackStoreDirectory)")
+            } catch {
+                agentLogger.error("ConversationStore: fallback directory creation also failed: \(error.localizedDescription)")
+                // 两个路径都失败，保持原路径（save 时会再尝试）
+            }
+        }
     }
 
     // MARK: - Public API
@@ -28,6 +57,9 @@ actor ConversationStore {
     /// 保存对话会话到 JSON 文件
     /// - Parameter session: 对话会话
     func save(session: ConversationSession) throws {
+        // 确保目录存在（不静默吞错）
+        try ensureDirectoryWritable()
+
         let filePath = sessionFilePath(for: session.id)
 
         do {
@@ -45,10 +77,20 @@ actor ConversationStore {
     /// - Parameter id: 会话 UUID
     /// - Returns: 对话会话，不存在时返回 nil
     func load(id: UUID) -> ConversationSession? {
-        let filePath = sessionFilePath(for: id)
+        var filePath = sessionFilePath(for: id)
 
         guard fileManager.fileExists(atPath: filePath) else {
-            return nil
+            // 主路径找不到，尝试 fallback 路径
+            if !isUsingFallback {
+                let fallbackPath = (fallbackStoreDirectory as NSString).appendingPathComponent("\(id.uuidString).json")
+                if fileManager.fileExists(atPath: fallbackPath) {
+                    filePath = fallbackPath
+                } else {
+                    return nil
+                }
+            } else {
+                return nil
+            }
         }
 
         do {
@@ -67,7 +109,34 @@ actor ConversationStore {
     /// 列出所有对话会话（按更新时间排序）
     /// - Returns: ConversationSession 数组
     func listSessions() -> [ConversationSession] {
-        guard let files = try? fileManager.contentsOfDirectory(atPath: storeDirectory) else {
+        var sessions: [ConversationSession] = []
+
+        // 从当前存储目录读取
+        sessions.append(contentsOf: readSessions(from: storeDirectory))
+
+        // 如果不在 fallback 模式，也尝试从 fallback 目录读取（合并历史数据）
+        if !isUsingFallback {
+            sessions.append(contentsOf: readSessions(from: fallbackStoreDirectory))
+        }
+
+        // 去重（按 session id）
+        var seen = Set<UUID>()
+        sessions = sessions.filter { session in
+            if seen.contains(session.id) { return false }
+            seen.insert(session.id)
+            return true
+        }
+
+        // 按更新时间降序排序
+        sessions.sort { $0.updatedAt > $1.updatedAt }
+        return sessions
+    }
+
+    /// 从指定目录读取所有会话
+    /// - Parameter directory: 目录路径
+    /// - Returns: 该目录下的所有 ConversationSession
+    private func readSessions(from directory: String) -> [ConversationSession] {
+        guard let files = try? fileManager.contentsOfDirectory(atPath: directory) else {
             return []
         }
 
@@ -75,19 +144,24 @@ actor ConversationStore {
         var sessions: [ConversationSession] = []
 
         for fileName in jsonFiles {
-            let filePath = (storeDirectory as NSString).appendingPathComponent(fileName)
+            let filePath = (directory as NSString).appendingPathComponent(fileName)
             let idString = fileName.replacingOccurrences(of: ".json", with: "")
             let id = UUID(uuidString: idString)
 
             if let id = id {
-                if let session = load(id: id) {
+                // 读取文件
+                do {
+                    let data = try Data(contentsOf: URL(fileURLWithPath: filePath))
+                    let decoder = JSONDecoder()
+                    decoder.dateDecodingStrategy = .iso8601
+                    let session = try decoder.decode(ConversationSession.self, from: data)
                     sessions.append(session)
+                } catch {
+                    agentLogger.error("Failed to load session \(idString): \(error.localizedDescription)")
                 }
             }
         }
 
-        // 按更新时间降序排序
-        sessions.sort { $0.updatedAt > $1.updatedAt }
         return sessions
     }
 
@@ -124,6 +198,27 @@ actor ConversationStore {
     }
 
     // MARK: - Private Helpers
+
+    /// 确保存储目录可写 — 如果主路径不可用则切换到 fallback
+    /// - Throws: 目录创建失败时抛出错误
+    private func ensureDirectoryWritable() throws {
+        // 如果已经在用 fallback，确保 fallback 目录存在
+        if isUsingFallback {
+            try fileManager.ensureDirectoryExists(atPath: storeDirectory)
+            return
+        }
+
+        // 尝试确保主路径存在
+        do {
+            try fileManager.ensureDirectoryExists(atPath: storeDirectory)
+        } catch {
+            // 主路径失败，切到 fallback
+            agentLogger.error("ConversationStore: primary path failed at save time, switching to fallback: \(error.localizedDescription)")
+            try fileManager.ensureDirectoryExists(atPath: fallbackStoreDirectory)
+            storeDirectory = fallbackStoreDirectory
+            isUsingFallback = true
+        }
+    }
 
     /// 会话文件路径（UUID.json）
     private func sessionFilePath(for id: UUID) -> String {
