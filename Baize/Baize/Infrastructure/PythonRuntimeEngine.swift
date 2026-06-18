@@ -4,14 +4,19 @@ import Foundation
 ///
 /// App 启动时调一次 start()，在后台线程执行：
 /// 1. setenv PYTHONHOME / PYTHONPATH / PYTHONDONTWRITEBYTECODE
-/// 2. Py_Initialize()
+/// 2. Py_InitializeFromConfig()（install_signal_handlers=0，避免覆盖 V8 信号处理器）
 /// 3. PyRun_SimpleString(bootstrap.py 代码)
 ///
 /// bootstrap.py 启动 http.server 监听 127.0.0.1:48214，阻塞后台线程。
 /// 后续所有 executeScript() 通过 HTTP POST 复用同一 Python 实例。
 ///
-/// @warning Py_Initialize() 整个 App 生命周期只能调用一次，不支持重启。
+/// @warning Py_InitializeFromConfig() 整个 App 生命周期只能调用一次，不支持重启。
 ///          若引擎崩溃则需重启 App。
+///
+/// @note P3 fix: 使用 PyConfig(install_signal_handlers=0) 替代裸 Py_Initialize()。
+///       根因：Py_Initialize() 默认安装 Python 信号处理器，覆盖 Node.js V8 已注册的
+///       信号处理器，导致 V8 后续访问全局状态时 EXC_BAD_ACCESS 崩溃。
+///       参见 https://docs.python.org/3/c-api/init_config.html
 final class PythonRuntimeEngine: @unchecked Sendable {
 
     // MARK: - Properties
@@ -50,7 +55,7 @@ final class PythonRuntimeEngine: @unchecked Sendable {
     ///
     /// 流程：
     /// 1. 配置 PYTHONHOME / PYTHONPATH / PYTHONDONTWRITEBYTECODE
-    /// 2. 在 2MB 栈后台线程调用 Py_Initialize()
+    /// 2. 在 2MB 栈后台线程调用 Py_InitializeFromConfig()（install_signal_handlers=0）
     /// 3. 读取 bootstrap.py 内容，调用 PyRun_SimpleString() 执行
     /// 4. bootstrap.py 启动 http.server，阻塞后台线程
     func start() {
@@ -83,15 +88,45 @@ final class PythonRuntimeEngine: @unchecked Sendable {
 
         // 3. 在 2MB 栈后台线程启动 Python
         let thread = Thread { [weak self] in
-            runtimeLogger.info("Python engine thread starting...")
+            runtimeLogger.info("Python engine thread started — stackSize=\(Thread.current.stackSize) bytes, QoS=\(Thread.current.qualityOfService)")
 
-            // 初始化 Python 解释器
-            Py_Initialize()
-            runtimeLogger.info("Python interpreter initialized (Py_Initialize done)")
+            // ── 诊断：读回环境变量确认（setenv 在主线程执行，子线程应可见）──
+            let homeVerify = getenv("PYTHONHOME").map { String(cString: $0) } ?? "(not set)"
+            let pathVerify = getenv("PYTHONPATH").map { String(cString: $0) } ?? "(not set)"
+            let dontWriteVerify = getenv("PYTHONDONTWRITEBYTECODE").map { String(cString: $0) } ?? "(not set)"
+            runtimeLogger.info("Env readback — PYTHONHOME=\(homeVerify), PYTHONPATH=\(pathVerify), PYTHONDONTWRITEBYTECODE=\(dontWriteVerify)")
 
-            // 执行 bootstrap.py — 启动 HTTP server（阻塞调用）
+            // ── P3 fix: 使用 PyConfig(install_signal_handlers=0) 初始化 Python ──
+            // 根因：Py_Initialize() 默认 install_signal_handlers=1，会覆盖 Node.js V8
+            //       已注册的信号处理器，导致 V8 后续 EXC_BAD_ACCESS 崩溃。
+            // 修复：PyConfig_InitPythonConfig 保留环境变量支持（PYTHONHOME via setenv 生效），
+            //       同时设 install_signal_handlers=0 不覆盖 V8 信号处理器。
+            var config = PyConfig()
+            PyConfig_InitPythonConfig(&config)
+            config.install_signal_handlers = 0
+
+            runtimeLogger.info("about to init python with install_signal_handlers=0 (Py_InitializeFromConfig)")
+
+            let status = Py_InitializeFromConfig(&config)
+            PyConfig_Clear(&config)
+
+            if PyStatus_Exception(status) != 0 {
+                let errMsg = status.err_msg.map { String(cString: $0) } ?? "(no error message)"
+                runtimeLogger.error("Py_InitializeFromConfig FAILED: \(errMsg), exitcode=\(status.exitcode)")
+                self?.startLock.lock()
+                self?.isStarted = false
+                self?.startLock.unlock()
+                return
+            }
+
+            runtimeLogger.info("python initialized, status OK (install_signal_handlers=0)")
+
+            // ── 执行 bootstrap.py — 启动 HTTP server（阻塞调用）──
             // PyRun_SimpleString 返回 0 表示成功，-1 表示异常
+            runtimeLogger.info("about to run bootstrap.py (PyRun_SimpleString)")
             let result = PyRun_SimpleString(bootstrapCode)
+            runtimeLogger.info("bootstrap.py executed, result=\(result)")
+
             if result != 0 {
                 runtimeLogger.error("bootstrap.py execution failed (PyRun_SimpleString returned \(result))")
             }
@@ -132,6 +167,11 @@ final class PythonRuntimeEngine: @unchecked Sendable {
         setenv("PYTHONDONTWRITEBYTECODE", "1", 1)
 
         runtimeLogger.info("PYTHONHOME=\(pythonHome), PYTHONPATH=\(appPath)")
+
+        // 诊断：读回环境变量确认 setenv 生效
+        let homeCheck = getenv("PYTHONHOME").map { String(cString: $0) } ?? "(not set)"
+        let pathCheck = getenv("PYTHONPATH").map { String(cString: $0) } ?? "(not set)"
+        runtimeLogger.info("Env verify — PYTHONHOME=\(homeCheck), PYTHONPATH=\(pathCheck)")
     }
 
     // MARK: - Script Execution

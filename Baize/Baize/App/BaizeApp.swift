@@ -161,11 +161,19 @@ struct BaizeApp: App {
                     Task {
                         // 等 App 完全启动（framework 加载完成 + UI 就绪）
                         try? await Task.sleep(nanoseconds: 1_000_000_000) // 1s
-                        baizeLogger.info("Starting Node.js engine (deferred)...")
-                        nodeRuntimeEngine.start()
 
-                        // Node 引擎启动后再等 2 秒启动 Python，避免资源竞争
-                        try? await Task.sleep(nanoseconds: 2_000_000_000) // 2s
+                        if BaizeRuntime.pythonIsolationTest {
+                            // P3 隔离测试模式：跳过 Node.js，直接启动 Python
+                            // 用于真机验证 Python 单独是否崩溃（排除 V8 干扰）
+                            baizeLogger.info("Python isolation test mode — skipping Node.js startup")
+                        } else {
+                            baizeLogger.info("Starting Node.js engine (deferred)...")
+                            nodeRuntimeEngine.start()
+
+                            // Node 引擎启动后再等 2 秒启动 Python，避免资源竞争
+                            try? await Task.sleep(nanoseconds: 2_000_000_000) // 2s
+                        }
+
                         baizeLogger.info("Starting Python engine (deferred)...")
                         pythonRuntimeEngine.start()
                     }

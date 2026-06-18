@@ -344,6 +344,12 @@ enum BaizeRuntime {
 
     /// 工具执行结果截断提示
     static let truncationNotice = "\n... (结果已截断，共 {total} 字符)"
+
+    /// Python 隔离测试开关（P3 调试用）
+    /// - false（默认）：正常双引擎模式，先启动 Node.js 再启动 Python
+    /// - true：只启动 Python 不启动 Node，用于真机验证 Python 单独是否崩溃
+    /// 用户真机验证时可临时改为 true 重新编译，确认 Python 单独能跑后再改回 false
+    static let pythonIsolationTest = false
 }
 
 // MARK: - Node Engine Configuration
