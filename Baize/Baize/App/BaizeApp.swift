@@ -36,6 +36,9 @@ struct BaizeApp: App {
     /// Runtime Executor
     private let runtimeExecutor: RuntimeExecutor
 
+    /// Node.js Runtime Engine (nodejs-mobile 进程内运行时)
+    private let nodeRuntimeEngine: NodeRuntimeEngine
+
     // MARK: - Initialization
 
     init() {
@@ -45,13 +48,17 @@ struct BaizeApp: App {
         let workingRoot = BaizeApp.resolveWorkingDirectory()
 
         let fsService = FileSystemService(rootPath: workingRoot)
-        let runtime = RuntimeExecutor()
+        let nodeEngine = NodeRuntimeEngine()
+        nodeEngine.start()
+        let nodeStrategy = NodeMobileStrategy(engine: nodeEngine)
+        let pythonStrategy = PythonSpawnStrategy()
+        let runtime = RuntimeExecutor(nodeStrategy: nodeStrategy, pythonStrategy: pythonStrategy)
         let permission = PermissionEngine(mode: BaizePermission.defaultMode)
         let projectCtx = ProjectContext(rootPath: workingRoot, fileSystemService: fsService)
         let contextMgr = ContextManager(projectContext: projectCtx)
         let conversation = ConversationStore()
         let api = APIGateway(keychainService: keychain)
-        let registry = ToolRegistry(fileSystemService: fsService, runtimeExecutor: runtime)
+        let registry = ToolRegistry(fileSystemService: fsService, runtimeExecutor: runtime, nodeEngine: nodeEngine)
 
         self.keychainService = keychain
         self.apiGateway = api
@@ -62,6 +69,7 @@ struct BaizeApp: App {
         self.conversationStore = conversation
         self.fileSystemService = fsService
         self.runtimeExecutor = runtime
+        self.nodeRuntimeEngine = nodeEngine
 
         // W22 fix: 将所有服务实例注入 AppState，供 ChatView 等视图共享
         _appState = StateObject(wrappedValue: {

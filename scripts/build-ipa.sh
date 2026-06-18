@@ -33,7 +33,8 @@ cp -r "$APP_PATH" "$OUTPUT_DIR/ipa/Payload/"
 
 # 3. Insert runtime binaries into Frameworks/
 mkdir -p "$OUTPUT_DIR/ipa/Payload/$PRODUCT_NAME.app/Frameworks"
-for binary in node python3; do
+# Python3 is still a standalone binary (placeholder for future CPython integration)
+for binary in python3; do
     if [ -f "Baize/Baize/Frameworks/$binary" ]; then
         cp "Baize/Baize/Frameworks/$binary" "$OUTPUT_DIR/ipa/Payload/$PRODUCT_NAME.app/Frameworks/"
         echo "✅ Copied $binary to Frameworks/"
@@ -128,6 +129,24 @@ rm -rf "$XCFW_TMPDIR"
 trap - EXIT
 
 echo "✅ All ios_system runtime dependencies embedded"
+
+# 3c. Ensure NodeMobile.framework is embedded
+# Declared as embed:true in project.yml, Xcode should embed it during archive.
+# Verify and fallback-copy from source if missing.
+NODEMOBILE_FW_APP="$OUTPUT_DIR/ipa/Payload/$PRODUCT_NAME.app/Frameworks/NodeMobile.framework"
+if [ ! -d "$NODEMOBILE_FW_APP" ]; then
+    echo "⚠️ NodeMobile.framework not found in .app, copying from source..."
+    if [ -d "Baize/Baize/Frameworks/NodeMobile.framework" ]; then
+        cp -r "Baize/Baize/Frameworks/NodeMobile.framework" "$FRAMEWORKS_DIR/"
+        echo "✅ Copied NodeMobile.framework to Frameworks/"
+    else
+        echo "❌ ERROR: NodeMobile.framework not found in source!"
+        echo "   Run scripts/download-runtime.sh first."
+        exit 1
+    fi
+else
+    echo "✅ NodeMobile.framework already embedded by Xcode"
+fi
 
 # 4. Fakesign main executable WITH entitlements (W14 fix: sign executable, not IPA)
 # ldid 2.1.5+ assertion fix: strip Xcode's signature first, then fakesign

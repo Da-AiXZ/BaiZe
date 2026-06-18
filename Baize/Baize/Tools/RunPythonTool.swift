@@ -1,12 +1,12 @@
 import Foundation
 
-/// 运行 Python 脚本工具 — 通过 CPython 3.13+ iOS 嵌入模式执行 Python 脚本
+/// 运行 Python 脚本工具 — ⚠️ placeholder（Python 运行时暂未集成）
 /// 破坏性工具，权限引擎需要 ask
-/// 执行流程：写入临时 .py 文件 → posix_spawn python3 → 收集输出 → 清理临时文件
+/// 当前：posix_spawn placeholder binary → 后续将集成 CPython iOS 嵌入模式
 struct RunPythonTool: Tool {
 
     let name = "run_python"
-    let description = "运行 Python 脚本。将 Python 代码写入临时文件，通过 CPython 3.13+ iOS 嵌入模式执行，返回 stdout 和 stderr 输出。适用于数据分析、脚本自动化、机器学习推理等。"
+    let description = "运行 Python 脚本。⚠️ Python 运行时暂未集成，当前为 placeholder。后续将通过 CPython iOS 嵌入模式执行 Python 代码，返回 stdout 和 stderr 输出。"
     let isReadOnly = false
     let isDestructive = true
 

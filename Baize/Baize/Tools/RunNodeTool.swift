@@ -1,12 +1,12 @@
 import Foundation
 
-/// 运行 Node.js 脚本工具 — 通过 nodejs-mobile (--jitless) 执行 JS 脚本
+/// 运行 Node.js 脚本工具 — 通过 nodejs-mobile 进程内 Node.js 运行时执行 JS 脚本
 /// 破坏性工具，权限引擎需要 ask
-/// 执行流程：写入临时 .js 文件 → posix_spawn node --jitless → 收集输出 → 清理临时文件
+/// 执行流程：RuntimeExecutor → NodeMobileStrategy → NodeRuntimeEngine → HTTP POST /execute → vm.runInThisContext
 struct RunNodeTool: Tool {
 
     let name = "run_node"
-    let description = "运行 Node.js 脚本。将 JavaScript 代码写入临时文件，通过 nodejs-mobile (--jitless V8 解释模式) 执行，返回 stdout 和 stderr 输出。适用于运行前端构建工具、测试脚本、数据处理等。"
+    let description = "运行 Node.js 脚本。通过 nodejs-mobile 进程内 Node.js 运行时（v18.20.4）执行 JavaScript 代码，支持 require/process/console 等 Node.js 全局 API，返回 stdout 和 stderr 输出。适用于运行构建工具、测试脚本、数据处理等。"
     let isReadOnly = false
     let isDestructive = true
 

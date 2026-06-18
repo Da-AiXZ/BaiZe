@@ -31,11 +31,16 @@ targets:
         buildPhase: resources
       - path: Baize/Baize/Resources/ios_system
         buildPhase: resources
+      - path: Baize/Baize/Resources/nodejs
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: ios_system
         product: ios_system
       - package: KeychainAccess
         product: KeychainAccess
+      - framework: Baize/Baize/Frameworks/NodeMobile.framework
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.baize.app
@@ -52,5 +57,7 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         SUPPORTS_MACCATALYST: NO
         ENABLE_PREVIEWS: NO
+        SWIFT_OBJC_BRIDGING_HEADER: Baize/Baize/Infrastructure/Baize-Bridging-Header.h
+        ENABLE_BITCODE: NO
     entitlements:
       path: Baize/Baize/Baize.entitlements

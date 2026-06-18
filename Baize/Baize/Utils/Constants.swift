@@ -346,6 +346,26 @@ enum BaizeRuntime {
     static let truncationNotice = "\n... (结果已截断，共 {total} 字符)"
 }
 
+// MARK: - Node Engine Configuration
+
+/// Node.js 引擎配置（nodejs-mobile 进程内执行）
+enum BaizeNode {
+    /// HTTP server 监听端口（127.0.0.1）
+    static let enginePort = 48213
+
+    /// 引擎启动等待超时（秒）— App 启动后等待 Node HTTP server 就绪的最长时间
+    static let startupWaitTimeout: TimeInterval = 15.0
+
+    /// 健康检查轮询间隔（毫秒）
+    static let healthCheckIntervalMs: UInt64 = 200
+
+    /// bootstrap.js 在 App Bundle 中的目录名
+    static let bootstrapResourceDir = "nodejs"
+
+    /// bootstrap.js 文件名（不含扩展名）
+    static let bootstrapFileName = "bootstrap"
+}
+
 // MARK: - Permission Defaults
 
 /// 权限引擎默认配置
