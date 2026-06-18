@@ -49,8 +49,9 @@ class RuntimeExecutor: @unchecked Sendable {
 
         // 初始化 ios_system 环境（安全可重入，多次调用无害）
         // ios_system 将 70+ Unix 命令编译为进程内函数，无需 fork()
+        // ios_setMiniRoot 设置沙箱根目录，禁止 cd 到此目录之上
         initializeEnvironment()
-        ios_setMiniRoot(BaizePath.projectRoot as NSString)
+        _ = ios_setMiniRoot(BaizePath.projectRoot)
     }
 
     // MARK: - Shell Command Execution (ios_system)
