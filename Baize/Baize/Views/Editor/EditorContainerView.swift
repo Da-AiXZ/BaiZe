@@ -36,6 +36,8 @@ struct EditorContainerView: View {
     /// W5 fix: 将共享 FileSystemService 注入 EditorState
     private func setupMonacoBridge() {
         editorState.monacoBridge = monacoBridge
+        // BugFix: 将 MonacoBridge 共享到 AppState，供设置页诊断面板读取
+        appState.monacoBridge = monacoBridge
         // W5 fix: 注入共享 FileSystemService 到 EditorState
         editorState.fileSystemService = appState.fileSystemService ?? FileSystemService(rootPath: appState.currentProjectPath)
 

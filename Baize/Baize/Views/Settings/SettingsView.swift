@@ -105,7 +105,8 @@ struct SettingsView: View {
         let nodeFrameworkExists = fm.fileExists(atPath: nodeFrameworkPath)
         let pythonFrameworkPath = (bundlePath as NSString).appendingPathComponent("Frameworks/Python.framework")
         let pythonFrameworkExists = fm.fileExists(atPath: pythonFrameworkPath)
-        return "Node.js \(nodeFrameworkExists ? "✅" : "❌")  Python \(pythonFrameworkExists ? "✅" : "❌")"
+        let monacoHtmlExists = Bundle.main.path(forResource: "index", ofType: "html", inDirectory: "monaco-editor") != nil
+        return "Node \(nodeFrameworkExists ? "✅" : "❌")  Python \(pythonFrameworkExists ? "✅" : "❌")  Monaco \(monacoHtmlExists ? "✅" : "❌")"
     }
 }
 
@@ -262,12 +263,25 @@ private struct StorageSettingsPlaceholder: View {
     /// Python 引擎诊断状态（由 Timer 每 0.5 秒刷新）
     @State private var diagnostic: PythonDiagnosticState = PythonDiagnosticState()
 
-    /// 引擎状态对应的颜色
+    /// Monaco 编辑器诊断状态（由 Timer 每 0.5 秒刷新）
+    @State private var monacoDiagnostic: MonacoDiagnosticState = MonacoDiagnosticState()
+
+    /// Python 引擎状态对应的颜色
     private var statusColor: Color {
         switch diagnostic.status {
         case .started: return .green
         case .failed: return .red
         case .starting, .notStarted: return .orange
+        }
+    }
+
+    /// Monaco 编辑器状态对应的颜色
+    private var monacoStatusColor: Color {
+        switch monacoDiagnostic.status {
+        case .loaded: return .green
+        case .failed: return .red
+        case .loading: return .orange
+        case .notLoaded: return .gray
         }
     }
 
@@ -393,6 +407,95 @@ private struct StorageSettingsPlaceholder: View {
                 }
             }
 
+            // Monaco 编辑器诊断面板 — 显示 WebView 加载状态和资源检查结果
+            // 用户无需 Mac/Console.app 即可在 iPad 上查看 Monaco 编辑器诊断
+            Section(header: Text("Monaco 编辑器诊断")) {
+                // 加载状态
+                HStack {
+                    Text("加载状态")
+                    Spacer()
+                    Text(monacoDiagnostic.status.rawValue)
+                        .foregroundColor(monacoStatusColor)
+                        .fontWeight(.medium)
+                }
+
+                // min/vs/loader.js 存在性
+                HStack {
+                    Text("min/vs/loader.js")
+                    Spacer()
+                    Text(monacoDiagnostic.loaderExists ? "✅ 存在" : "❌ 缺失")
+                        .foregroundColor(monacoDiagnostic.loaderExists ? .green : .red)
+                }
+
+                // 编辑器就绪状态
+                HStack {
+                    Text("编辑器就绪")
+                    Spacer()
+                    Text(monacoDiagnostic.editorReady ? "✅ 是" : "❌ 否")
+                        .foregroundColor(monacoDiagnostic.editorReady ? .green : .red)
+                }
+
+                // 加载耗时
+                if let duration = monacoDiagnostic.loadDurationMs {
+                    HStack {
+                        Text("加载耗时")
+                        Spacer()
+                        Text("\(duration) ms")
+                            .font(.system(size: 13, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                // 导航完成次数
+                HStack {
+                    Text("导航完成次数")
+                    Spacer()
+                    Text("\(monacoDiagnostic.navigationCount)")
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+
+                // index.html 路径
+                if let htmlPath = monacoDiagnostic.htmlPath {
+                    Text("HTML: \(htmlPath)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("HTML: ❌ 未找到 index.html")
+                        .font(.system(size: 11))
+                        .foregroundColor(.red)
+                }
+
+                // 当前选中文件
+                if let selected = monacoDiagnostic.selectedFilePath {
+                    Text("选中文件: \(selected)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("选中文件: 无")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+
+                // 最后一条错误
+                if let err = monacoDiagnostic.lastError {
+                    Text("错误: \(err)")
+                        .font(.system(size: 11))
+                        .foregroundColor(.red)
+                }
+
+                // 重新加载编辑器按钮
+                Button(action: {
+                    appState.monacoBridge?.reloadEditor()
+                }) {
+                    HStack {
+                        Image(systemName: "arrow.clockwise")
+                        Text("重新加载编辑器")
+                    }
+                }
+                .disabled(appState.monacoBridge == nil)
+            }
+
             Section(header: Text("App Bundle 路径")) {
                 Text(bundlePath)
                     .font(.system(size: 11, design: .monospaced))
@@ -401,9 +504,11 @@ private struct StorageSettingsPlaceholder: View {
         }
         .onAppear {
             diagnostic = appState.pythonRuntimeEngine?.getDiagnostic() ?? PythonDiagnosticState()
+            monacoDiagnostic = appState.monacoBridge?.getDiagnostic() ?? MonacoDiagnosticState()
         }
         .onReceive(Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()) { _ in
             diagnostic = appState.pythonRuntimeEngine?.getDiagnostic() ?? PythonDiagnosticState()
+            monacoDiagnostic = appState.monacoBridge?.getDiagnostic() ?? MonacoDiagnosticState()
         }
     }
 }

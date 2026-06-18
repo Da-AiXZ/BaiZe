@@ -1,6 +1,39 @@
 import SwiftUI
 import WebKit
 
+// MARK: - Monaco Diagnostic State
+
+/// Monaco 编辑器诊断状态 — 供设置页诊断面板读取
+/// 记录 WebView 加载状态、资源检查结果、错误信息等
+struct MonacoDiagnosticState {
+    /// WebView 加载状态
+    enum LoadStatus: String {
+        case notLoaded = "未加载"
+        case loading = "加载中"
+        case loaded = "已加载"
+        case failed = "加载失败"
+    }
+
+    /// 加载状态
+    var status: LoadStatus = .notLoaded
+    /// index.html 在 Bundle 中的路径
+    var htmlPath: String? = nil
+    /// min/vs/loader.js 是否存在于 Bundle 中
+    var loaderExists: Bool = false
+    /// 最后一条 JS 错误（来自 window.onerror 或 error 消息通道）
+    var lastError: String? = nil
+    /// 当前选中的文件路径
+    var selectedFilePath: String? = nil
+    /// Monaco Editor 是否已就绪（收到 editorReady 消息）
+    var editorReady: Bool = false
+    /// 加载开始时间（用于计算耗时）
+    var loadStartTime: Date? = nil
+    /// 加载耗时（毫秒）
+    var loadDurationMs: Int? = nil
+    /// WebView 导航完成次数
+    var navigationCount: Int = 0
+}
+
 /// Monaco Editor WKWebView ↔ Swift 双向桥接
 /// 通过 WKScriptMessageHandler 接收 JS 事件（内容变更、保存）
 /// 通过 evaluateJavaScript 向 Monaco 发送指令（打开文件、设置语言等）
@@ -27,6 +60,22 @@ class MonacoBridge: NSObject, ObservableObject, WKScriptMessageHandler, WKNaviga
 
     /// Monaco Editor 是否已加载完成
     @Published var isEditorLoaded: Bool = false
+
+    // MARK: - Diagnostic State
+
+    /// 诊断状态（主线程读写，无需加锁）
+    private var diagnostic = MonacoDiagnosticState()
+
+    /// 获取当前诊断状态快照
+    func getDiagnostic() -> MonacoDiagnosticState {
+        return diagnostic
+    }
+
+    /// 更新诊断面板中显示的选中文件路径
+    /// - Parameter path: 当前选中的文件路径（nil 表示无选中）
+    func updateSelectedFilePath(_ path: String?) {
+        diagnostic.selectedFilePath = path
+    }
 
     // MARK: - Initialization
 
@@ -66,17 +115,50 @@ class MonacoBridge: NSObject, ObservableObject, WKScriptMessageHandler, WKNaviga
     /// 加载 Monaco Editor HTML 页面
     /// 从 App Bundle 加载 monaco-editor/index.html，允许读取整个 monaco-editor 目录
     func loadEditor() {
-        guard let webView = webView else { return }
+        // 重置诊断状态
+        diagnostic.status = .loading
+        diagnostic.editorReady = false
+        diagnostic.lastError = nil
+        diagnostic.loadStartTime = Date()
+        diagnostic.loadDurationMs = nil
+
+        // 检查 WebView 是否已创建
+        guard let webView = webView else {
+            diagnostic.status = .failed
+            diagnostic.lastError = "WebView 未初始化（createWebView 尚未被调用）"
+            uiLogger.error("Monaco: WebView not initialized — createWebView() not called yet")
+            return
+        }
+
+        // 检查 min/vs/loader.js 是否存在于 Bundle 中
+        let loaderPath = Bundle.main.path(forResource: "loader", ofType: "js", inDirectory: "\(BaizePath.monacoResources)/min/vs")
+        diagnostic.loaderExists = (loaderPath != nil)
+        if !diagnostic.loaderExists {
+            uiLogger.error("Monaco: min/vs/loader.js NOT found in bundle — Monaco AMD loader will fail")
+            // 不在此处直接标记 failed，让 WKWebView 尝试加载后由 error handler 捕获
+        } else {
+            uiLogger.info("Monaco: min/vs/loader.js found at \(loaderPath!)")
+        }
 
         // 从 App Bundle 加载 Monaco Editor 资源
         if let htmlPath = Bundle.main.path(forResource: "index", ofType: "html", inDirectory: BaizePath.monacoResources) {
+            diagnostic.htmlPath = htmlPath
             let htmlURL = URL(fileURLWithPath: htmlPath)
             // allowingReadAccessTo 设为 monaco-editor 目录，使 Monaco AMD loader 能加载 min/vs/ 下的文件
             webView.loadFileURL(htmlURL, allowingReadAccessTo: htmlURL.deletingLastPathComponent())
             uiLogger.info("Loading Monaco Editor from bundle: \(htmlPath)")
         } else {
+            diagnostic.status = .failed
+            diagnostic.lastError = "index.html 未在 Bundle 中找到（搜索目录: \(BaizePath.monacoResources)）"
             uiLogger.error("Monaco Editor resources not found in bundle — index.html missing from \(BaizePath.monacoResources)")
         }
+    }
+
+    /// 重新加载编辑器（诊断面板的"重新加载"按钮调用）
+    func reloadEditor() {
+        uiLogger.info("Monaco: manually reloading editor...")
+        isEditorLoaded = false
+        loadEditor()
     }
 
     // MARK: - Editor Operations
@@ -89,6 +171,7 @@ class MonacoBridge: NSObject, ObservableObject, WKScriptMessageHandler, WKNaviga
     func openFile(path: String, content: String) {
         currentFilePath = path
         currentContent = content
+        diagnostic.selectedFilePath = path
 
         let language = languageForFile(path: path)
         let escapedContent = escapeForJavaScript(content)
@@ -96,13 +179,21 @@ class MonacoBridge: NSObject, ObservableObject, WKScriptMessageHandler, WKNaviga
         // 如果编辑器尚未加载，延迟执行
         if !isEditorLoaded {
             uiLogger.debug("Monaco: editor not ready, deferring openFile for \(path.fileName)")
+            diagnostic.lastError = "编辑器尚未就绪，文件 '\(path.fileName)' 将在加载完成后自动打开"
             Task { @MainActor in
-                // 等待编辑器加载完成，最多 5 秒
-                for _ in 0..<50 {
+                // 等待编辑器加载完成，最多 10 秒（从 5 秒增加到 10 秒）
+                for _ in 0..<100 {
                     if self.isEditorLoaded { break }
                     try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
                 }
-                self.evaluateJavaScript("monacoOpenFile('\(escapedContent)', '\(language)')")
+                if self.isEditorLoaded {
+                    self.diagnostic.lastError = nil
+                    self.evaluateJavaScript("monacoOpenFile('\(escapedContent)', '\(language)')")
+                } else {
+                    self.diagnostic.status = .failed
+                    self.diagnostic.lastError = "编辑器加载超时（10秒），无法打开文件 '\(path.fileName)'"
+                    uiLogger.error("Monaco: editor load timeout — cannot open \(path.fileName)")
+                }
             }
         } else {
             evaluateJavaScript("monacoOpenFile('\(escapedContent)', '\(language)')")
@@ -214,12 +305,23 @@ class MonacoBridge: NSObject, ObservableObject, WKScriptMessageHandler, WKNaviga
         case "editorReady":
             Task { @MainActor in
                 self.isEditorLoaded = true
-                uiLogger.info("Monaco Editor loaded and ready")
+                self.diagnostic.status = .loaded
+                self.diagnostic.editorReady = true
+                if let start = self.diagnostic.loadStartTime {
+                    self.diagnostic.loadDurationMs = Int(Date().timeIntervalSince(start) * 1000)
+                }
+                uiLogger.info("Monaco Editor loaded and ready (took \(self.diagnostic.loadDurationMs ?? -1)ms)")
             }
 
         case "error":
             if let errorMsg = body as? String {
-                uiLogger.error("Monaco JS error: \(errorMsg)")
+                Task { @MainActor in
+                    self.diagnostic.lastError = errorMsg
+                    if self.diagnostic.status != .loaded {
+                        self.diagnostic.status = .failed
+                    }
+                    uiLogger.error("Monaco JS error: \(errorMsg)")
+                }
             }
 
         default:
@@ -293,7 +395,8 @@ class MonacoBridge: NSObject, ObservableObject, WKScriptMessageHandler, WKNaviga
 extension MonacoBridge {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         Task { @MainActor in
-            uiLogger.info("Monaco WebView navigation completed")
+            diagnostic.navigationCount += 1
+            uiLogger.info("Monaco WebView navigation completed (count: \(diagnostic.navigationCount))")
             // Note: isEditorLoaded is set by JS editorReady message, not here
             // because AMD require() is async — the page loads first, then Monaco initializes
         }
@@ -301,8 +404,20 @@ extension MonacoBridge {
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         Task { @MainActor in
-            uiLogger.error("Monaco WebView navigation failed: \(error.localizedDescription)")
+            diagnostic.status = .failed
+            diagnostic.lastError = "导航失败: \(error.localizedDescription)"
             isEditorLoaded = false
+            uiLogger.error("Monaco WebView navigation failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// 捕获初始页面加载失败（如 index.html 找不到、文件权限问题等）
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        Task { @MainActor in
+            diagnostic.status = .failed
+            diagnostic.lastError = "页面加载失败: \(error.localizedDescription)"
+            isEditorLoaded = false
+            uiLogger.error("Monaco WebView provisional navigation failed: \(error.localizedDescription)")
         }
     }
 }

@@ -5,16 +5,23 @@ import SwiftUI
 /// 左栏：文件浏览器 | 中栏：代码编辑器(Monaco) | 右栏：对话面板
 /// 面板联动：Agent 调用 read_file → 自动在 Monaco Editor 中打开该文件
 ///          Agent 调用 write_file/edit_file → 编辑器自动刷新
+///
+/// BugFix (Monaco load): 原布局用 NavigationLink 将 FileExplorerView 推入中栏，
+/// 替换了 EditorContainerView，导致用户浏览文件时编辑器不在视图层级中，
+/// 点击文件后 onChange 无法触发。修复：FileExplorerView 直接嵌入侧栏，
+/// EditorContainerView 始终在中栏可见。
 struct ContentView: View {
     @ObservedObject var appState: AppState
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
+    @State private var activeSheet: ActiveSheet?
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            // 左栏：文件浏览器 + Dashboard + 设置导航
-            SidebarPane(appState: appState)
+            // 左栏：文件浏览器（始终可见，用户可直接浏览和选择文件）
+            FileExplorerView(appState: appState)
+                .navigationTitle("项目文件")
         } content: {
-            // 中栏：代码编辑器（集成 MonacoBridge）
+            // 中栏：代码编辑器（始终可见，选中文件后立即显示内容）
             EditorPane(appState: appState)
         } detail: {
             // 右栏：对话面板（集成 AgentLoop 事件流）
@@ -23,7 +30,34 @@ struct ContentView: View {
         .navigationSplitViewStyle(.balanced)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+                // 菜单：首页 / 搜索 / 设置 — sheet 弹出，不占用中栏
+                Menu {
+                    Button(action: { activeSheet = .dashboard }) {
+                        Label("首页", systemImage: "house")
+                    }
+                    Button(action: { activeSheet = .search }) {
+                        Label("搜索", systemImage: "magnifyingglass")
+                    }
+                    Divider()
+                    Button(action: { activeSheet = .settings }) {
+                        Label("设置", systemImage: "gearshape")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
                 ToolbarActions(appState: appState)
+            }
+        }
+        .sheet(item: $activeSheet) { sheet in
+            NavigationStack {
+                switch sheet {
+                case .settings:
+                    SettingsView(appState: appState)
+                case .dashboard:
+                    DashboardView()
+                case .search:
+                    FileSearchView(appState: appState)
+                }
             }
         }
         // 全局错误 Alert
@@ -35,34 +69,15 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Sidebar Pane (左栏)
+// MARK: - Active Sheet Enum
 
-/// 左栏聚合：文件浏览器 + Dashboard + 设置导航
-/// T05: 传递 appState 到 FileExplorerView（支持面板联动）
-private struct SidebarPane: View {
-    @ObservedObject var appState: AppState
+/// Sheet 目标枚举 — 用于 .sheet(item:) 单一 sheet 模式
+private enum ActiveSheet: Identifiable {
+    case settings
+    case dashboard
+    case search
 
-    var body: some View {
-        List {
-            NavigationLink(destination: DashboardView()) {
-                Label("首页", systemImage: "house")
-            }
-
-            NavigationLink(destination: FileExplorerView(appState: appState)) {
-                Label("文件", systemImage: "folder")
-            }
-
-            NavigationLink(destination: FileSearchView(appState: appState)) {
-                Label("搜索", systemImage: "magnifyingglass")
-            }
-
-            NavigationLink(destination: SettingsView(appState: appState)) {
-                Label("设置", systemImage: "gearshape")
-            }
-        }
-        .listStyle(.sidebar)
-        .navigationTitle("白泽")
-    }
+    var id: String { "\(self)" }
 }
 
 // MARK: - Editor Pane (中栏)

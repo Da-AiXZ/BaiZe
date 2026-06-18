@@ -80,6 +80,10 @@ class AppState: ObservableObject {
     /// Python Runtime Engine（P3 诊断面板：供设置页读取引擎诊断状态）
     var pythonRuntimeEngine: PythonRuntimeEngine?
 
+    /// Monaco Bridge（Monaco 诊断面板：供设置页读取编辑器加载诊断状态）
+    /// 由 EditorContainerView 在 setupMonacoBridge() 中注入
+    var monacoBridge: MonacoBridge?
+
     // MARK: - Error State
 
     /// 最近错误消息（用于全局 Alert）

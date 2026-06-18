@@ -78,20 +78,43 @@
     }
 
     // =============================================
-    // Monaco Environment — Inline Worker (CORS-safe)
+    // Monaco Environment — Blob URL Worker (WKWebView-safe)
     // =============================================
+    // BugFix: 原 data: URL worker 在 WKWebView 中无法解析相对路径
+    // 因为 data: URL 没有基准 URL，importScripts("min/...") 会失败
+    // 修复：使用 document.baseURI 构造绝对 file:// 路径，并用 blob: URL 创建 worker
+    // blob: URL 继承页面 origin（file://），可以访问 allowingReadAccessTo 目录内的文件
     self.MonacoEnvironment = {
         getWorkerUrl: function(workerId, label) {
-            return 'data:text/javascript;charset=utf-8,' + encodeURIComponent(
-                'self.MonacoEnvironment = { baseUrl: "min/" };' +
-                'importScripts("min/vs/base/worker/workerMain.js");'
-            );
+            // 获取当前页面的基准路径（file:///.../monaco-editor/）
+            var basePath = document.baseURI.substring(0, document.baseURI.lastIndexOf('/') + 1);
+            var workerMainUrl = basePath + 'min/vs/base/worker/workerMain.js';
+            var workerCode =
+                'self.MonacoEnvironment = { baseUrl: "' + basePath + 'min/" };' +
+                'importScripts("' + workerMainUrl + '");';
+            var blob = new Blob([workerCode], { type: 'text/javascript' });
+            return URL.createObjectURL(blob);
         }
     };
 
     // =============================================
     // AMD Require Config & Init
     // =============================================
+
+    // BugFix: 超时检测 — 如果 15 秒内编辑器未初始化，报告错误到 Swift
+    // 这能捕获 loader.js 加载失败、AMD 模块解析错误等场景
+    setTimeout(function() {
+        if (!editor) {
+            try {
+                window.webkit.messageHandlers.error.postMessage(
+                    'Monaco 初始化超时（15秒）。editor 实例未创建。' +
+                    '可能原因: min/vs/loader.js 加载失败 或 AMD 模块解析错误。' +
+                    '请检查 Bundle 中 monaco-editor/min/ 目录是否完整。'
+                );
+            } catch (e) { console.error('Failed to report timeout:', e); }
+        }
+    }, 15000);
+
     require.config({
         paths: { 'vs': 'min/vs' }
     });
@@ -327,6 +350,16 @@
         }
 
         console.log('✅ Baize Monaco Editor initialized with baize-cyberpunk theme');
+    }, function(err) {
+        // BugFix: AMD require 错误回调 — 捕获模块加载失败
+        var msg = err && err.message ? err.message : String(err);
+        console.error('❌ AMD require failed:', msg);
+        try {
+            window.webkit.messageHandlers.error.postMessage(
+                'AMD require 失败: ' + msg + '。' +
+                '请检查 monaco-editor/min/vs/ 目录是否完整。'
+            );
+        } catch (e) { console.error('Failed to report require error:', e); }
     });
 
     // =============================================

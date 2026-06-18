@@ -35,10 +35,15 @@ class EditorState: ObservableObject {
     // MARK: - Methods
 
     /// 打开文件（添加到 Tab 列表）
+    /// BugFix: 即使文件已在 Tab 列表中，也必须调用 monacoBridge.openFile
+    /// 否则切换到已打开的 Tab 时 Monaco 编辑器不会更新内容
     func openFile(path: String, content: String) {
         // 检查是否已经打开
         if let existingTab = openTabs.first(where: { $0.filePath == path }) {
             activeTab = existingTab
+            // BugFix: 即使 Tab 已存在，也要通知 Monaco Bridge 更新编辑器内容
+            // 否则用户点击已打开的文件时编辑器无反应
+            monacoBridge?.openFile(path: path, content: content)
             return
         }
 
