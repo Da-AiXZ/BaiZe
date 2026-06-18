@@ -34,13 +34,19 @@ else
     unzip -q -o /tmp/nodejs-mobile-ios.zip -d /tmp/nodejs-mobile
 
     # Extract device-only framework (arm64)
-    if [ -d "/tmp/nodejs-mobile/Release-iphoneos/NodeMobile.framework" ]; then
+    # Actual zip structure: NodeMobile.xcframework/ios-arm64/NodeMobile.framework/
+    if [ -d "/tmp/nodejs-mobile/NodeMobile.xcframework/ios-arm64/NodeMobile.framework" ]; then
+        cp -r /tmp/nodejs-mobile/NodeMobile.xcframework/ios-arm64/NodeMobile.framework "$RUNTIME_DIR/"
+        echo "✅ NodeMobile.framework (arm64 device) extracted from xcframework"
+    elif [ -d "/tmp/nodejs-mobile/Release-iphoneos/NodeMobile.framework" ]; then
         cp -r /tmp/nodejs-mobile/Release-iphoneos/NodeMobile.framework "$RUNTIME_DIR/"
-        echo "✅ NodeMobile.framework (arm64 device) extracted"
+        echo "✅ NodeMobile.framework (arm64 device) extracted from Release-iphoneos"
     else
-        echo "❌ ERROR: Release-iphoneos/NodeMobile.framework not found in zip"
-        echo "   Available directories:"
+        echo "❌ ERROR: NodeMobile.framework not found in zip"
+        echo "   Available top-level directories:"
         ls -1 /tmp/nodejs-mobile/ 2>/dev/null || true
+        echo "   Searching for NodeMobile.framework anywhere in zip..."
+        find /tmp/nodejs-mobile -name "NodeMobile.framework" -type d 2>/dev/null || true
         rm -f /tmp/nodejs-mobile-ios.zip
         rm -rf /tmp/nodejs-mobile
         exit 1
