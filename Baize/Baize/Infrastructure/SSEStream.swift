@@ -48,9 +48,38 @@ struct SSEStream {
 
                     apiLogger.info("SSE stream connected, status: \(httpResponse.statusCode)")
 
+                    // 检查 Content-Type — 如果不是 text/event-stream，可能是 JSON 错误响应
+                    let contentType = httpResponse.value(forHTTPHeaderField: "Content-Type") ?? ""
+                    apiLogger.info("SSE response Content-Type: \(contentType)")
+
+                    if !contentType.lowercased().contains("text/event-stream") {
+                        // 服务器返回了非 SSE 响应（可能是 JSON 错误）
+                        // 读取全部响应体作为错误信息
+                        var rawBody = ""
+                        var collected = 0
+                        let maxBytes = 8192
+                        for try await byte in bytes {
+                            if collected >= maxBytes { break }
+                            rawBody.append(Character(UnicodeScalar(byte)))
+                            collected += 1
+                        }
+                        apiLogger.error("SSE: non-SSE response (Content-Type: \(contentType)), body: \(rawBody)")
+                        throw BaizeError.apiError("API 返回了非流式响应 (Content-Type: \(contentType))。响应内容: \(rawBody)")
+                    }
+
                     // 逐行解析 SSE 事件
                     var buffer = ""
+                    var totalEventsYielded = 0
+                    var lineCount = 0
+                    var firstLinesLog: [String] = []
+
                     for try await line in bytes.lines {
+                        lineCount += 1
+                        // 记录前 5 行用于诊断
+                        if firstLinesLog.count < 5 {
+                            firstLinesLog.append(line)
+                        }
+
                         buffer += line + "\n"
 
                         // SSE 事件以双换行符分隔
@@ -59,6 +88,7 @@ struct SSEStream {
                             let events = parseBuffer(buffer)
                             for event in events {
                                 continuation.yield(event)
+                                totalEventsYielded += 1
                             }
                             buffer = ""
                         }
@@ -69,10 +99,18 @@ struct SSEStream {
                         let events = parseBuffer(buffer)
                         for event in events {
                             continuation.yield(event)
+                            totalEventsYielded += 1
                         }
                     }
 
-                    apiLogger.info("SSE stream completed")
+                    apiLogger.info("SSE stream completed: \(lineCount) lines, \(totalEventsYielded) events")
+
+                    // 如果没有任何 SSE 事件被解析出来，记录原始数据用于诊断
+                    if totalEventsYielded == 0 {
+                        let rawPreview = firstLinesLog.joined(separator: " | ")
+                        apiLogger.error("SSE: 0 events parsed from \(lineCount) lines. First lines: \(rawPreview)")
+                    }
+
                     continuation.finish()
                 } catch {
                     apiLogger.error("SSE stream error: \(error.localizedDescription)")

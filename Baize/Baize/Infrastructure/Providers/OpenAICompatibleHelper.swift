@@ -54,7 +54,13 @@ enum OpenAICompatibleHelper {
         do {
             let bodyData = try JSONSerialization.data(withJSONObject: body)
             request.httpBody = bodyData
-            apiLogger.debug("OpenAI-compat request body serialized: \(bodyData.count) bytes for model: \(model)")
+            // 诊断：记录请求体详情（仅记录关键字段，避免日志过大）
+            let toolCount = tools?.count ?? 0
+            apiLogger.debug("OpenAI-compat request: model=\(model), stream=true, messages=\(messages.count), tools=\(toolCount), body=\(bodyData.count) bytes")
+            if toolCount > 0 {
+                let toolNames = (tools ?? []).compactMap { $0["function"] as? [String: Any] }.compactMap { $0["name"] as? String }
+                apiLogger.debug("OpenAI-compat request tools: \(toolNames.joined(separator: ", "))")
+            }
         } catch {
             apiLogger.error("Failed to serialize request body for model: \(model) — \(error.localizedDescription)")
             throw ProviderError.apiError("请求体序列化失败: \(error.localizedDescription)")

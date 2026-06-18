@@ -91,8 +91,14 @@ struct CustomOpenAIProvider: LLMProvider {
                         apiLogger.error("Custom provider: stream ended with API error: \(msg)")
                         continuation.finish(throwing: ProviderError.apiError("API 返回错误: \(msg)"))
                     } else if !hasContent {
-                        apiLogger.error("Custom provider: stream completed but no content received (model=\(actualModel), endpoint=\(endpoint))")
-                        continuation.finish(throwing: ProviderError.apiError("API 返回了空响应（无内容）。请检查模型名是否正确、API Key 是否有效、端点是否支持流式输出。模型: \(actualModel), 端点: \(endpoint)"))
+                        apiLogger.error("Custom provider: stream completed but no content (model=\(actualModel), endpoint=\(endpoint), tools=\(tools.count))")
+                        let hint: String
+                        if tools.count > 0 {
+                            hint = "可能原因：1) 此模型不支持 function calling（tools），尝试用不携带 tools 的请求；2) 模型名错误；3) API Key 权限不足。"
+                        } else {
+                            hint = "可能原因：模型名错误或 API Key 无效。"
+                        }
+                        continuation.finish(throwing: ProviderError.apiError("API 返回了空响应。\(hint) 模型: \(actualModel), 端点: \(endpoint)"))
                     } else {
                         continuation.finish()
                     }
