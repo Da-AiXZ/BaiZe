@@ -52,11 +52,12 @@ struct BaizeApp: App {
 
         let fsService = FileSystemService(rootPath: workingRoot)
         let nodeEngine = NodeRuntimeEngine()
-        nodeEngine.start()
+        // 不在 init 同步启动 — App 启动时 framework 还在加载，两个重型运行时
+        // 同时初始化会导致 V8 引擎 EXC_BAD_ACCESS 崩溃。
+        // 延迟到 App 完全启动后串行启动（见 body.onAppear）
         let nodeStrategy = NodeMobileStrategy(engine: nodeEngine)
 
         let pythonEngine = PythonRuntimeEngine()
-        pythonEngine.start()
         let pythonStrategy = PythonEmbeddingStrategy(engine: pythonEngine)
 
         let runtime = RuntimeExecutor(nodeStrategy: nodeStrategy, pythonStrategy: pythonStrategy)
@@ -152,6 +153,21 @@ struct BaizeApp: App {
                     Task {
                         try await projectContext.load()
                         baizeLogger.info("Project context loaded on startup")
+                    }
+
+                    // 延迟启动运行时引擎 — App 完全启动后再初始化重型 C 运行时
+                    // 串行启动：先 Node，等 2 秒后再 Python，避免两个 V8/CPython
+                    // 同时初始化导致 EXC_BAD_ACCESS 崩溃
+                    Task {
+                        // 等 App 完全启动（framework 加载完成 + UI 就绪）
+                        try? await Task.sleep(nanoseconds: 1_000_000_000) // 1s
+                        baizeLogger.info("Starting Node.js engine (deferred)...")
+                        nodeEngine.start()
+
+                        // Node 引擎启动后再等 2 秒启动 Python，避免资源竞争
+                        try? await Task.sleep(nanoseconds: 2_000_000_000) // 2s
+                        baizeLogger.info("Starting Python engine (deferred)...")
+                        pythonEngine.start()
                     }
                 }
         }
