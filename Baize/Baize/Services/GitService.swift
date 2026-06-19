@@ -364,18 +364,19 @@ actor GitService {
         entry.id = oid
 
         // 获取文件属性填充 ctime/mtime（最佳努力，失败用 0）
-        // 注意：git_time_t 是 Int64（typedef int64_t），而 git_index_entry.mtime/ctime
-        // 字段的类型是 git_index_time（结构体，有 seconds 和 nanoseconds 成员）。
+        // 注意：git_index_time.seconds 是 Int32（libgit2 用 git_time_t = int64_t
+        // 表示完整时间戳，但 git_index_time 结构体中 seconds 字段是 Int32）。
+        // 当前时间戳约 1.75e9 在 Int32 范围内（max ≈ 2.15e9，2038 年前安全）。
         if let attrs = try? FileManager.default.attributesOfItem(atPath: fullPath) {
             if let modDate = attrs[.modificationDate] as? Date {
                 var mtime = git_index_time()
-                mtime.seconds = Int64(modDate.timeIntervalSince1970)
+                mtime.seconds = Int32(modDate.timeIntervalSince1970)
                 mtime.nanoseconds = 0
                 entry.mtime = mtime
             }
             if let creationDate = attrs[.creationDate] as? Date {
                 var ctime = git_index_time()
-                ctime.seconds = Int64(creationDate.timeIntervalSince1970)
+                ctime.seconds = Int32(creationDate.timeIntervalSince1970)
                 ctime.nanoseconds = 0
                 entry.ctime = ctime
             }
