@@ -24,10 +24,12 @@ struct GitStatusView: View {
                 }) {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 22))
-                        .foregroundColor(viewModel.hasGitToken ? Color.baizeAccent : Color.baizeTextSecondary)
+                        // Bug fix (P0): 未配置 Token 时用黄色警告色，给用户视觉提示
+                        .foregroundColor(viewModel.hasGitToken ? Color.baizeAccent : Color.baizeWarning)
                 }
-                .disabled(viewModel.isPushing || viewModel.isNotAGitRepository)
-                .help("推送到远程仓库")
+                // Bug fix (P0): 未配置 Token 时直接禁用按钮，避免点击后 guard 失败却无反馈
+                .disabled(viewModel.isPushing || viewModel.isNotAGitRepository || !viewModel.hasGitToken)
+                .help(viewModel.hasGitToken ? "推送到远程仓库" : "未配置 GitHub Token，请在设置中配置")
 
                 if viewModel.isPushing {
                     ProgressView()
@@ -294,55 +296,61 @@ struct GitChangesView: View {
         actionColor: Color,
         action: @escaping (String) -> Void
     ) -> some View {
-        NavigationLink(
-            destination: GitDiffView(
-                viewModel: viewModel,
-                filePath: file.path,
-                diffType: file.isStaged ? .indexVsHead : .workingTreeVsIndex
-            )
-        ) {
-            HStack(spacing: 10) {
-                // 状态标识
-                Text(file.changeStatus.icon)
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundColor(file.changeStatus.color)
-                    .frame(width: 24, alignment: .center)
+        // Bug fix (P0): Button 不能嵌套在 NavigationLink 的 label 闭包内，
+        // 否则 NavigationLink 会拦截 Button 的点击事件，导致暂存/取消暂存按钮"无反应"。
+        // 修复：将 Button 移出 NavigationLink，作为 HStack 同级子视图独立响应点击。
+        HStack(spacing: 10) {
+            // 文件信息部分 — 点击跳转 diff 视图
+            NavigationLink(
+                destination: GitDiffView(
+                    viewModel: viewModel,
+                    filePath: file.path,
+                    diffType: file.isStaged ? .indexVsHead : .workingTreeVsIndex
+                )
+            ) {
+                HStack(spacing: 10) {
+                    // 状态标识
+                    Text(file.changeStatus.icon)
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundColor(file.changeStatus.color)
+                        .frame(width: 24, alignment: .center)
 
-                // 文件名
-                Text(file.displayName)
-                    .font(.system(size: 14))
-                    .foregroundColor(Color.baizeTextPrimary)
-                    .lineLimit(1)
-
-                // 文件路径（相对路径的目录部分）
-                let dirPath = (file.path as NSString).deletingLastPathComponent
-                if !dirPath.isEmpty {
-                    Text(dirPath)
-                        .font(.system(size: 11))
-                        .foregroundColor(Color.baizeTextSecondary)
+                    // 文件名
+                    Text(file.displayName)
+                        .font(.system(size: 14))
+                        .foregroundColor(Color.baizeTextPrimary)
                         .lineLimit(1)
-                }
 
-                Spacer()
+                    // 文件路径（相对路径的目录部分）
+                    let dirPath = (file.path as NSString).deletingLastPathComponent
+                    if !dirPath.isEmpty {
+                        Text(dirPath)
+                            .font(.system(size: 11))
+                            .foregroundColor(Color.baizeTextSecondary)
+                            .lineLimit(1)
+                    }
 
-                // 操作按钮
-                Button(action: {
-                    action(file.path)
-                }) {
-                    Image(systemName: actionIcon)
-                        .font(.system(size: 18))
-                        .foregroundColor(actionColor)
+                    Spacer()
                 }
-                .buttonStyle(.plain)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(Color.baizeCardBackground.opacity(0.5))
-            .cornerRadius(8)
-            .padding(.horizontal, 16)
-            .padding(.bottom, 2)
+            .buttonStyle(.plain)
+
+            // 操作按钮 — 独立点击，不被 NavigationLink 拦截
+            Button(action: {
+                action(file.path)
+            }) {
+                Image(systemName: actionIcon)
+                    .font(.system(size: 18))
+                    .foregroundColor(actionColor)
+            }
+            .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.baizeCardBackground.opacity(0.5))
+        .cornerRadius(8)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 2)
     }
 
     /// Commit 消息输入区
