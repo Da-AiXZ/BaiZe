@@ -63,6 +63,10 @@ CMAKE_COMMON_ARGS=(
     -DCMAKE_INSTALL_PREFIX=$REPO_ROOT/install/$PLATFORM
     -DCMAKE_OSX_ARCHITECTURES=$ARCH
     -DCMAKE_OSX_SYSROOT=$SYSROOT
+    # Compatibility: libssh2 1.10.0 CMakeLists.txt uses cmake_minimum_required(VERSION 2.x),
+    # but CMake on macOS-14 runner has removed support for < 3.5. This flag lets the
+    # old CMakeLists.txt configure anyway. Also benefits libgit2's CMakeLists.txt.
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 )
 
 # ---------------------------------------------------------------------------
