@@ -99,6 +99,13 @@ class GitViewModel: ObservableObject {
             if case .notAGitRepository = gitError {
                 isNotAGitRepository = true
                 hasGitToken = KeychainService().hasGitToken()
+            } else if case .libgit2Error(let code, _) = gitError, code == -9 {
+                // GIT_EUNBORNBRANCH: 空仓库（unborn HEAD），不是错误
+                // 返回干净状态：工作区干净、分支名 master、无改动、不弹 Alert
+                status = GitStatus(modified: [], staged: [], untracked: [], currentBranch: "master")
+                currentBranch = "master"
+                hasGitToken = KeychainService().hasGitToken()
+                isNotAGitRepository = false
             } else {
                 showError(gitError.errorDescription ?? "未知错误")
             }
@@ -246,6 +253,10 @@ class GitViewModel: ObservableObject {
         } catch let gitError as GitError {
             // 空仓库不算错误，静默处理
             if case .emptyRepository = gitError {
+                commits = []
+                hasMoreCommits = false
+            } else if case .libgit2Error(let code, _) = gitError, code == -9 {
+                // GIT_EUNBORNBRANCH: 空仓库无提交历史
                 commits = []
                 hasMoreCommits = false
             } else {

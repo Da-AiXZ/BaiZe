@@ -151,7 +151,11 @@ actor GitService {
     private func getHeadCommitHandle(repo: OpaquePointer) throws -> OpaquePointer {
         var headRef: OpaquePointer? = nil
         let refCode = git_repository_head(&headRef, repo)
-        if refCode == GIT_ENOTFOUND.rawValue { throw GitError.emptyRepository }
+        // GIT_ENOTFOUND (-3): HEAD reference not found
+        // GIT_EUNBORNBRANCH (-9): HEAD points to unborn branch (empty repo, no commits yet)
+        if refCode == GIT_ENOTFOUND.rawValue || refCode == -9 {
+            throw GitError.emptyRepository
+        }
         try checkGit(refCode, operation: "git_repository_head")
         defer { git_reference_free(headRef) }
 
@@ -186,7 +190,11 @@ actor GitService {
     private func getCurrentBranchName(repo: OpaquePointer) throws -> String {
         var headRef: OpaquePointer? = nil
         let code = git_repository_head(&headRef, repo)
+        // GIT_ENOTFOUND (-3): HEAD doesn't exist (detached or no repo)
         if code == GIT_ENOTFOUND.rawValue { return "HEAD (detached)" }
+        // GIT_EUNBORNBRANCH (-9): HEAD points to unborn branch (empty repo, no commits yet)
+        // 空仓库的 HEAD 指向 refs/heads/master 但 master 尚不存在，返回默认分支名而非报错
+        if code == -9 { return "master" }
         try checkGit(code, operation: "git_repository_head")
         defer { git_reference_free(headRef) }
 
@@ -529,7 +537,14 @@ actor GitService {
         var walker: OpaquePointer? = nil
         try checkGit(git_revwalk_new(&walker, repo), operation: "git_revwalk_new")
         defer { git_revwalk_free(walker) }
-        try checkGit(git_revwalk_push_head(walker), operation: "git_revwalk_push_head")
+
+        // 空仓库（unborn HEAD）时 git_revwalk_push_head 返回 GIT_ENOTFOUND (-3) 或 GIT_EUNBORNBRANCH (-9)
+        // 返回空列表而非抛出错误，让 UI 显示"暂无提交"
+        let pushCode = git_revwalk_push_head(walker)
+        if pushCode == GIT_ENOTFOUND.rawValue || pushCode == -9 {
+            return []
+        }
+        try checkGit(pushCode, operation: "git_revwalk_push_head")
         git_revwalk_sorting(walker, GIT_SORT_TIME.rawValue)
 
         var commits: [GitCommit] = []

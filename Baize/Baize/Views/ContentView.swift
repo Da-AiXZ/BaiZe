@@ -16,18 +16,22 @@ struct ContentView: View {
                     .navigationTitle("项目文件")
             } detail: {
                 // 右栏：工作区面板（编辑器 + 对话面板，焦点驱动宽度）
+                // Bug B fix: FocusModeBar 使用 safeAreaInset 固定在顶部，确保 iOS 上可见
                 WorkspacePane(appState: appState)
+                    .safeAreaInset(edge: .top, spacing: 0) {
+                        // 焦点模式切换控件 + Agent 状态指示器 — 固定在顶部右侧
+                        HStack(spacing: 8) {
+                            Spacer()
+                            FocusModeBar(focusMode: $appState.focusMode, isAgentRunning: appState.isAgentRunning)
+                            AgentStatusIndicator(isRunning: appState.isAgentRunning)
+                                .padding(.trailing, 4)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color(.systemBackground).opacity(0.95))
+                    }
             }
             .navigationSplitViewStyle(.balanced)
-            .toolbar {
-                ToolbarItemGroup(placement: .primaryAction) {
-                    // 焦点模式切换控件 — 放在 toolbar 右侧，与侧栏标题同一高度
-                    FocusModeBar(focusMode: $appState.focusMode, isAgentRunning: appState.isAgentRunning)
-
-                    // Agent 运行状态指示器（脉冲圆点）
-                    AgentStatusIndicator(isRunning: appState.isAgentRunning)
-                }
-            }
             .tabItem { Label(AppTab.workspace.title, systemImage: AppTab.workspace.systemImage) }
             .tag(AppTab.workspace)
 
@@ -96,14 +100,14 @@ private struct WorkspacePane: View {
                     .frame(width: geo.size.width * appState.focusMode.chatRatio)
             }
         }
-        // Bug B fix: FocusModeBar 已移至 NavigationSplitView toolbar，不再使用 overlay
+        // Bug B fix: FocusModeBar 使用 safeAreaInset 固定在 detail 顶部，不再使用 overlay 或 toolbar
         .animation(.easeInOut(duration: 0.3), value: appState.focusMode)
     }
 }
 
 // MARK: - Focus Mode Bar (Bug 1 fix)
 
-/// 焦点模式切换控件 — 放在 NavigationSplitView toolbar 右侧
+/// 焦点模式切换控件 — 使用 safeAreaInset 固定在 detail 顶部右侧
 /// 与侧栏标题同一高度，不遮挡内容区的模型/权限选择器
 /// Agent 运行时锁定为对话模式，运行结束后用户可手动切换
 private struct FocusModeBar: View {
