@@ -368,13 +368,62 @@ actor GitService {
         if filePath.hasSuffix("/") {
             throw GitError.stageFailed("不能暂存目录，请暂存具体文件")
         }
+
+        // Bug fix (P0, round 6): 路径规范化 — 去掉可能的前导 ./
+        // libgit2 的 status() 通过 entry.pointee.index_to_workdir.new_file.path
+        // 获取路径，该路径在某些情况下可能包含前导 ./，导致 add_bypath 路径不匹配。
+        var normalizedPath = filePath
+        if normalizedPath.hasPrefix("./") {
+            normalizedPath = String(normalizedPath.dropFirst(2))
+        }
+
         let repo = try openRepository()
         defer { git_repository_free(repo) }
+
+        // Bug fix (P0, round 6): 防御性检查 — 确认文件在磁盘上存在
+        // 排除 status() 与 stage() 之间的竞态条件（文件被删除或未成功写入磁盘）
+        let fullPath = (repositoryPath as NSString).appendingPathComponent(normalizedPath)
+        if !FileManager.default.fileExists(atPath: fullPath) {
+            throw GitError.stageFailed("文件不存在: \(fullPath)（请确认文件已写入磁盘后重试）")
+        }
+
         var index: OpaquePointer? = nil
         try checkGit(git_repository_index(&index, repo), operation: "git_repository_index")
         defer { git_index_free(index) }
-        let code = filePath.withCString { git_index_add_bypath(index, $0) }
-        if code != 0 { throw GitError.stageFailed("git_index_add_bypath failed for '\(filePath)' (code: \(code))") }
+
+        let code = normalizedPath.withCString { git_index_add_bypath(index, $0) }
+        if code != 0 {
+            // Bug fix (P0, round 6): 捕获 libgit2 详细错误信息，方便定位具体原因
+            let detail: String
+            if let err = git_error_last(), let msg = err.pointee.message {
+                detail = String(cString: msg)
+            } else {
+                detail = "unknown"
+            }
+
+            // Bug fix (P0, round 6): 尝试 git_index_add_all 作为 fallback
+            // add_bypath 失败时，用 add_all 配合 pathspec 重新尝试。
+            // add_all 内部实现不同（通过 pathspec glob 匹配），可能绕过
+            // add_bypath 的路径匹配问题。
+            let cPath = strdup(normalizedPath)
+            var pathStrings: [UnsafeMutablePointer<CChar>?] = [cPath]
+            var pathspec = git_strarray(strings: &pathStrings, count: 1)
+            let fallbackCode = git_index_add_all(index, &pathspec, 0, nil, nil)
+            if let p = cPath { free(p) }
+
+            if fallbackCode != 0 {
+                let fallbackDetail: String
+                if let err = git_error_last(), let msg = err.pointee.message {
+                    fallbackDetail = String(cString: msg)
+                } else {
+                    fallbackDetail = "unknown"
+                }
+                throw GitError.stageFailed(
+                    "git_index_add_bypath failed for '\(normalizedPath)' (code: \(code), detail: \(detail)); "
+                    + "fallback git_index_add_all also failed (code: \(fallbackCode), detail: \(fallbackDetail))"
+                )
+            }
+        }
         try checkGit(git_index_write(index), operation: "git_index_write")
     }
 
@@ -507,6 +556,49 @@ actor GitService {
         }
     }
 
+    /// 设置远程仓库地址（创建或更新 origin）
+    /// 当用户在设置中保存远程 URL 时调用，将 remote 写入本地 .git/config
+    /// Bug fix (P0, round 6): 修复架构缺陷 — 之前 saveConfig() 只存 URL 到 UserDefaults，
+    /// 从未调用 git_remote_create 写入 .git/config，导致 push() 时找不到 remote。
+    ///
+    /// libgit2 v1.3.1 API:
+    /// - git_remote_set_url(repo, name, url) — 更新已存在 remote 的 URL（操作 config，非 handle）
+    /// - git_remote_create(&out, repo, name, url) — 创建新 remote
+    func setRemoteURL(_ url: String) async throws {
+        let repo = try openRepository()
+        defer { git_repository_free(repo) }
+
+        // 检查 remote 是否已存在
+        var remote: OpaquePointer? = nil
+        let lookupCode = git_remote_lookup(&remote, repo, BaizeGit.defaultRemoteName)
+
+        if lookupCode == 0 && remote != nil {
+            // Remote 已存在 — 释放 handle，通过 config API 更新 URL
+            git_remote_free(remote)
+            try checkGit(
+                url.withCString { urlPtr in
+                    BaizeGit.defaultRemoteName.withCString { namePtr in
+                        git_remote_set_url(repo, namePtr, urlPtr)
+                    }
+                },
+                operation: "git_remote_set_url"
+            )
+        } else {
+            // Remote 不存在 — 释放可能残留的 handle，创建新的
+            if let r = remote { git_remote_free(r) }
+            var newRemote: OpaquePointer? = nil
+            try checkGit(
+                url.withCString { urlPtr in
+                    BaizeGit.defaultRemoteName.withCString { namePtr in
+                        git_remote_create(&newRemote, repo, namePtr, urlPtr)
+                    }
+                },
+                operation: "git_remote_create"
+            )
+            if let nr = newRemote { git_remote_free(nr) }
+        }
+    }
+
     func push() async throws {
         guard let token = keychainService.loadGitToken(), !token.isEmpty else { throw GitError.credentialsMissing }
         let username = UserDefaults.standard.string(forKey: BaizeGit.usernameUDKey) ?? "git"
@@ -517,13 +609,37 @@ actor GitService {
 
         var remote: OpaquePointer? = nil
         // Bug fix (P1): 提前检查 remote 是否存在，给出友好提示而非 libgit2 原始错误。
-        // git_repository_init() 创建的本地仓库没有配置远程仓库，
-        // 直接 git_remote_lookup 查找 "origin" 返回 GIT_ENOTFOUND (-3)。
+        // Bug fix (P0, round 6): 若 remote 不存在但用户已配 URL，自动注册 remote 再 push。
+        // 这修复了"用户在设置中保存了 Token+URL 但 push 报 remote 未配置"的架构缺陷：
+        // saveConfig() 之前只存了 URL 到 UserDefaults，未调用 git_remote_create 写入 .git/config。
         let lookupCode = git_remote_lookup(&remote, repo, BaizeGit.defaultRemoteName)
         if lookupCode != 0 {
-            throw GitError.operationFailed("尚未配置远程仓库，请在设置 → Git 配置中添加远程地址")
+            // 尝试从 UserDefaults 取出之前保存的 URL 自动注册
+            if let savedURL = UserDefaults.standard.string(forKey: BaizeGit.remoteURLUDKey), !savedURL.isEmpty {
+                // 先释放失败的 lookup 结果（通常为 nil，但安全起见）
+                if let r = remote { git_remote_free(r); remote = nil }
+
+                let createCode = savedURL.withCString { urlPtr in
+                    BaizeGit.defaultRemoteName.withCString { namePtr in
+                        git_remote_create(&remote, repo, namePtr, urlPtr)
+                    }
+                }
+                if createCode != 0 {
+                    let detail: String
+                    if let err = git_error_last(), let msg = err.pointee.message {
+                        detail = String(cString: msg)
+                    } else {
+                        detail = "unknown"
+                    }
+                    throw GitError.operationFailed(
+                        "远程仓库未配置，且自动创建失败 (\(detail))。请在设置中重新保存 Git 配置。"
+                    )
+                }
+            } else {
+                throw GitError.operationFailed("尚未配置远程仓库，请在设置 → Git 配置中添加远程地址")
+            }
         }
-        defer { git_remote_free(remote) }
+        defer { if let r = remote { git_remote_free(r) } }
 
         var pushOpts = git_push_options()
         git_push_init_options(&pushOpts, numericCast(GIT_PUSH_OPTIONS_VERSION))

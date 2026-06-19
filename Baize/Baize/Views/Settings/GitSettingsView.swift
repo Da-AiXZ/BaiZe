@@ -91,7 +91,7 @@ struct GitSettingsView: View {
 
                 // 保存按钮
                 Button(action: {
-                    saveConfig()
+                    Task { await saveConfig() }
                 }) {
                     HStack {
                         if isSaving {
@@ -211,7 +211,7 @@ struct GitSettingsView: View {
 
     /// 保存配置
     @MainActor
-    private func saveConfig() {
+    private func saveConfig() async {
         isSaving = true
         defer { isSaving = false }
 
@@ -229,6 +229,18 @@ struct GitSettingsView: View {
         // 保存远程 URL 和用户名（UserDefaults，非敏感信息）
         UserDefaults.standard.set(remoteURL, forKey: BaizeGit.remoteURLUDKey)
         UserDefaults.standard.set(username, forKey: BaizeGit.usernameUDKey)
+
+        // Bug fix (P0, round 6): 将 remote URL 注册到本地 git 仓库的 .git/config
+        // 之前 saveConfig() 只把 URL 存到 UserDefaults，从未调用 git_remote_create，
+        // 导致 push() 时 git_remote_lookup("origin") 找不到 remote 而报错。
+        // 现在在保存配置时同步注册 remote，同时 push() 也有自动注册的 fallback。
+        if !remoteURL.isEmpty, let gitService = appState.gitService {
+            do {
+                try await gitService.setRemoteURL(remoteURL)
+            } catch {
+                baizeLogger.error("Failed to set remote URL in git config: \(error.localizedDescription)")
+            }
+        }
 
         // 更新 ViewModel 状态
         appState.gitViewModel?.hasGitToken = !token.isEmpty
