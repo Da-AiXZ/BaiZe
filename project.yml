@@ -69,6 +69,9 @@ targets:
         SWIFT_OBJC_BRIDGING_HEADER: Baize/Baize/Infrastructure/Baize-Bridging-Header.h
         ENABLE_BITCODE: NO
         USER_SCRIPT_SANDBOXING: NO
+        OTHER_LDFLAGS:
+          - "$(inherited)"
+          - "-force_load $(PROJECT_DIR)/Baize/Baize/Frameworks/libgit2.xcframework/ios-arm64/libgit2.a"
         HEADER_SEARCH_PATHS:
           - "$(inherited)"
           - "$(BUILT_PRODUCTS_DIR)/Python.framework/Headers"

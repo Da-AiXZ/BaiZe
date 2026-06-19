@@ -200,9 +200,58 @@ build_libgit2
 # = merged libgit2.a (self-contained, no external deps)
 # ---------------------------------------------------------------------------
 echo "📦 Merging static libraries into single libgit2.a..."
+cd $REPO_ROOT/install/$PLATFORM/lib
+
+# === 清理 OpenSSL liblegacy 重复对象（方案1 关键步骤）===
+# OpenSSL 3.0.4 的 libcrypto.a 安装后包含 liblegacy-lib-*.o 对象（如 liblegacy-lib-bn_asm.o），
+# 和 libcrypto-lib-*.o（如 libcrypto-lib-bn_asm.o）重复。
+# -force_load 时会报 duplicate symbol。这里在合并前从 libcrypto.a 删除 liblegacy 对象。
+echo "  Cleaning liblegacy objects from libcrypto.a..."
+LEGACY_OBJS=$(ar t libcrypto.a 2>/dev/null | grep '^liblegacy-' || true)
+if [ -n "$LEGACY_OBJS" ]; then
+    echo "  Found liblegacy objects to remove:"
+    echo "$LEGACY_OBJS" | sed 's/^/    - /'
+    # ar d 删除对象（macOS BSD ar 支持）。逐个删除避免参数过长。
+    for obj in $LEGACY_OBJS; do
+        ar d libcrypto.a "$obj"
+    done
+    echo "  ✅ Removed liblegacy objects from libcrypto.a"
+    # 验证清理结果
+    REMAINING=$(ar t libcrypto.a 2>/dev/null | grep '^liblegacy-' || true)
+    if [ -n "$REMAINING" ]; then
+        echo "  ❌ ERROR: liblegacy objects still present after cleanup:"
+        echo "$REMAINING"
+        exit 1
+    fi
+else
+    echo "  (no liblegacy objects found in libcrypto.a — nothing to clean)"
+fi
+
+# === 合并：用明确列表，排除独立的 liblegacy.a ===
+# 不用 lib/*.a 通配符（会拉入 liblegacy.a）。明确列出需要的库。
 cd $REPO_ROOT/install/$PLATFORM
-libtool -static -o libgit2.a lib/*.a
-echo "✅ Merged libgit2.a contains: libgit2 (+ bundled zlib + builtin regex) + OpenSSL + libssh2"
+libtool -static -o libgit2.a \
+    lib/libgit2.a \
+    lib/libssh2.a \
+    lib/libssl.a \
+    lib/libcrypto.a
+echo "✅ Merged libgit2.a contains: libgit2 (+ bundled zlib + builtin regex) + OpenSSL(libssl+libcrypto, no liblegacy) + libssh2"
+
+# === 合并后符号验证 ===
+echo "  Verifying merged libgit2.a..."
+# 1. 不应再有 liblegacy 对象
+if nm libgit2.a 2>/dev/null | grep -q 'liblegacy'; then
+    echo "  ❌ ERROR: liblegacy objects found in merged libgit2.a"
+    nm libgit2.a 2>/dev/null | grep 'liblegacy' | head -5
+    exit 1
+fi
+echo "  ✅ No liblegacy objects in merged libgit2.a"
+# 2. bundled zlib 的 deflateInit2_ 应为 T(defined) 符号
+if nm libgit2.a 2>/dev/null | grep -E ' [Tt] _deflateInit2_$' >/dev/null; then
+    echo "  ✅ deflateInit2_ is a defined (T) symbol — bundled zlib present"
+else
+    echo "  ⚠️ WARNING: deflateInit2_ not found as T symbol (may be expected if symbol naming differs)"
+fi
 
 # ---------------------------------------------------------------------------
 # Create xcframework
