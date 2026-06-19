@@ -212,454 +212,6 @@ actor GitService {
         return "(unknown)"
     }
 
-    // MARK: - Index Warmup
-
-    /// 预热 index —— 读取 entry count 并写回，强制初始化 index 内部结构。
-    ///
-    /// Bug fix (P0, round 7): 空仓库首次 index 写入可能触发
-    /// "failed to initialize zlib"。通过预先读取 entry count + 写回
-    /// 空 index 来初始化内部状态，可能修复 zlib 的延迟初始化问题。
-    /// 即使 warmup 本身失败也不阻断后续操作（记录但不 throw）。
-    private func warmupIndex(_ index: OpaquePointer) {
-        // 1. 读取 entry count —— 触发 index 内部初始化
-        _ = git_index_entrycount(index)
-
-        // 2. 尝试写回 index —— 强制初始化 index 文件结构
-        //    warmup 失败不阻断主流程，仅记录
-        let writeCode = git_index_write(index)
-        if writeCode != 0 {
-            // warmup 写入失败，不 throw —— 让后续操作自行处理
-            // 记录到 Logger（如果可用），否则静默
-        }
-    }
-
-    // MARK: - Manual Git Object Operations (zlib bypass)
-
-    /// 使用 CommonCrypto 计算 SHA-1 并返回 40 字符十六进制字符串。
-    ///
-    /// Bug fix (P0, round 7): 当 libgit2 内部 zlib 初始化失败时，
-    /// 需要手动创建 git loose objects。SHA-1 是 git 对象 ID 的基础。
-    private func sha1Hex(_ data: Data) -> String {
-        var hash = [UInt8](repeating: 0, count: Int(CC_SHA1_DIGEST_LENGTH))
-        data.withUnsafeBytes { buffer in
-            _ = CC_SHA1(buffer.baseAddress, CC_LONG(buffer.count), &hash)
-        }
-        return hash.map { String(format: "%02x", $0) }.joined()
-    }
-
-    /// 使用系统 zlib (libz.tbd) 压缩数据，返回 zlib 格式的压缩数据。
-    ///
-    /// Bug fix (P0, round 7): libgit2 静态库内部的 zlib 可能因版本不匹配
-    /// 导致 deflateInit 失败。此方法直接调用系统 zlib 的 compress2，
-    /// 绕过 libgit2 内部的 zlib 封装，用于手动创建 git loose objects。
-    /// 返回 nil 表示系统 zlib 也失败了（极端情况）。
-    private func zlibCompress(_ data: Data) -> Data? {
-        let sourceLen = UInt(data.count)
-        let bound = compressBound(sourceLen)
-        var destLen = bound
-        var destBuffer = [UInt8](repeating: 0, count: Int(bound))
-
-        let result: Int32 = destBuffer.withUnsafeMutableBufferPointer { destPtr in
-            data.withUnsafeBytes { sourcePtr in
-                compress2(
-                    destPtr.baseAddress,
-                    &destLen,
-                    sourcePtr.bindMemory(to: UInt8.self).baseAddress,
-                    sourceLen,
-                    Z_DEFAULT_COMPRESSION
-                )
-            }
-        }
-
-        guard result == Z_OK else { return nil }
-        return Data(destBuffer.prefix(Int(destLen)))
-    }
-
-    /// 手动写入 git loose object，返回对象的 OID（40 字符十六进制 SHA-1）。
-    ///
-    /// Git loose object 格式：
-    /// 1. 对象头：`<type> <size>\0`（如 `blob 13\0`）
-    /// 2. 对象内容（文件数据 / 树条目 / 提交信息）
-    /// 3. (头 + 内容) 整体用 zlib deflate 压缩
-    /// 4. SHA-1(头 + 内容) = 对象 ID
-    /// 5. 存储在 `.git/objects/<oid[:2]>/<oid[2:]>`
-    ///
-    /// 此方法用系统 zlib 压缩，绕过 libgit2 内部可能损坏的 zlib。
-    private func writeLooseObject(type: String, content: Data) throws -> String {
-        // 1. 构建未压缩对象数据："<type> <size>\0" + content
-        var objectData = Data()
-        let headerString = "\(type) \(content.count)"
-        objectData.append(headerString.data(using: .isoLatin1) ?? Data())
-        objectData.append(0) // null 分隔符
-
-        // 2. 附加内容
-        objectData.append(contentsOf: content)
-
-        // 3. 计算 SHA-1 —— 这就是 git 对象 ID
-        let oidHex = sha1Hex(objectData)
-
-        // 4. 检查对象是否已存在（避免重复写入）
-        let objectDir = (repositoryPath as NSString)
-            .appendingPathComponent(".git/objects/\(String(oidHex.prefix(2)))")
-        let objectPath = (objectDir as NSString)
-            .appendingPathComponent(String(oidHex.dropFirst(2)))
-
-        if FileManager.default.fileExists(atPath: objectPath) {
-            // 对象已存在，直接返回 OID（git 的内容寻址保证相同内容 = 相同 OID）
-            return oidHex
-        }
-
-        // 5. 用系统 zlib 压缩
-        guard let compressedData = zlibCompress(objectData) else {
-            throw GitError.operationFailed(
-                "系统 zlib 压缩失败 (compress2 returned error)，无法创建 \(type) 对象。"
-                + "这可能是一个底层 zlib 兼容性问题。"
-            )
-        }
-
-        // 6. 创建目录并写入 loose object
-        try FileManager.default.createDirectory(
-            atPath: objectDir,
-            withIntermediateDirectories: true
-        )
-        try compressedData.write(to: URL(fileURLWithPath: objectPath))
-
-        return oidHex
-    }
-
-    /// 手动暂存单个文件 —— 绕过 libgit2 内部 zlib。
-    ///
-    /// 当 `git_index_add_bypath` 和 `git_index_add_all` 都因 "failed to
-    /// initialize zlib" 失败时，此方法：
-    /// 1. 读取文件内容
-    /// 2. 手动创建 blob loose object（用系统 zlib 压缩）
-    /// 3. 构造 `git_index_entry` 并调用 `git_index_add` 添加到 index
-    ///
-    /// `git_index_add` 不创建 blob（只添加条目），所以不触发 libgit2
-    /// 内部的 deflate。后续 `git_index_write` 也不使用 zlib（index 文件
-    /// 格式不压缩）。
-    private func manualStageFile(repo: OpaquePointer, index: OpaquePointer, filePath: String) throws {
-        // 1. 读取文件内容
-        let fullPath = (repositoryPath as NSString).appendingPathComponent(filePath)
-        guard let fileData = FileManager.default.contents(atPath: fullPath) else {
-            throw GitError.stageFailed("无法读取文件内容: \(fullPath)")
-        }
-
-        // 2. 手动创建 blob 对象，获取 OID
-        let blobOidHex = try writeLooseObject(type: "blob", content: fileData)
-
-        // 3. 将 OID 字符串解析为 git_oid
-        var oid = git_oid()
-        let parseCode = blobOidHex.withCString { cstr -> Int32 in
-            git_oid_fromstr(&oid, cstr)
-        }
-        if parseCode != 0 {
-            throw GitError.stageFailed("无法解析 blob OID: \(blobOidHex)")
-        }
-
-        // 4. 构造 git_index_entry
-        var entry = git_index_entry()
-        entry.mode = 33188 // GIT_FILEMODE_BLOB = 0o100644
-        entry.file_size = UInt32(fileData.count)
-        entry.id = oid
-
-        // 获取文件属性填充 ctime/mtime（最佳努力，失败用 0）
-        // 注意：git_index_time.seconds 是 Int32（libgit2 用 git_time_t = int64_t
-        // 表示完整时间戳，但 git_index_time 结构体中 seconds 字段是 Int32）。
-        // 当前时间戳约 1.75e9 在 Int32 范围内（max ≈ 2.15e9，2038 年前安全）。
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: fullPath) {
-            if let modDate = attrs[.modificationDate] as? Date {
-                var mtime = git_index_time()
-                mtime.seconds = Int32(modDate.timeIntervalSince1970)
-                mtime.nanoseconds = 0
-                entry.mtime = mtime
-            }
-            if let creationDate = attrs[.creationDate] as? Date {
-                var ctime = git_index_time()
-                ctime.seconds = Int32(creationDate.timeIntervalSince1970)
-                ctime.nanoseconds = 0
-                entry.ctime = ctime
-            }
-        }
-
-        // dev/ino/uid/gid 设为 0（libgit2 在读取时会用 stat 重新填充）
-        entry.dev = 0
-        entry.ino = 0
-        entry.uid = 0
-        entry.gid = 0
-
-        // path 需要是 C 字符串，在 git_index_add 执行期间保持有效
-        let cPath = strdup(filePath)
-        defer { free(cPath) }
-        if let cp = cPath {
-            entry.path = UnsafePointer(cp)
-        }
-        entry.flags = 0
-        entry.flags_extended = 0
-
-        // 5. 添加到 index
-        //    git_index_add 不创建 blob（OID 已存在于 .git/objects/），
-        //    也不使用 zlib，所以不会触发 "failed to initialize zlib"。
-        let addCode = git_index_add(index, &entry)
-        if addCode != 0 {
-            let detail: String
-            if let err = git_error_last(), let msg = err.pointee.message {
-                detail = String(cString: msg)
-            } else {
-                detail = "unknown"
-            }
-            throw GitError.stageFailed(
-                "手动暂存也失败: git_index_add 返回 \(addCode) (detail: \(detail))"
-            )
-        }
-    }
-
-    /// 手动暂存所有改动文件 —— 当 git_index_add_all 因 zlib 失败时的 fallback。
-    ///
-    /// 遍历 status list 中的未追踪文件和已修改文件，对每个文件调用
-    /// manualStageFile 手动创建 blob 并添加到 index。
-    private func manualStageAll(repo: OpaquePointer, index: OpaquePointer) throws {
-        // 构建 status options（与 status() 方法一致）
-        var opts = git_status_options()
-        git_status_init_options(&opts, numericCast(GIT_STATUS_OPTIONS_VERSION))
-        opts.show = GIT_STATUS_SHOW_INDEX_AND_WORKDIR
-        let flagsRaw = GIT_STATUS_OPT_INCLUDE_UNTRACKED.rawValue
-            | GIT_STATUS_OPT_RENAMES_HEAD_TO_INDEX.rawValue
-            | GIT_STATUS_OPT_SORT_CASE_SENSITIVELY.rawValue
-        withUnsafeMutablePointer(to: &opts.flags) { ptr in
-            ptr.withMemoryRebound(to: type(of: flagsRaw).self, capacity: 1) { rawPtr in
-                rawPtr.pointee = flagsRaw
-            }
-        }
-
-        var statusList: OpaquePointer? = nil
-        try checkGit(
-            git_status_list_new(&statusList, repo, &opts),
-            operation: "git_status_list_new (manualStageAll)"
-        )
-        defer { git_status_list_free(statusList) }
-
-        let count = git_status_list_entrycount(statusList)
-        var stagedCount: Int = 0
-
-        for i in 0..<count {
-            guard let entry = git_status_byindex(statusList, i) else { continue }
-            let flags = entry.pointee.status
-
-            // 未追踪文件（WT_NEW）
-            if flags.rawValue & GIT_STATUS_WT_NEW.rawValue != 0 {
-                let path = extractPath(from: entry.pointee.index_to_workdir, isNew: true)
-                if !path.hasSuffix("/") {
-                    try manualStageFile(repo: repo, index: index, filePath: path)
-                    stagedCount += 1
-                }
-            }
-            // 已修改文件（WT_MODIFIED）
-            else if flags.rawValue & GIT_STATUS_WT_MODIFIED.rawValue != 0 {
-                let path = extractPath(from: entry.pointee.index_to_workdir, isNew: false)
-                try manualStageFile(repo: repo, index: index, filePath: path)
-                stagedCount += 1
-            }
-            // 已删除文件（WT_DELETED）—— 从 index 中移除
-            else if flags.rawValue & GIT_STATUS_WT_DELETED.rawValue != 0 {
-                let path = extractPath(from: entry.pointee.index_to_workdir, isNew: false)
-                _ = path.withCString { git_index_remove_bypath(index, $0) }
-                stagedCount += 1
-            }
-        }
-
-        if stagedCount == 0 {
-            throw GitError.stageFailed("没有可暂存的文件改动")
-        }
-    }
-
-    /// 手动创建提交 —— 绕过 libgit2 内部 zlib。
-    ///
-    /// 当 `git_index_write_tree` 或 `git_commit_create` 因 zlib 失败时，
-    /// 此方法手动完成整个提交流程：
-    /// 1. 读取 index 中所有条目
-    /// 2. 构建 tree 对象内容并写入 loose object
-    /// 3. 构建 commit 对象内容并写入 loose object
-    /// 4. 更新 .git/refs/heads/<branch> 指向新 commit
-    private func manualCommit(repo: OpaquePointer, index: OpaquePointer, message: String) throws {
-        // 1. 读取 index 中所有条目
-        let entryCount = git_index_entrycount(index)
-        if entryCount == 0 {
-            throw GitError.commitFailed("没有暂存的文件，无法提交")
-        }
-
-        // 2. 收集所有 index 条目
-        struct TreeEntry {
-            let name: String
-            let mode: String
-            let oid: git_oid
-        }
-        var treeEntries: [TreeEntry] = []
-
-        for i in 0..<entryCount {
-            guard let rawEntry = git_index_get_byindex(index, i) else { continue }
-            let e = rawEntry.pointee
-
-            // 获取路径
-            let pathStr: String
-            if let p = e.path {
-                pathStr = String(cString: p)
-            } else {
-                continue
-            }
-
-            // 获取模式字符串
-            let modeStr: String
-            switch e.mode {
-            case 0o100644: modeStr = "100644"  // 普通文件
-            case 0o100755: modeStr = "100755"  // 可执行文件
-            case 0o120000: modeStr = "120000"  // 符号链接
-            case 0o160000: modeStr = "160000"  // gitlink (submodule)
-            default: modeStr = "100644"
-            }
-
-            treeEntries.append(TreeEntry(name: pathStr, mode: modeStr, oid: e.id))
-        }
-
-        // 3. 按 git 规则排序 tree 条目（按名称排序，目录名追加 '/'）
-        treeEntries.sort { a, b in
-            // git 的 tree 排序：目录名追加 '/' 后比较
-            // 对于 index 条目（都是文件），直接按名称排序即可
-            a.name < b.name
-        }
-
-        // 4. 构建 tree 对象内容
-        // 格式："<mode> <name>\0<20-byte binary OID>" 重复
-        var treeContent = Data()
-        for entry in treeEntries {
-            let entryHeader = "\(entry.mode) \(entry.name)"
-            treeContent.append(entryHeader.data(using: .isoLatin1) ?? Data())
-            treeContent.append(0) // null 分隔符
-            // 附加 20 字节二进制 OID
-            var oidCopy = entry.oid
-            withUnsafeBytes(of: &oidCopy) { rawBuf in
-                treeContent.append(contentsOf: rawBuf)
-            }
-        }
-
-        // 5. 写入 tree loose object
-        let treeOidHex = try writeLooseObject(type: "tree", content: treeContent)
-
-        // 6. 构建 commit 对象内容
-        // 格式：
-        //   tree <tree_oid_hex>\n
-        //   parent <parent_oid_hex>\n  (可选，首次提交无 parent)
-        //   author <name> <email> <timestamp> <timezone>\n
-        //   committer <name> <email> <timestamp> <timezone>\n
-        //   \n
-        //   <commit message>\n
-        let authorName = UserDefaults.standard.string(forKey: BaizeGit.usernameUDKey) ?? BaizeGit.defaultCommitAuthor
-        let authorEmail = BaizeGit.defaultCommitEmail
-        let timestamp = Int64(Date().timeIntervalSince1970)
-
-        // 计算时区偏移（如 +0800）
-        let tzOffsetMinutes = TimeZone.current.secondsFromGMT() / 60
-        let tzSign = tzOffsetMinutes >= 0 ? "+" : "-"
-        let tzAbs = abs(tzOffsetMinutes)
-        let tzStr = String(format: "%@%02d%02d", tzSign, tzAbs / 60, tzAbs % 60)
-
-        var commitContent = ""
-        commitContent += "tree \(treeOidHex)\n"
-
-        // 检查是否有 parent commit（从 HEAD 解析）
-        var headRef: OpaquePointer? = nil
-        let headCode = git_repository_head(&headRef, repo)
-        if headCode == 0, let hr = headRef {
-            defer { git_reference_free(hr) }
-            var peeledObj: OpaquePointer? = nil
-            if git_reference_peel(&peeledObj, hr, GIT_OBJECT_COMMIT) == 0, let obj = peeledObj {
-                defer { git_object_free(obj) }
-                if let oidPtr = git_object_id(obj) {
-                    var parentOid = oidPtr.pointee
-                    let parentHex = withUnsafePointer(to: &parentOid) { ptr -> String in
-                        guard let hex = git_oid_tostr_s(ptr) else { return "" }
-                        return String(cString: hex)
-                    }
-                    if !parentHex.isEmpty {
-                        commitContent += "parent \(parentHex)\n"
-                    }
-                }
-            }
-        }
-        // headCode == -9 (unborn branch) 或 -3 (not found) → 首次提交，无 parent
-
-        commitContent += "author \(authorName) <\(authorEmail)> \(timestamp) \(tzStr)\n"
-        commitContent += "committer \(authorName) <\(authorEmail)> \(timestamp) \(tzStr)\n"
-        commitContent += "\n"
-        commitContent += message
-        if !message.hasSuffix("\n") {
-            commitContent += "\n"
-        }
-
-        // 7. 写入 commit loose object
-        let commitOidHex = try writeLooseObject(
-            type: "commit",
-            content: commitContent.data(using: .utf8) ?? Data()
-        )
-
-        // 8. 更新 HEAD ref —— 写入 .git/refs/heads/<branch>
-        let branchName = try getCurrentBranchName(repo: repo)
-        let refPath = (repositoryPath as NSString)
-            .appendingPathComponent(".git/refs/heads/\(branchName)")
-        let refDir = (refPath as NSString).deletingLastPathComponent
-
-        // 创建 refs/heads 目录（如果不存在）
-        try FileManager.default.createDirectory(
-            atPath: refDir,
-            withIntermediateDirectories: true
-        )
-
-        // 写入 commit OID 到 ref 文件
-        try "\(commitOidHex)\n".write(
-            to: URL(fileURLWithPath: refPath),
-            atomically: true,
-            encoding: .utf8
-        )
-    }
-
-    // MARK: - Zlib Diagnostics
-
-    /// 测试 zlib 是否正常工作 —— 用于诊断 "failed to initialize zlib" 问题。
-    ///
-    /// 测试两个维度：
-    /// 1. libgit2 内部 zlib（通过 git_index 操作间接测试）
-    /// 2. 系统 zlib（直接调用 compress2 测试）
-    ///
-    /// 返回 true 表示系统 zlib 可用（手动 loose object 创建可行）。
-    /// 返回 false 表示系统 zlib 也不可用（底层兼容性问题）。
-    func testZlib() async -> Bool {
-        guard libgit2InitResult >= 0 else { return false }
-
-        // 测试 1: 系统 zlib 直接压缩
-        let testData = "zlib test \(Date().timeIntervalSince1970)".data(using: .utf8) ?? Data()
-        let systemZlibOk = (zlibCompress(testData) != nil)
-
-        // 测试 2: libgit2 index 读取（间接测试 zlib inflate）
-        // 此测试不影响返回值，仅用于未来扩展诊断信息
-        var libgit2IndexOk = false
-        do {
-            let repo = try openRepository()
-            defer { git_repository_free(repo) }
-            var index: OpaquePointer? = nil
-            if git_repository_index(&index, repo) == 0, let idx = index {
-                _ = git_index_entrycount(idx)
-                git_index_free(idx)
-                libgit2IndexOk = true
-            }
-        } catch {
-            libgit2IndexOk = false
-        }
-        _ = libgit2IndexOk // 标记已使用（诊断信息，保留供未来扩展）
-
-        // 系统 zlib 可用是手动 loose object 创建的前提
-        return systemZlibOk
-    }
-
     // MARK: - Init Repository
 
     /// 在当前工作目录初始化一个新的 Git 仓库（git_repository_init）
@@ -835,55 +387,17 @@ actor GitService {
         var index: OpaquePointer? = nil
         try checkGit(git_repository_index(&index, repo), operation: "git_repository_index")
         defer { git_index_free(index) }
-        // checkGit 已确保 git_repository_index 成功，此处 index 必非 nil
-        guard let idx = index else { throw GitError.operationFailed("git_repository_index 返回 nil index") }
-
-        // Bug fix (P0, round 7): index 预热 —— 读取 entry count 并写回，
-        // 强制初始化 index 内部结构，可能修复 "failed to initialize zlib" 问题。
-        warmupIndex(idx)
+        guard index != nil else { throw GitError.operationFailed("git_repository_index 返回 nil index") }
 
         let code = normalizedPath.withCString { git_index_add_bypath(index, $0) }
         if code != 0 {
-            // 捕获 libgit2 详细错误信息
-            let detail: String
-            if let err = git_error_last(), let msg = err.pointee.message {
-                detail = String(cString: msg)
-            } else {
-                detail = "unknown"
-            }
-
-            // Fallback 1: 尝试 git_index_add_all（pathspec 匹配）
+            // Fallback: 尝试 git_index_add_all（pathspec 匹配）
             let cPath = strdup(normalizedPath)
             var pathStrings: [UnsafeMutablePointer<CChar>?] = [cPath]
             var pathspec = git_strarray(strings: &pathStrings, count: 1)
             let fallbackCode = git_index_add_all(index, &pathspec, 0, nil, nil)
             if let p = cPath { free(p) }
-
-            if fallbackCode != 0 {
-                let fallbackDetail: String
-                if let err = git_error_last(), let msg = err.pointee.message {
-                    fallbackDetail = String(cString: msg)
-                } else {
-                    fallbackDetail = "unknown"
-                }
-
-                // Bug fix (P0, round 7): Fallback 2 —— 手动创建 blob 对象。
-                // 当 libgit2 内部 zlib 初始化失败 ("failed to initialize zlib") 时，
-                // add_bypath 和 add_all 都会失败（它们内部创建 blob 需要 deflate）。
-                // 此时用系统 zlib (libz.tbd) 手动创建 loose object，再用
-                // git_index_add 添加条目（不触发 deflate）。
-                do {
-                    try manualStageFile(repo: repo, index: idx, filePath: normalizedPath)
-                } catch {
-                    // 手动暂存也失败了 —— 给用户最清晰的错误信息
-                    throw GitError.stageFailed(
-                        "暂存失败: libgit2 add_bypath (code: \(code), detail: \(detail)); "
-                        + "add_all fallback (code: \(fallbackCode), detail: \(fallbackDetail)); "
-                        + "手动暂存也失败: \(error.localizedDescription)"
-                    )
-                }
-                // 手动暂存成功，继续执行 git_index_write
-            }
+            try checkGit(fallbackCode, operation: "git_index_add_all (fallback for \(normalizedPath))")
         }
         try checkGit(git_index_write(index), operation: "git_index_write")
     }
@@ -894,31 +408,10 @@ actor GitService {
         var index: OpaquePointer? = nil
         try checkGit(git_repository_index(&index, repo), operation: "git_repository_index")
         defer { git_index_free(index) }
-        guard let idx = index else { throw GitError.operationFailed("git_repository_index 返回 nil index") }
-
-        // Bug fix (P0, round 7): index 预热
-        warmupIndex(idx)
+        guard index != nil else { throw GitError.operationFailed("git_repository_index 返回 nil index") }
 
         var pathspec = git_strarray(strings: nil, count: 0)
-        let code = git_index_add_all(index, &pathspec, 0, nil, nil)
-        if code != 0 {
-            // Bug fix (P0, round 7): add_all 失败时尝试手动暂存所有文件
-            let detail: String
-            if let err = git_error_last(), let msg = err.pointee.message {
-                detail = String(cString: msg)
-            } else {
-                detail = "unknown"
-            }
-
-            do {
-                try manualStageAll(repo: repo, index: idx)
-            } catch {
-                throw GitError.stageFailed(
-                    "git_index_add_all failed (code: \(code), detail: \(detail)); "
-                    + "手动暂存所有文件也失败: \(error.localizedDescription)"
-                )
-            }
-        }
+        try checkGit(git_index_add_all(index, &pathspec, 0, nil, nil), operation: "git_index_add_all")
         try checkGit(git_index_write(index), operation: "git_index_write")
     }
 
@@ -939,8 +432,6 @@ actor GitService {
                 var index: OpaquePointer? = nil
                 _ = git_repository_index(&index, repo)
                 if let idx = index {
-                    // Bug fix (P0, round 7): index 预热
-                    warmupIndex(idx)
                     let rc = git_index_remove_bypath(idx, cPath)
                     if rc == 0 { _ = git_index_write(idx) }
                     git_index_free(idx)
@@ -951,9 +442,7 @@ actor GitService {
             var index: OpaquePointer? = nil
             try checkGit(git_repository_index(&index, repo), operation: "git_repository_index")
             defer { git_index_free(index) }
-            guard let idx = index else { throw GitError.operationFailed("git_repository_index 返回 nil index") }
-            // Bug fix (P0, round 7): index 预热
-            warmupIndex(idx)
+            guard index != nil else { throw GitError.operationFailed("git_repository_index 返回 nil index") }
             let rc = filePath.withCString { git_index_remove_bypath(index, $0) }
             if rc != 0 { throw GitError.stageFailed("unstage failed for '\(filePath)' in empty repo") }
             try checkGit(git_index_write(index), operation: "git_index_write")
@@ -973,9 +462,7 @@ actor GitService {
             var index: OpaquePointer? = nil
             try checkGit(git_repository_index(&index, repo), operation: "git_repository_index")
             defer { git_index_free(index) }
-            guard let idx = index else { throw GitError.operationFailed("git_repository_index 返回 nil index") }
-            // Bug fix (P0, round 7): index 预热
-            warmupIndex(idx)
+            guard index != nil else { throw GitError.operationFailed("git_repository_index 返回 nil index") }
             var pathspec = git_strarray(strings: nil, count: 0)
             _ = git_index_remove_all(index, &pathspec, nil, nil)
             try checkGit(git_index_write(index), operation: "git_index_write")
@@ -1004,34 +491,10 @@ actor GitService {
         var index: OpaquePointer? = nil
         try checkGit(git_repository_index(&index, repo), operation: "git_repository_index")
         defer { git_index_free(index) }
-        guard let idx = index else { throw GitError.operationFailed("git_repository_index 返回 nil index") }
+        guard index != nil else { throw GitError.operationFailed("git_repository_index 返回 nil index") }
 
-        // Bug fix (P0, round 7): 尝试正常提交路径（git_index_write_tree + git_commit_create）。
-        // 如果因 zlib 失败（"failed to initialize zlib"），回退到手动创建
-        // tree + commit loose objects + 更新 HEAD ref。
         var treeOid = git_oid()
-        let writeTreeCode = git_index_write_tree(&treeOid, index)
-
-        if writeTreeCode != 0 {
-            // git_index_write_tree 失败 —— 可能是 zlib 问题
-            let treeDetail: String
-            if let err = git_error_last(), let msg = err.pointee.message {
-                treeDetail = String(cString: msg)
-            } else {
-                treeDetail = "unknown"
-            }
-
-            // 回退到手动提交
-            do {
-                try manualCommit(repo: repo, index: idx, message: message)
-                return // 手动提交成功，直接返回
-            } catch {
-                throw GitError.commitFailed(
-                    "git_index_write_tree 失败 (code: \(writeTreeCode), detail: \(treeDetail)); "
-                    + "手动提交也失败: \(error.localizedDescription)"
-                )
-            }
-        }
+        try checkGit(git_index_write_tree(&treeOid, index), operation: "git_index_write_tree")
 
         var tree: OpaquePointer? = nil
         try checkGit(git_tree_lookup(&tree, repo, &treeOid), operation: "git_tree_lookup")
@@ -1042,50 +505,15 @@ actor GitService {
             defer { git_commit_free(parentCommit) }
             var commitOid = git_oid()
             var parents: [OpaquePointer?] = [parentCommit]
-            let createCode = message.withCString { msgPtr in
+            try checkGit(message.withCString { msgPtr in
                 git_commit_create(&commitOid, repo, "HEAD", signature, signature, nil, msgPtr, tree, 1, &parents)
-            }
-            if createCode != 0 {
-                // git_commit_create 失败 —— 可能是 zlib 问题
-                let commitDetail: String
-                if let err = git_error_last(), let msg = err.pointee.message {
-                    commitDetail = String(cString: msg)
-                } else {
-                    commitDetail = "unknown"
-                }
-                // 回退到手动提交
-                do {
-                    try manualCommit(repo: repo, index: idx, message: message)
-                } catch {
-                    throw GitError.commitFailed(
-                        "git_commit_create 失败 (code: \(createCode), detail: \(commitDetail)); "
-                        + "手动提交也失败: \(error.localizedDescription)"
-                    )
-                }
-            }
+            }, operation: "git_commit_create")
         } catch GitError.emptyRepository {
+            // 空仓库首次提交（unborn HEAD）—— 无 parent commit
             var commitOid = git_oid()
-            let createCode = message.withCString { msgPtr in
+            try checkGit(message.withCString { msgPtr in
                 git_commit_create(&commitOid, repo, "HEAD", signature, signature, nil, msgPtr, tree, 0, nil)
-            }
-            if createCode != 0 {
-                // git_commit_create 失败 —— 可能是 zlib 问题
-                let commitDetail: String
-                if let err = git_error_last(), let msg = err.pointee.message {
-                    commitDetail = String(cString: msg)
-                } else {
-                    commitDetail = "unknown"
-                }
-                // 回退到手动提交（首次提交）
-                do {
-                    try manualCommit(repo: repo, index: idx, message: message)
-                } catch {
-                    throw GitError.commitFailed(
-                        "git_commit_create (initial) 失败 (code: \(createCode), detail: \(commitDetail)); "
-                        + "手动提交也失败: \(error.localizedDescription)"
-                    )
-                }
-            }
+            }, operation: "git_commit_create (initial)")
         }
     }
 

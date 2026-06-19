@@ -68,9 +68,9 @@ jobs:
         run: |
           bash scripts/download-runtime.sh
 
-      - name: Download libgit2 xcframework
+      - name: Build libgit2 xcframework (with bundled zlib)
         run: |
-          bash scripts/download-libgit2.sh
+          bash scripts/build-libgit2.sh
 
       - name: Patch repo-local xcframeworks (libgit2 MinimumOSVersion)
         run: |

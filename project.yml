@@ -49,7 +49,6 @@ targets:
       - framework: Baize/Baize/Frameworks/Python.xcframework
         embed: true
       - framework: Baize/Baize/Frameworks/libgit2.xcframework
-      - sdk: libz.tbd
       - sdk: libiconv.tbd
     settings:
       base:
