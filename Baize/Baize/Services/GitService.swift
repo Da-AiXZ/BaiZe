@@ -197,8 +197,8 @@ actor GitService {
         let branchName = try getCurrentBranchName(repo: repo)
 
         var opts = git_status_options()
-        git_status_init_options(&opts, GIT_STATUS_OPTIONS_VERSION)
-        opts.show = GIT_STATUS_SHOW_INDEX_AND_WORKDIR
+        git_status_init_options(&opts, numericCast(GIT_STATUS_OPTIONS_VERSION))
+        opts.show = numericCast(GIT_STATUS_SHOW_INDEX_AND_WORKDIR.rawValue)
         // Set flags as raw bitmask via memory rebinding (enum type is signed in C but values are unsigned)
         let flagsRaw = GIT_STATUS_OPT_INCLUDE_UNTRACKED.rawValue | GIT_STATUS_OPT_RENAMES_HEAD_TO_INDEX.rawValue | GIT_STATUS_OPT_SORT_CASE_SENSITIVELY.rawValue
         withUnsafeMutablePointer(to: &opts.flags) { ptr in
@@ -252,7 +252,7 @@ actor GitService {
 
         var diff: OpaquePointer? = nil
         var diffOpts = git_diff_options()
-        git_diff_init_options(&diffOpts, GIT_DIFF_OPTIONS_VERSION)
+        git_diff_init_options(&diffOpts, numericCast(GIT_DIFF_OPTIONS_VERSION))
 
         switch diffType {
         case .workingTreeVsIndex:
@@ -434,14 +434,14 @@ actor GitService {
         defer { git_remote_free(remote) }
 
         var pushOpts = git_push_options()
-        git_push_init_options(&pushOpts, GIT_PUSH_OPTIONS_VERSION)
+        git_push_init_options(&pushOpts, numericCast(GIT_PUSH_OPTIONS_VERSION))
 
         let payload = GitCredentialsPayload(username: username, token: token)
         let payloadPointer = Unmanaged.passRetained(payload).toOpaque()
         defer { Unmanaged<GitCredentialsPayload>.fromOpaque(payloadPointer).release() }
 
         var callbacks = git_remote_callbacks()
-        git_remote_init_callbacks(&callbacks, GIT_REMOTE_CALLBACKS_VERSION)
+        git_remote_init_callbacks(&callbacks, numericCast(GIT_REMOTE_CALLBACKS_VERSION))
         callbacks.credentials = credentialsCallback
         callbacks.payload = payloadPointer
         pushOpts.callbacks = callbacks
@@ -583,8 +583,8 @@ actor GitService {
         guard let commitHandle = targetCommit else { throw GitError.branchNotFound(name) }
 
         var checkoutOpts = git_checkout_options()
-        git_checkout_init_options(&checkoutOpts, GIT_CHECKOUT_OPTIONS_VERSION)
-        checkoutOpts.checkout_strategy = GIT_CHECKOUT_SAFE
+        git_checkout_init_options(&checkoutOpts, numericCast(GIT_CHECKOUT_OPTIONS_VERSION))
+        checkoutOpts.checkout_strategy = numericCast(GIT_CHECKOUT_SAFE.rawValue)
 
         // Use git_commit_tree_id + git_tree_lookup instead of git_commit_tree
         let treeOid = git_commit_tree_id(commitHandle)
