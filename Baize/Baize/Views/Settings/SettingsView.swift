@@ -6,8 +6,15 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var appState: AppState
 
+    /// Git 配置显示文本 — 用 @State 存储，.onAppear 时从 UserDefaults 重新读取
+    /// 确保从 GitSettingsView 返回后显示最新值（修复 Bug 2: 保存后不刷新）
+    @State private var gitConfigDisplay: String = "未配置"
+
     var body: some View {
         settingsList
+            .onAppear {
+                refreshGitConfigDisplay()
+            }
     }
 
     /// 设置列表 — 显示所有分区入口，使用 NavigationLink 推入子页面
@@ -49,7 +56,7 @@ struct SettingsView: View {
                     icon: "arrow.triangle.branch.fill",
                     iconColor: Color.baizeAccent,
                     title: "Git 配置",
-                    subtitle: gitConfigSubtitle
+                    subtitle: gitConfigDisplay
                 )
             }
 
@@ -104,17 +111,17 @@ struct SettingsView: View {
         return "Node \(nodeFrameworkExists ? "✅" : "❌")  Python \(pythonFrameworkExists ? "✅" : "❌")  Monaco \(monacoHtmlExists ? "✅" : "❌")"
     }
 
-    /// Git 配置状态描述
-    private var gitConfigSubtitle: String {
+    /// 从 UserDefaults 重新读取 Git 配置并更新显示（修复 Bug 2: 保存后不刷新）
+    private func refreshGitConfigDisplay() {
         let keychain = KeychainService()
         let hasToken = keychain.hasGitToken()
         let remoteURL = UserDefaults.standard.string(forKey: BaizeGit.remoteURLUDKey) ?? ""
         if hasToken && !remoteURL.isEmpty {
-            return "Token ✅  |  \(remoteURL)"
+            gitConfigDisplay = "Token ✅  |  \(remoteURL)"
         } else if hasToken {
-            return "Token ✅  |  远程 URL 未配置"
+            gitConfigDisplay = "Token ✅  |  远程 URL 未配置"
         } else {
-            return "未配置"
+            gitConfigDisplay = "未配置"
         }
     }
 }

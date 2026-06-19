@@ -100,9 +100,17 @@ actor GitService {
     private let repositoryPath: String
     private let keychainService: KeychainService
 
+    /// libgit2 初始化返回值（>= 1 成功，< 0 失败）
+    /// 必须在任何 libgit2 API 调用前完成初始化
+    private let libgit2InitResult: Int32
+
     init(repositoryPath: String, keychainService: KeychainService) {
         self.repositoryPath = repositoryPath
         self.keychainService = keychainService
+
+        // CRITICAL: 必须在任何 libgit2 调用前初始化库
+        // git_libgit2_init() 返回引用计数（>= 1 成功，< 0 失败），线程安全可多次调用
+        self.libgit2InitResult = git_libgit2_init()
     }
 
     // MARK: - Helpers
@@ -121,6 +129,14 @@ actor GitService {
     }
 
     private func openRepository() throws -> OpaquePointer {
+        // 检查 libgit2 是否初始化成功
+        guard libgit2InitResult >= 0 else {
+            throw GitError.libgit2Error(
+                code: libgit2InitResult,
+                message: "libgit2 has not been initialized; you must call git_libgit2_init"
+            )
+        }
+
         var repo: OpaquePointer? = nil
         let code = git_repository_open(&repo, repositoryPath)
         if code != 0 {

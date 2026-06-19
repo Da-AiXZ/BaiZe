@@ -93,10 +93,11 @@ private struct WorkspacePane: View {
                     .frame(width: geo.size.width * appState.focusMode.chatRatio)
             }
         }
-        // Bug 1 fix: 显眼的焦点切换控件 — 浮动在 WorkspacePane 顶部中央
-        .overlay(alignment: .top) {
+        // Bug 4 fix: FocusModeBar 移到右上角，避免挡住 Agent 状态显示
+        .overlay(alignment: .topTrailing) {
             FocusModeBar(focusMode: $appState.focusMode, isAgentRunning: appState.isAgentRunning)
                 .padding(.top, 4)
+                .padding(.trailing, 8)
         }
         .animation(.easeInOut(duration: 0.3), value: appState.focusMode)
     }
@@ -104,7 +105,7 @@ private struct WorkspacePane: View {
 
 // MARK: - Focus Mode Bar (Bug 1 fix)
 
-/// 显眼的焦点模式切换控件 — 浮动在 WorkspacePane 顶部中央
+/// 焦点模式切换控件 — 浮动在 WorkspacePane 右上角
 /// 用户一眼可见，支持代码/对话/平衡三种模式
 /// Agent 运行时锁定为对话模式，运行结束后用户可手动切换
 private struct FocusModeBar: View {

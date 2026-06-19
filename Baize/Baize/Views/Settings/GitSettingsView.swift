@@ -8,6 +8,9 @@ struct GitSettingsView: View {
     @State private var remoteURL: String = ""
     @State private var username: String = ""
 
+    /// 控制 Token 输入框显示/隐藏（修复 Bug 3: Token 内容不可见）
+    @State private var showToken: Bool = false
+
     @State private var isTesting: Bool = false
     @State private var testResult: String?
     @State private var testSuccess: Bool = false
@@ -19,14 +22,28 @@ struct GitSettingsView: View {
         Form {
             // 凭据配置 Section
             Section(header: Text("GitHub 凭据")) {
-                // GitHub Token
+                // GitHub Token — 支持显示/隐藏切换（修复 Bug 3: Token 内容不可见）
                 HStack {
                     Image(systemName: "key.fill")
                         .foregroundColor(Color.baizeAccent)
                         .frame(width: 24)
-                    SecureField("GitHub Personal Access Token", text: $token)
-                        .autocapitalization(.none)
-                        .disableAutocorrection(true)
+                    if showToken {
+                        TextField("GitHub Personal Access Token", text: $token)
+                            .autocapitalization(.none)
+                            .disableAutocorrection(true)
+                    } else {
+                        SecureField("GitHub Personal Access Token", text: $token)
+                            .autocapitalization(.none)
+                            .disableAutocorrection(true)
+                    }
+                    Button(action: {
+                        showToken.toggle()
+                    }) {
+                        Image(systemName: showToken ? "eye.slash" : "eye")
+                            .foregroundColor(.secondary)
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.plain)
                 }
 
                 // 用户名
