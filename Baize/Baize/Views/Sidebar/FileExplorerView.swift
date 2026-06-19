@@ -130,7 +130,7 @@ struct FileItemRow: View {
     let onTap: () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
+        let rowContent = HStack(spacing: 8) {
             Image(systemName: iconName)
                 .foregroundColor(iconColor)
                 .frame(width: 16)
@@ -162,7 +162,16 @@ struct FileItemRow: View {
         .padding(.vertical, 2)
         .background(isSelected ? Color.baizeAccent.opacity(0.15) : Color.clear)
         .contentShape(Rectangle())
-        .onTapGesture(perform: onTap)
+
+        // Bug fix (P2): 目录的展开/折叠由 OutlineGroup 原生处理，
+        // 不添加 onTapGesture，否则会拦截 OutlineGroup 的展开事件导致点击目录无反应。
+        // 之前对所有项目（含目录）都添加了 onTapGesture，导致 .baize、.git 等目录点击无反应。
+        // 文件仍保留 onTapGesture 以处理文件打开逻辑。
+        if item.isDirectory {
+            rowContent
+        } else {
+            rowContent.onTapGesture(perform: onTap)
+        }
     }
 
     private var iconName: String {

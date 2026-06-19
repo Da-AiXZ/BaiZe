@@ -289,7 +289,13 @@ actor GitService {
             }
 
             if flags.rawValue & GIT_STATUS_WT_NEW.rawValue != 0 {
-                untracked.append(GitFileStatus(path: extractPath(from: entry.pointee.index_to_workdir, isNew: true), changeStatus: .untracked, isStaged: false))
+                let path = extractPath(from: entry.pointee.index_to_workdir, isNew: true)
+                // Bug fix (P0): libgit2 的 git_status_list 会列出未追踪的目录（路径以 "/" 结尾，
+                // 如 ".baize/"）。git_index_add_bypath 只能暂存文件不能暂存目录，
+                // 所以过滤掉目录条目，避免 UI 显示目录后用户点击暂存报错。
+                if !path.hasSuffix("/") {
+                    untracked.append(GitFileStatus(path: path, changeStatus: .untracked, isStaged: false))
+                }
             } else if flags.rawValue & GIT_STATUS_WT_MODIFIED.rawValue != 0 {
                 modified.append(GitFileStatus(path: extractPath(from: entry.pointee.index_to_workdir, isNew: false), changeStatus: .modified, isStaged: false))
             } else if flags.rawValue & GIT_STATUS_WT_DELETED.rawValue != 0 {
@@ -356,6 +362,12 @@ actor GitService {
     // MARK: - Stage
 
     func stage(filePath: String) async throws {
+        // Bug fix (P0): 防御性检查 — 如果 filePath 以 "/" 结尾说明是目录，
+        // git_index_add_bypath 只能暂存文件不能暂存目录，返回 -1 会报错。
+        // 正常情况下 status() 已过滤目录条目，这里是额外的安全防线。
+        if filePath.hasSuffix("/") {
+            throw GitError.stageFailed("不能暂存目录，请暂存具体文件")
+        }
         let repo = try openRepository()
         defer { git_repository_free(repo) }
         var index: OpaquePointer? = nil
@@ -479,6 +491,22 @@ actor GitService {
 
     // MARK: - Push
 
+    /// 检查是否已配置远程仓库（origin）
+    /// Bug fix (P1): 新增方法，用于 push 前检查 remote 是否存在
+    func hasRemote() async -> Bool {
+        guard libgit2InitResult >= 0 else { return false }
+        do {
+            let repo = try openRepository()
+            defer { git_repository_free(repo) }
+            var remote: OpaquePointer? = nil
+            let code = git_remote_lookup(&remote, repo, BaizeGit.defaultRemoteName)
+            if let r = remote { git_remote_free(r) }
+            return code == 0
+        } catch {
+            return false
+        }
+    }
+
     func push() async throws {
         guard let token = keychainService.loadGitToken(), !token.isEmpty else { throw GitError.credentialsMissing }
         let username = UserDefaults.standard.string(forKey: BaizeGit.usernameUDKey) ?? "git"
@@ -488,7 +516,13 @@ actor GitService {
         let branchName = try getCurrentBranchName(repo: repo)
 
         var remote: OpaquePointer? = nil
-        try checkGit(git_remote_lookup(&remote, repo, BaizeGit.defaultRemoteName), operation: "git_remote_lookup")
+        // Bug fix (P1): 提前检查 remote 是否存在，给出友好提示而非 libgit2 原始错误。
+        // git_repository_init() 创建的本地仓库没有配置远程仓库，
+        // 直接 git_remote_lookup 查找 "origin" 返回 GIT_ENOTFOUND (-3)。
+        let lookupCode = git_remote_lookup(&remote, repo, BaizeGit.defaultRemoteName)
+        if lookupCode != 0 {
+            throw GitError.operationFailed("尚未配置远程仓库，请在设置 → Git 配置中添加远程地址")
+        }
         defer { git_remote_free(remote) }
 
         var pushOpts = git_push_options()
@@ -538,10 +572,12 @@ actor GitService {
         try checkGit(git_revwalk_new(&walker, repo), operation: "git_revwalk_new")
         defer { git_revwalk_free(walker) }
 
-        // 空仓库（unborn HEAD）时 git_revwalk_push_head 返回 GIT_ENOTFOUND (-3) 或 GIT_EUNBORNBRANCH (-9)
-        // 返回空列表而非抛出错误，让 UI 显示"暂无提交"
+        // Bug fix (P0): git_revwalk_push_head() 在空仓库（unborn HEAD）时可能返回
+        // -1（通用错误）、-3（GIT_ENOTFOUND）或 -9（GIT_EUNBORNBRANCH）。
+        // 任何负值都表示 HEAD 无法 push 到 revwalk，对 UI 来说等同于"无提交历史"。
+        // 之前只 catch 了 -3 和 -9，遗漏了 -1，导致空仓库切到"历史"Tab 时弹错误 Alert。
         let pushCode = git_revwalk_push_head(walker)
-        if pushCode == GIT_ENOTFOUND.rawValue || pushCode == -9 {
+        if pushCode < 0 {
             return []
         }
         try checkGit(pushCode, operation: "git_revwalk_push_head")

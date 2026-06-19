@@ -39,6 +39,11 @@ struct GitSubTabView: View {
                 viewModel.selectedSubTab = tab
             }
 
+            // Bug fix (P2): 如果正在加载/推送/提交，跳过重复的数据加载请求。
+            // 避免快速连续点击产生竞态导致多个 Task 排队在 GitService actor 上，
+            // UI 状态更新延迟，用户感觉"点了没反应"。
+            guard !viewModel.isLoading && !viewModel.isPushing && !viewModel.isCommitting else { return }
+
             // 切换时加载数据
             Task {
                 switch tab {

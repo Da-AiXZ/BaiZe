@@ -255,8 +255,10 @@ class GitViewModel: ObservableObject {
             if case .emptyRepository = gitError {
                 commits = []
                 hasMoreCommits = false
-            } else if case .libgit2Error(let code, _) = gitError, code == -9 {
-                // GIT_EUNBORNBRANCH: 空仓库无提交历史
+            } else if case .libgit2Error(let code, _) = gitError, code < 0 {
+                // Bug fix (P0): 任何负错误码（包括 -1 通用错误、-3 GIT_ENOTFOUND、
+                // -9 GIT_EUNBORNBRANCH）都视为空仓库无提交历史，不弹 Alert。
+                // 之前只 catch 了 -9，遗漏了 -1，导致空仓库切到"历史"Tab 时弹错误 Alert。
                 commits = []
                 hasMoreCommits = false
             } else {
