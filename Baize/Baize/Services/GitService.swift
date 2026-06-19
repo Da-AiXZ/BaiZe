@@ -174,14 +174,10 @@ actor GitService {
         try checkGit(code, operation: "git_repository_head")
         defer { git_reference_free(headRef) }
 
-        var buf = git_buf(ptr: nil, asize: 0, size: 0)
-        let branchCode = git_branch_name(&buf, headRef)
-        if branchCode == 0, let ptr = buf.ptr {
-            let name = String(cString: ptr)
-            git_buf_dispose(&buf)
-            return name
+        // Use git_reference_shorthand to get branch name directly (avoids git_buf type issues)
+        if let shorthand = git_reference_shorthand(headRef) {
+            return String(cString: shorthand)
         }
-        git_buf_dispose(&buf)
         return "HEAD"
     }
 
@@ -203,9 +199,13 @@ actor GitService {
         var opts = git_status_options()
         git_status_init_options(&opts, GIT_STATUS_OPTIONS_VERSION)
         opts.show = GIT_STATUS_SHOW_INDEX_AND_WORKDIR
-        opts.flags = UInt32(bitPattern: GIT_STATUS_OPT_INCLUDE_UNTRACKED.rawValue)
-            | UInt32(bitPattern: GIT_STATUS_OPT_RENAMES_HEAD_TO_INDEX.rawValue)
-            | UInt32(bitPattern: GIT_STATUS_OPT_SORT_CASE_SENSITIVELY.rawValue)
+        // Set flags as raw bitmask via memory rebinding (enum type is signed in C but values are unsigned)
+        let flagsRaw = GIT_STATUS_OPT_INCLUDE_UNTRACKED.rawValue | GIT_STATUS_OPT_RENAMES_HEAD_TO_INDEX.rawValue | GIT_STATUS_OPT_SORT_CASE_SENSITIVELY.rawValue
+        withUnsafeMutablePointer(to: &opts.flags) { ptr in
+            ptr.withMemoryRebound(to: type(of: flagsRaw).self, capacity: 1) { rawPtr in
+                rawPtr.pointee = flagsRaw
+            }
+        }
 
         var statusList: OpaquePointer? = nil
         try checkGit(git_status_list_new(&statusList, repo, &opts), operation: "git_status_list_new")
@@ -218,25 +218,25 @@ actor GitService {
 
         for i in 0..<count {
             guard let entry = git_status_byindex(statusList, i) else { continue }
-            let flags = entry.pointee.status.rawValue
+            let flags = entry.pointee.status
 
-            if flags & GIT_STATUS_INDEX_NEW.rawValue != 0 {
+            if flags.rawValue & GIT_STATUS_INDEX_NEW.rawValue != 0 {
                 staged.append(GitFileStatus(path: extractPath(from: entry.pointee.head_to_index, isNew: true), changeStatus: .added, isStaged: true))
-            } else if flags & GIT_STATUS_INDEX_MODIFIED.rawValue != 0 {
+            } else if flags.rawValue & GIT_STATUS_INDEX_MODIFIED.rawValue != 0 {
                 staged.append(GitFileStatus(path: extractPath(from: entry.pointee.head_to_index, isNew: false), changeStatus: .modified, isStaged: true))
-            } else if flags & GIT_STATUS_INDEX_DELETED.rawValue != 0 {
+            } else if flags.rawValue & GIT_STATUS_INDEX_DELETED.rawValue != 0 {
                 staged.append(GitFileStatus(path: extractPath(from: entry.pointee.head_to_index, isNew: false), changeStatus: .deleted, isStaged: true))
-            } else if flags & GIT_STATUS_INDEX_RENAMED.rawValue != 0 {
+            } else if flags.rawValue & GIT_STATUS_INDEX_RENAMED.rawValue != 0 {
                 staged.append(GitFileStatus(path: extractPath(from: entry.pointee.head_to_index, isNew: true), changeStatus: .renamed, isStaged: true))
             }
 
-            if flags & GIT_STATUS_WT_NEW.rawValue != 0 {
+            if flags.rawValue & GIT_STATUS_WT_NEW.rawValue != 0 {
                 untracked.append(GitFileStatus(path: extractPath(from: entry.pointee.index_to_workdir, isNew: true), changeStatus: .untracked, isStaged: false))
-            } else if flags & GIT_STATUS_WT_MODIFIED.rawValue != 0 {
+            } else if flags.rawValue & GIT_STATUS_WT_MODIFIED.rawValue != 0 {
                 modified.append(GitFileStatus(path: extractPath(from: entry.pointee.index_to_workdir, isNew: false), changeStatus: .modified, isStaged: false))
-            } else if flags & GIT_STATUS_WT_DELETED.rawValue != 0 {
+            } else if flags.rawValue & GIT_STATUS_WT_DELETED.rawValue != 0 {
                 modified.append(GitFileStatus(path: extractPath(from: entry.pointee.index_to_workdir, isNew: false), changeStatus: .deleted, isStaged: false))
-            } else if flags & GIT_STATUS_WT_RENAMED.rawValue != 0 {
+            } else if flags.rawValue & GIT_STATUS_WT_RENAMED.rawValue != 0 {
                 modified.append(GitFileStatus(path: extractPath(from: entry.pointee.index_to_workdir, isNew: true), changeStatus: .renamed, isStaged: false))
             }
         }
@@ -480,7 +480,7 @@ actor GitService {
         try checkGit(git_revwalk_new(&walker, repo), operation: "git_revwalk_new")
         defer { git_revwalk_free(walker) }
         try checkGit(git_revwalk_push_head(walker), operation: "git_revwalk_push_head")
-        git_revwalk_sorting(walker, UInt32(bitPattern: GIT_SORT_TIME.rawValue))
+        git_revwalk_sorting(walker, GIT_SORT_TIME.rawValue)
 
         var commits: [GitCommit] = []
         var skipped = 0
@@ -554,12 +554,11 @@ actor GitService {
         var bt = git_branch_t(GIT_BRANCH_LOCAL.rawValue)
         while git_branch_next(&ref, &bt, iter) == 0 {
             defer { git_reference_free(ref) }
-            var buf = git_buf(ptr: nil, asize: 0, size: 0)
-            if git_branch_name(&buf, ref) == 0, let ptr = buf.ptr {
-                let name = String(cString: ptr)
+            // Use git_reference_shorthand to get branch name (avoids git_buf type issues)
+            if let shorthand = git_reference_shorthand(ref) {
+                let name = String(cString: shorthand)
                 branches.append(GitBranch(name: name, isCurrent: name == currentName, isRemote: false))
             }
-            git_buf_dispose(&buf)
         }
         return branches
     }
@@ -585,10 +584,15 @@ actor GitService {
 
         var checkoutOpts = git_checkout_options()
         git_checkout_init_options(&checkoutOpts, GIT_CHECKOUT_OPTIONS_VERSION)
-        checkoutOpts.checkout_strategy = UInt32(bitPattern: GIT_CHECKOUT_SAFE.rawValue)
+        checkoutOpts.checkout_strategy = GIT_CHECKOUT_SAFE
 
-        let tree = git_commit_tree(commitHandle)
-        try checkGit(git_checkout_tree(repo, tree, &checkoutOpts), operation: "git_checkout_tree")
+        // Use git_commit_tree_id + git_tree_lookup instead of git_commit_tree
+        let treeOid = git_commit_tree_id(commitHandle)
+        var tree: OpaquePointer? = nil
+        try checkGit(git_tree_lookup(&tree, repo, treeOid), operation: "git_tree_lookup")
+        defer { git_tree_free(tree) }
+        guard let treeHandle = tree else { throw GitError.branchNotFound(name) }
+        try checkGit(git_checkout_tree(repo, treeHandle, &checkoutOpts), operation: "git_checkout_tree")
 
         let refspec = "refs/heads/\(name)"
         try checkGit(refspec.withCString { git_repository_set_head(repo, $0) }, operation: "git_repository_set_head")
