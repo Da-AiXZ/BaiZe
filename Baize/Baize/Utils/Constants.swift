@@ -316,11 +316,72 @@ enum BaizeToken {
     /// 可用对话历史 Token（= maxContext - systemPrompt - toolDefinitions）
     static let availableHistoryTokens = maxContextTokens - systemPromptReserve - toolDefinitionsReserve
 
-    /// 压缩触发阈值（超过此比例时执行 Snip 压缩）
-    static let compactThresholdRatio = 0.8
+    /// 压缩触发阈值（超过此比例时执行压缩）
+    /// P0: 从 0.8 下调至 0.7，使长对话更早触发压缩
+    static let compactThresholdRatio = 0.7
+
+    /// 近期消息保留比例（压缩后保留的近期消息 token 预算占比）
+    /// P0-5: 按 token 预算而非固定条数保留近期消息
+    static let recentRetentionRatio = 0.30
 
     /// 单次估算 Token 乘数（字符数 × 此系数 ≈ Token 数）
     static let tokenEstimateMultiplier = 0.25
+}
+
+// MARK: - Summary Configuration
+
+/// 上下文摘要配置常量 — P0-2 LLM 摘要压缩相关参数
+enum BaizeSummary {
+    /// 摘要消息哨兵前缀 — 用于标记 assistant 消息为摘要（不新增 Message case）
+    /// 检测方式：message.content.hasPrefix(sentinelPrefix)
+    static let sentinelPrefix = "📦 [上下文摘要]\n\n"
+
+    /// 摘要 LLM 调用超时时间（秒）— 超时后降级为配对感知近期保留
+    static let timeoutSeconds: TimeInterval = 30.0
+
+    /// 摘要最大 token 数（P0 靠 system prompt 引导，不强制）
+    static let maxTokens: Int = 2048
+
+    /// 摘要专用 system prompt — 指导 LLM 生成结构化摘要
+    /// 保留：文件路径、用户指令、技术决策、错误诊断、任务进度
+    /// 丢弃：寒暄、重复工具输出、已覆盖的旧代码
+    static let systemPrompt = """
+你是一个对话摘要助手。你的任务是将一段编程助手对话历史压缩为结构化摘要，保留对后续工作至关重要的信息。
+
+## 必须保留的信息
+1. **文件路径与文件名**：所有被提及、读取、创建、修改的文件路径（如 /path/to/file.swift）
+2. **用户指令与约束**：用户的明确要求、偏好、限制条件
+3. **关键技术决策**：做出的架构/实现选择及其理由
+4. **错误诊断与修复方案**：遇到的错误、根因分析、已采取的修复措施
+5. **当前任务进度**：已完成的步骤、正在进行的步骤、未完成的待办项
+
+## 应当丢弃的信息
+1. 寒暄、确认类对话（如"好的"、"明白了"）
+2. 重复的工具输出（如多次读取同一文件的相同内容）
+3. 已被后续修改覆盖的旧代码片段
+
+## 输出格式
+用以下结构化格式输出摘要：
+
+### 文件操作记录
+- [文件路径] — [操作类型: 读取/创建/修改] — [关键内容摘要]
+
+### 用户指令
+- [原始用户要求，保留关键细节]
+
+### 技术决策
+- [决策内容] — [理由]
+
+### 错误与修复
+- [错误描述] → [根因] → [修复方案]
+
+### 当前进度
+- ✅ [已完成]
+- 🔄 [进行中]
+- ⬜ [待完成]
+
+请确保摘要简洁但信息完整，总长度不超过 2000 字。
+"""
 }
 
 // MARK: - Runtime Configuration

@@ -32,6 +32,15 @@ enum AgentEvent: @unchecked Sendable {
 
     /// Agent Loop 完成（LLM 不再返回 tool_call，对话结束）
     case completed
+
+    /// 上下文压缩开始 — UI 显示"正在压缩上下文..."
+    case contextCompacting
+
+    /// 上下文压缩完成 — 携带摘要文本、被压缩条数、保留条数
+    case contextCompacted(summary: String, compactedCount: Int, retainedCount: Int)
+
+    /// 上下文压缩失败 — 携带错误描述，降级为近期消息保留
+    case contextCompactionFailed(error: String)
 }
 
 // MARK: - AgentEvent Convenience
@@ -48,6 +57,10 @@ extension AgentEvent {
         case .askConfirmation(let call, let reason): return "需确认: \(call.name) — \(reason)"
         case .error(let err): return "错误: \(err.localizedDescription)"
         case .completed: return "对话完成"
+        case .contextCompacting: return "正在压缩上下文"
+        case .contextCompacted(let summary, let compactedCount, let retainedCount):
+            return "上下文已压缩: \(compactedCount)条→摘要, 保留\(retainedCount)条 — \(summary.prefix(50))..."
+        case .contextCompactionFailed(let error): return "上下文压缩失败: \(error)"
         }
     }
 

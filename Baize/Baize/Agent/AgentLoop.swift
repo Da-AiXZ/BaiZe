@@ -146,7 +146,33 @@ actor AgentLoop {
             agentLogger.info("Agent Loop iteration \(iterationCount), consecutive failures: \(consecutiveFailures)")
 
             // 1. 构建上下文（系统提示 + BAIZE.md + 对话历史 + 工具定义）
-            let promptContext = contextManager.buildContext(messages: session.messages)
+            // P0-2: 压缩前发射事件，让 UI 显示"正在压缩"
+            if contextManager.shouldCompact(messages: session.messages) {
+                continuation.yield(.contextCompacting)
+            }
+
+            // P0-2: buildContext 改为 async（compact 需调 LLM 生成摘要）
+            let promptContext = await contextManager.buildContext(messages: session.messages)
+
+            // P0-2: 压缩后写回 session.messages，防止下轮迭代重复压缩（关键！）
+            if let compacted = promptContext.compactedHistory {
+                session.messages = compacted
+                agentLogger.info("Session messages updated after compaction: \(compacted.count) messages")
+            }
+
+            // P0-2: 发射压缩完成/失败事件
+            if promptContext.didCompact {
+                if let summary = promptContext.summaryText {
+                    continuation.yield(.contextCompacted(
+                        summary: summary,
+                        compactedCount: promptContext.compactedCount,
+                        retainedCount: promptContext.retainedCount
+                    ))
+                } else if let error = promptContext.compactionError {
+                    continuation.yield(.contextCompactionFailed(error: error))
+                }
+            }
+
             let toolDefinitions = await toolRegistry.getToolDefinitions()
 
             // 2. 调用 LLM API（SSE 流式）

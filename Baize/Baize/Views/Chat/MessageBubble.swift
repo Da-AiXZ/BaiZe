@@ -24,6 +24,9 @@ struct MessageBubble: View {
             }
         case .error:
             ErrorMessageBubble(content: message.content, timestamp: message.timestamp)
+        case .system:
+            // P0-2: 压缩提示等系统消息 — 灰色卡片,居中,📦 图标
+            SystemMessageBubble(content: message.content)
         }
     }
 }
@@ -253,6 +256,35 @@ private struct ErrorMessageBubble: View {
                 .background(Color.red.opacity(0.08))
                 .cornerRadius(12)
 
+            Spacer()
+        }
+    }
+}
+
+// MARK: - System Message Bubble (P0-2: 压缩提示)
+
+/// 系统消息气泡 — 居中灰色卡片，用于压缩提示等系统级消息
+/// 区别于 user（右对齐）/ assistant（左对齐）消息
+private struct SystemMessageBubble: View {
+    let content: String
+
+    var body: some View {
+        HStack {
+            Spacer()
+            HStack(spacing: 6) {
+                Image(systemName: "shippingbox")
+                    .font(.system(size: 13))
+                    .foregroundColor(.secondary)
+
+                Text(content)
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color(hex: "1C1C1E"))
+            .cornerRadius(10)
             Spacer()
         }
     }

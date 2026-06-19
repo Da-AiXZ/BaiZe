@@ -63,9 +63,10 @@ struct BaizeApp: App {
         let runtime = RuntimeExecutor(nodeStrategy: nodeStrategy, pythonStrategy: pythonStrategy)
         let permission = PermissionEngine(mode: BaizePermission.defaultMode)
         let projectCtx = ProjectContext(rootPath: workingRoot, fileSystemService: fsService)
-        let contextMgr = ContextManager(projectContext: projectCtx)
-        let conversation = ConversationStore()
         let api = APIGateway(keychainService: keychain)
+        // P0-2: ContextManager 注入 apiGateway，用于调 LLM 生成上下文摘要
+        let contextMgr = ContextManager(projectContext: projectCtx, apiGateway: api)
+        let conversation = ConversationStore()
         let registry = ToolRegistry(fileSystemService: fsService, runtimeExecutor: runtime, nodeEngine: nodeEngine, pythonEngine: pythonEngine)
 
         self.keychainService = keychain

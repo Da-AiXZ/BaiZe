@@ -13,6 +13,7 @@ struct ChatView: View {
     @State private var agentLoop: AgentLoop?
     @State private var streamingText: String = ""
     @State private var hasReceivedAnyResponse: Bool = false
+    @State private var isCompacting: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,6 +26,21 @@ struct ChatView: View {
                 streamingText: streamingText,
                 isStreaming: isStreaming
             )
+
+            // P0-2: 压缩 Loading 状态（摘要 LLM 调用期间显示）
+            if isCompacting {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                    Text("🔄 正在压缩上下文...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.baizeCardBackground)
+            }
 
             // 权限确认弹窗（内嵌）
             if let confirmation = pendingConfirmation {
@@ -130,21 +146,30 @@ struct ChatView: View {
         let activeModel = await apiGateway.getActiveModel()
         baizeLogger.info("ChatView: sending message with provider=\(providerId), model=\(activeModel)")
 
-        // 使用 AppState 中的实际工作路径创建 session
-        let session = ConversationSession(projectPath: appState.currentProjectPath)
-        baizeLogger.info("ChatView: session projectPath=\(session.projectPath)")
-
-        let loop = AgentLoop(
-            apiGateway: apiGateway,
-            toolRegistry: toolRegistry,
-            permissionEngine: permissionEngine,
-            contextManager: contextManager,
-            conversationStore: conversationStore,
-            fileSystemService: fileSystemService,
-            runtimeExecutor: runtimeExecutor,
-            session: session
-        )
-        self.agentLoop = loop
+        // P0-1: 复用已有 AgentLoop（跨轮历史修复），或首次创建新实例
+        // 核心修复：不再每轮新建 ConversationSession + AgentLoop，导致历史归零
+        let loop: AgentLoop
+        if let existingLoop = self.agentLoop {
+            // 复用：同一对话窗口内，session.messages 已含前序轮次完整历史
+            loop = existingLoop
+            baizeLogger.info("Reusing existing AgentLoop for continued conversation")
+        } else {
+            // 首次创建：新 ConversationSession + 新 AgentLoop
+            let session = ConversationSession(projectPath: appState.currentProjectPath)
+            baizeLogger.info("ChatView: new session projectPath=\(session.projectPath)")
+            loop = AgentLoop(
+                apiGateway: apiGateway,
+                toolRegistry: toolRegistry,
+                permissionEngine: permissionEngine,
+                contextManager: contextManager,
+                conversationStore: conversationStore,
+                fileSystemService: fileSystemService,
+                runtimeExecutor: runtimeExecutor,
+                session: session
+            )
+            self.agentLoop = loop
+            baizeLogger.info("Created new AgentLoop for new conversation")
+        }
 
         let eventStream = try await loop.run(userMessage: userMessage)
 
@@ -250,6 +275,28 @@ struct ChatView: View {
                 timestamp: Date()
             ))
 
+        case .contextCompacting:
+            // P0-2: 压缩开始 — UI 显示"正在压缩"状态
+            isCompacting = true
+
+        case .contextCompacted(let summary, let compactedCount, let retainedCount):
+            // P0-2: 压缩完成 — 插入压缩提示（UI 层标记，不进入 LLM 上下文）
+            isCompacting = false
+            displayMessages.append(DisplayMessage(
+                role: .system,
+                content: "📦 上下文已压缩:已将 \(compactedCount) 条历史消息摘要为 1 条,保留最近 \(retainedCount) 条完整对话",
+                timestamp: Date()
+            ))
+
+        case .contextCompactionFailed(let error):
+            // P0-2: 压缩失败降级 — 提示用户，Agent 继续工作
+            isCompacting = false
+            displayMessages.append(DisplayMessage(
+                role: .error,
+                content: "⚠️ 上下文压缩失败:\(error)。已保留最近对话,Agent 继续工作。",
+                timestamp: Date()
+            ))
+
         case .completed:
             if !streamingText.isEmpty {
                 displayMessages.append(DisplayMessage(
@@ -326,6 +373,7 @@ struct DisplayMessage: Identifiable {
         case assistant
         case toolCall
         case error
+        case system
     }
 
 // W12 fix: 删除重复的 ToolCallStatus enum，使用 ToolCallView.ToolCallStatus

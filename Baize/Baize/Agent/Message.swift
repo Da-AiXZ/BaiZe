@@ -95,6 +95,33 @@ enum Message: Sendable, Identifiable {
         return false
     }
 
+    // MARK: - Summary Detection (P0-2: 哨兵前缀机制)
+
+    /// 是否为上下文摘要消息（检测哨兵前缀 `📦 [上下文摘要]`）
+    /// 摘要消息复用 .assistant case + 哨兵前缀，不新增 Message case
+    var isSummary: Bool {
+        if case .assistant(let text) = self {
+            return text.hasPrefix(BaizeSummary.sentinelPrefix)
+        }
+        return false
+    }
+
+    /// 提取纯摘要文本（剥离哨兵前缀）
+    /// 若非摘要消息则返回 nil
+    var summaryText: String? {
+        if case .assistant(let text) = self, text.hasPrefix(BaizeSummary.sentinelPrefix) {
+            return String(text.dropFirst(BaizeSummary.sentinelPrefix.count))
+        }
+        return nil
+    }
+
+    /// 创建摘要消息（复用 .assistant case + 哨兵前缀）
+    /// - Parameter text: 摘要正文（不含哨兵前缀）
+    /// - Returns: .assistant(sentinelPrefix + text)
+    static func summary(_ text: String) -> Message {
+        .assistant(BaizeSummary.sentinelPrefix + text)
+    }
+
     // MARK: - OpenAI API Format Conversion
 
     /// 转换为 OpenAI Chat Completions API 的消息格式
@@ -398,6 +425,29 @@ extension Array where Element == Message {
     }
 }
 
+// MARK: - Message Array Token Estimation (P0-4: 统一 token 估算)
+
+extension Array where Element == Message {
+    /// 统一 token 估算 — 全项目唯一消息级实现
+    /// 包含：消息文本 content + tool_call name/arguments + tool_result content
+    /// 底层原语为 String.estimatedTokens (utf8 × 0.25)
+    var estimatedTokens: Int {
+        reduce(0) { sum, msg in
+            let baseTokens = msg.content.estimatedTokens
+            let toolCallTokens: Int
+            switch msg {
+            case .assistantWithToolCalls(_, let toolCalls):
+                toolCallTokens = toolCalls.reduce(0) { $0 + $1.arguments.estimatedTokens + $1.name.estimatedTokens }
+            case .toolCall(_, let name, let arguments):
+                toolCallTokens = name.estimatedTokens + arguments.estimatedTokens
+            default:
+                toolCallTokens = 0
+            }
+            return sum + baseTokens + toolCallTokens
+        }
+    }
+}
+
 // MARK: - Message Private Helpers
 
 private extension Message {
@@ -437,20 +487,10 @@ struct ConversationSession: Identifiable, Codable {
     }
 
     /// 估算当前消息的总 Token 数
-    /// 考虑 assistantWithToolCalls 中 tool_calls 参数的 token 开销
+    /// P0-4: 委托给统一的 Array<Message>.estimatedTokens 扩展
+    /// （补算 .assistantWithToolCalls 和 .toolCall 的 tool_calls token）
     var estimatedTokens: Int {
-        messages.reduce(0) { sum, msg in
-            let baseTokens = msg.content.estimatedTokens
-            let toolCallTokens: Int
-            if case .assistantWithToolCalls(_, let toolCalls) = msg {
-                toolCallTokens = toolCalls.reduce(0) { tcSum, tc in
-                    tcSum + tc.arguments.estimatedTokens + tc.name.estimatedTokens
-                }
-            } else {
-                toolCallTokens = 0
-            }
-            return sum + baseTokens + toolCallTokens
-        }
+        messages.estimatedTokens
     }
 }
 
