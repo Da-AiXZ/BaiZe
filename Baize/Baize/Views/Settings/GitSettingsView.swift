@@ -165,6 +165,7 @@ struct GitSettingsView: View {
     }
 
     /// 测试 GitHub Token 连接
+    @MainActor
     private func testConnection() async {
         isTesting = true
         testResult = nil
@@ -186,12 +187,13 @@ struct GitSettingsView: View {
             testResult = "连接成功！Token 有效。"
             testSuccess = true
         } else {
-            testResult = appState.gitViewModel?.errorMessage ?? "连接失败，请检查 Token"
+            testResult = await appState.gitViewModel?.errorMessage ?? "连接失败，请检查 Token"
             testSuccess = false
         }
     }
 
     /// 保存配置
+    @MainActor
     private func saveConfig() {
         isSaving = true
         defer { isSaving = false }
@@ -225,6 +227,7 @@ struct GitSettingsView: View {
     }
 
     /// 删除凭据
+    @MainActor
     private func deleteConfig() {
         let keychain = KeychainService()
         do {
