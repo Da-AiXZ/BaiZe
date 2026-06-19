@@ -198,7 +198,7 @@ actor GitService {
 
         var opts = git_status_options()
         git_status_init_options(&opts, numericCast(GIT_STATUS_OPTIONS_VERSION))
-        opts.show = unsafeBitCast(GIT_STATUS_SHOW_INDEX_AND_WORKDIR, to: UInt32.self)
+        opts.show = GIT_STATUS_SHOW_INDEX_AND_WORKDIR
         // Set flags as raw bitmask via memory rebinding (enum type is signed in C but values are unsigned)
         let flagsRaw = GIT_STATUS_OPT_INCLUDE_UNTRACKED.rawValue | GIT_STATUS_OPT_RENAMES_HEAD_TO_INDEX.rawValue | GIT_STATUS_OPT_SORT_CASE_SENSITIVELY.rawValue
         withUnsafeMutablePointer(to: &opts.flags) { ptr in
