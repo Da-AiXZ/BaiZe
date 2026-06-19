@@ -21,6 +21,9 @@ struct ContentView: View {
             .navigationSplitViewStyle(.balanced)
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
+                    // 焦点模式切换控件 — 放在 toolbar 右侧，与侧栏标题同一高度
+                    FocusModeBar(focusMode: $appState.focusMode, isAgentRunning: appState.isAgentRunning)
+
                     // Agent 运行状态指示器（脉冲圆点）
                     AgentStatusIndicator(isRunning: appState.isAgentRunning)
                 }
@@ -93,41 +96,36 @@ private struct WorkspacePane: View {
                     .frame(width: geo.size.width * appState.focusMode.chatRatio)
             }
         }
-        // Bug 4 fix: FocusModeBar 移到右上角，避免挡住 Agent 状态显示
-        .overlay(alignment: .topTrailing) {
-            FocusModeBar(focusMode: $appState.focusMode, isAgentRunning: appState.isAgentRunning)
-                .padding(.top, 4)
-                .padding(.trailing, 8)
-        }
+        // Bug B fix: FocusModeBar 已移至 NavigationSplitView toolbar，不再使用 overlay
         .animation(.easeInOut(duration: 0.3), value: appState.focusMode)
     }
 }
 
 // MARK: - Focus Mode Bar (Bug 1 fix)
 
-/// 焦点模式切换控件 — 浮动在 WorkspacePane 右上角
-/// 用户一眼可见，支持代码/对话/平衡三种模式
+/// 焦点模式切换控件 — 放在 NavigationSplitView toolbar 右侧
+/// 与侧栏标题同一高度，不遮挡内容区的模型/权限选择器
 /// Agent 运行时锁定为对话模式，运行结束后用户可手动切换
 private struct FocusModeBar: View {
     @Binding var focusMode: FocusMode
     let isAgentRunning: Bool
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 2) {
             ForEach(FocusMode.allCases, id: \.self) { mode in
                 Button(action: {
                     withAnimation(.easeInOut(duration: 0.3)) {
                         focusMode = mode
                     }
                 }) {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 3) {
                         Image(systemName: mode.systemImage)
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: 11, weight: .medium))
                         Text(mode.label)
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.system(size: 12, weight: .medium))
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
                     .background(
                         focusMode == mode
                             ? Color.baizeAccent
@@ -138,17 +136,15 @@ private struct FocusModeBar: View {
                             ? .white
                             : .secondary
                     )
-                    .cornerRadius(8)
+                    .cornerRadius(6)
                 }
                 .buttonStyle(.plain)
                 .disabled(isAgentRunning && mode != .chat)
             }
         }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 4)
-        .background(Color(.systemBackground).opacity(0.95))
-        .cornerRadius(12)
-        .shadow(color: Color.black.opacity(0.12), radius: 4, x: 0, y: 2)
+        .padding(2)
+        .background(Color(.systemBackground).opacity(0.8))
+        .cornerRadius(8)
     }
 }
 

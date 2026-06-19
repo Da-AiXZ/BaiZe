@@ -69,6 +69,12 @@ class GitViewModel: ObservableObject {
     /// 是否已配置 Git Token
     @Published var hasGitToken: Bool = false
 
+    /// 当前工作目录是否不是 Git 仓库（用于显示初始化空状态）
+    @Published var isNotAGitRepository: Bool = false
+
+    /// 是否正在初始化仓库
+    @Published var isInitializing: Bool = false
+
     // MARK: - Initialization
 
     init(gitService: GitService) {
@@ -87,10 +93,37 @@ class GitViewModel: ObservableObject {
             status = result
             currentBranch = result.currentBranch
             hasGitToken = KeychainService().hasGitToken()
+            isNotAGitRepository = false
         } catch let gitError as GitError {
-            showError(gitError.errorDescription ?? "未知错误")
+            // 非 Git 仓库：不弹 Alert，设置标志位让 UI 显示初始化空状态
+            if case .notAGitRepository = gitError {
+                isNotAGitRepository = true
+                hasGitToken = KeychainService().hasGitToken()
+            } else {
+                showError(gitError.errorDescription ?? "未知错误")
+            }
         } catch {
             showError("获取状态失败: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Init Repository
+
+    /// 在当前工作目录初始化 Git 仓库
+    func initRepository() async {
+        isInitializing = true
+        defer { isInitializing = false }
+
+        do {
+            try await gitService.initRepository()
+            isNotAGitRepository = false
+            showSuccessMessage("Git 仓库已初始化")
+            // 初始化后立即刷新状态
+            await refreshStatus()
+        } catch let gitError as GitError {
+            showError(gitError.errorDescription ?? "初始化仓库失败")
+        } catch {
+            showError("初始化仓库失败: \(error.localizedDescription)")
         }
     }
 

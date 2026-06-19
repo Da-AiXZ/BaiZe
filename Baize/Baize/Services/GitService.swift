@@ -204,6 +204,40 @@ actor GitService {
         return "(unknown)"
     }
 
+    // MARK: - Init Repository
+
+    /// 在当前工作目录初始化一个新的 Git 仓库（git_repository_init）
+    /// 用于首次打开 Git Tab 时工作目录尚未包含 .git 的情况
+    func initRepository() async throws {
+        guard libgit2InitResult >= 0 else {
+            throw GitError.libgit2Error(
+                code: libgit2InitResult,
+                message: "libgit2 has not been initialized; you must call git_libgit2_init"
+            )
+        }
+
+        var repo: OpaquePointer? = nil
+        let code = git_repository_init(&repo, repositoryPath, 0)
+        if code != 0 {
+            try checkGit(code, operation: "git_repository_init")
+        }
+        if let handle = repo {
+            git_repository_free(handle)
+        }
+    }
+
+    /// 检查当前 repositoryPath 是否已是一个 Git 仓库
+    func isGitRepository() async -> Bool {
+        guard libgit2InitResult >= 0 else { return false }
+        var repo: OpaquePointer? = nil
+        let code = git_repository_open(&repo, repositoryPath)
+        if code == 0, let handle = repo {
+            git_repository_free(handle)
+            return true
+        }
+        return false
+    }
+
     // MARK: - Status
 
     func status() async throws -> GitStatus {

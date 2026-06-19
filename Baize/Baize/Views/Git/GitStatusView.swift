@@ -6,8 +6,13 @@ struct GitStatusView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 主内容区 — 根据子 Tab 切换
-            GitSubTabView(viewModel: viewModel)
+            // 非仓库空状态 — 显示初始化按钮而非报错 Alert
+            if viewModel.isNotAGitRepository {
+                notAGitRepositoryView
+            } else {
+                // 主内容区 — 根据子 Tab 切换
+                GitSubTabView(viewModel: viewModel)
+            }
         }
         .navigationTitle("Git")
         .navigationBarTitleDisplayMode(.inline)
@@ -21,7 +26,7 @@ struct GitStatusView: View {
                         .font(.system(size: 22))
                         .foregroundColor(viewModel.hasGitToken ? Color.baizeAccent : Color.baizeTextSecondary)
                 }
-                .disabled(viewModel.isPushing)
+                .disabled(viewModel.isPushing || viewModel.isNotAGitRepository)
                 .help("推送到远程仓库")
 
                 if viewModel.isPushing {
@@ -51,6 +56,58 @@ struct GitStatusView: View {
         .onAppear {
             Task { await viewModel.refreshStatus() }
         }
+    }
+
+    /// 非 Git 仓库空状态 — 引导用户初始化仓库
+    private var notAGitRepositoryView: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "arrow.triangle.branch")
+                .font(.system(size: 56))
+                .foregroundColor(Color.baizeAccent.opacity(0.6))
+
+            VStack(spacing: 8) {
+                Text("当前目录不是 Git 仓库")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                Text("初始化仓库以开始版本管理")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+
+            Button(action: {
+                Task { await viewModel.initRepository() }
+            }) {
+                HStack(spacing: 8) {
+                    if viewModel.isInitializing {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                            .tint(.white)
+                    } else {
+                        Image(systemName: "square.and.arrow.down.on.square")
+                            .font(.system(size: 16))
+                    }
+                    Text(viewModel.isInitializing ? "初始化中..." : "初始化仓库")
+                        .font(.system(size: 16, weight: .semibold))
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 28)
+                .padding(.vertical, 14)
+                .background(Color.baizeAccent)
+                .cornerRadius(12)
+            }
+            .disabled(viewModel.isInitializing)
+
+            // 提示：配置 Token 后可以推送
+            if !viewModel.hasGitToken {
+                Text("提示：初始化后可在设置中配置 GitHub Token 以推送代码")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.baizeChatBackground)
     }
 }
 
