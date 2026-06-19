@@ -49,7 +49,6 @@ targets:
       - framework: Baize/Baize/Frameworks/Python.xcframework
         embed: true
       - framework: Baize/Baize/Frameworks/libgit2.xcframework
-        embed: true
       - sdk: libz.tbd
       - sdk: libiconv.tbd
     settings:
@@ -74,7 +73,7 @@ targets:
         HEADER_SEARCH_PATHS:
           - "$(inherited)"
           - "$(BUILT_PRODUCTS_DIR)/Python.framework/Headers"
-          - "$(BUILT_PRODUCTS_DIR)/libgit2.framework/Headers"
+          - "$(PROJECT_DIR)/Baize/Baize/Frameworks/libgit2.xcframework/ios-arm64/Headers"
     entitlements:
       path: Baize/Baize/Baize.entitlements
     postBuildScripts:

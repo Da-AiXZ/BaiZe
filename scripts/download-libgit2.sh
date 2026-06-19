@@ -49,31 +49,23 @@ else
     exit 1
 fi
 
-# Verify xcframework structure — check for git2.h header and framework binary
+# Verify xcframework structure — light-tech builds static library xcframework (NOT a .framework bundle)
+# Structure: libgit2.xcframework/ios-arm64/libgit2.a + libgit2.xcframework/ios-arm64/Headers/git2.h
 GIT2_H_FOUND=""
-LIBGIT2_BINARY_FOUND=""
+LIBGIT2_LIB_FOUND=""
 for slice_dir in "$LIBGIT2_XCFRAMEWORK"/*/; do
     [ -d "$slice_dir" ] || continue
-    # Check for libgit2.framework structure
-    if [ -d "$slice_dir/libgit2.framework" ]; then
-        if [ -f "$slice_dir/libgit2.framework/Headers/git2.h" ]; then
-            GIT2_H_FOUND="$slice_dir/libgit2.framework/Headers/git2.h"
-        fi
-        if [ -f "$slice_dir/libgit2.framework/libgit2" ]; then
-            LIBGIT2_BINARY_FOUND="$slice_dir/libgit2.framework/libgit2"
-        fi
+    slice_name=$(basename "$slice_dir")
+
+    # Check for git2.h header (light-tech uses -headers flag, not .framework)
+    if [ -f "$slice_dir/Headers/git2.h" ]; then
+        GIT2_H_FOUND="$slice_dir/Headers/git2.h"
     fi
-    # Some builds may use a different framework name
-    for fw_dir in "$slice_dir"/*.framework; do
-        [ -d "$fw_dir" ] || continue
-        fw_name=$(basename "$fw_dir" .framework)
-        if [ -f "$fw_dir/Headers/git2.h" ]; then
-            GIT2_H_FOUND="$fw_dir/Headers/git2.h"
-        fi
-        if [ -f "$fw_dir/$fw_name" ]; then
-            LIBGIT2_BINARY_FOUND="$fw_dir/$fw_name"
-        fi
-    done
+
+    # Check for static library (.a file)
+    if [ -f "$slice_dir/libgit2.a" ]; then
+        LIBGIT2_LIB_FOUND="$slice_dir/libgit2.a"
+    fi
 done
 
 if [ -n "$GIT2_H_FOUND" ]; then
@@ -84,12 +76,12 @@ else
     find "$LIBGIT2_XCFRAMEWORK" -name "git2.h" 2>/dev/null || true
 fi
 
-if [ -n "$LIBGIT2_BINARY_FOUND" ]; then
-    echo "✅ libgit2 binary found: $LIBGIT2_BINARY_FOUND"
+if [ -n "$LIBGIT2_LIB_FOUND" ]; then
+    echo "✅ libgit2.a static library found: $LIBGIT2_LIB_FOUND"
 else
-    echo "⚠️ WARNING: libgit2 binary not found in xcframework"
-    echo "   Framework directories found:"
-    find "$LIBGIT2_XCFRAMEWORK" -name "*.framework" -type d 2>/dev/null || true
+    echo "⚠️ WARNING: libgit2.a not found in xcframework"
+    echo "   Library files found:"
+    find "$LIBGIT2_XCFRAMEWORK" -name "*.a" 2>/dev/null || true
 fi
 
 # Clean up

@@ -144,19 +144,29 @@ if [ -d "$REPO_FRAMEWORKS_DIR" ]; then
         fi
 
         # --- 2. Patch Mach-O binaries' LC_BUILD_VERSION using vtool ---
+        # For library xcframeworks (light-tech libgit2), the .a file is at slice root
+        # For framework xcframeworks, the binary is inside .framework/
         for slice_dir in "$xcframework_dir"/ios-*; do
             [ -d "$slice_dir" ] || continue
             slice_name=$(basename "$slice_dir")
 
-            # Find .framework directories inside this slice
+            # Collect all Mach-O binaries: .a files at slice root + binaries inside .framework/
+            binaries_to_check=()
+
+            # Check for .a static libraries at slice root (light-tech libgit2 pattern)
+            for lib_file in "$slice_dir"/*.a; do
+                [ -f "$lib_file" ] && binaries_to_check+=("$lib_file")
+            done
+
+            # Check for .framework binaries (standard framework pattern)
             for fw_dir in "$slice_dir"/*.framework; do
                 [ -d "$fw_dir" ] || continue
                 fw_name=$(basename "$fw_dir" .framework)
                 binary="$fw_dir/$fw_name"
+                [ -f "$binary" ] && binaries_to_check+=("$binary")
+            done
 
-                if [ ! -f "$binary" ]; then
-                    continue
-                fi
+            for binary in "${binaries_to_check[@]}"; do
                 if ! file "$binary" | grep -q "Mach-O"; then
                     continue
                 fi

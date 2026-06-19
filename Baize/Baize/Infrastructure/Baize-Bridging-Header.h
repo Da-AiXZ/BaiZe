@@ -12,4 +12,4 @@
 
 #import <Python/Python.h>
 
-#import <libgit2/git2.h>
+#import "git2.h"
