@@ -364,15 +364,17 @@ actor GitService {
         entry.id = oid
 
         // 获取文件属性填充 ctime/mtime（最佳努力，失败用 0）
+        // 注意：git_time_t 是 Int64（typedef int64_t），而 git_index_entry.mtime/ctime
+        // 字段的类型是 git_index_time（结构体，有 seconds 和 nanoseconds 成员）。
         if let attrs = try? FileManager.default.attributesOfItem(atPath: fullPath) {
             if let modDate = attrs[.modificationDate] as? Date {
-                var mtime = git_time_t()
+                var mtime = git_index_time()
                 mtime.seconds = Int64(modDate.timeIntervalSince1970)
                 mtime.nanoseconds = 0
                 entry.mtime = mtime
             }
             if let creationDate = attrs[.creationDate] as? Date {
-                var ctime = git_time_t()
+                var ctime = git_index_time()
                 ctime.seconds = Int64(creationDate.timeIntervalSince1970)
                 ctime.nanoseconds = 0
                 entry.ctime = ctime
@@ -832,10 +834,12 @@ actor GitService {
         var index: OpaquePointer? = nil
         try checkGit(git_repository_index(&index, repo), operation: "git_repository_index")
         defer { git_index_free(index) }
+        // checkGit 已确保 git_repository_index 成功，此处 index 必非 nil
+        guard let idx = index else { throw GitError.operationFailed("git_repository_index 返回 nil index") }
 
         // Bug fix (P0, round 7): index 预热 —— 读取 entry count 并写回，
         // 强制初始化 index 内部结构，可能修复 "failed to initialize zlib" 问题。
-        warmupIndex(index)
+        warmupIndex(idx)
 
         let code = normalizedPath.withCString { git_index_add_bypath(index, $0) }
         if code != 0 {
@@ -868,7 +872,7 @@ actor GitService {
                 // 此时用系统 zlib (libz.tbd) 手动创建 loose object，再用
                 // git_index_add 添加条目（不触发 deflate）。
                 do {
-                    try manualStageFile(repo: repo, index: index, filePath: normalizedPath)
+                    try manualStageFile(repo: repo, index: idx, filePath: normalizedPath)
                 } catch {
                     // 手动暂存也失败了 —— 给用户最清晰的错误信息
                     throw GitError.stageFailed(
@@ -889,9 +893,10 @@ actor GitService {
         var index: OpaquePointer? = nil
         try checkGit(git_repository_index(&index, repo), operation: "git_repository_index")
         defer { git_index_free(index) }
+        guard let idx = index else { throw GitError.operationFailed("git_repository_index 返回 nil index") }
 
         // Bug fix (P0, round 7): index 预热
-        warmupIndex(index)
+        warmupIndex(idx)
 
         var pathspec = git_strarray(strings: nil, count: 0)
         let code = git_index_add_all(index, &pathspec, 0, nil, nil)
@@ -905,7 +910,7 @@ actor GitService {
             }
 
             do {
-                try manualStageAll(repo: repo, index: index)
+                try manualStageAll(repo: repo, index: idx)
             } catch {
                 throw GitError.stageFailed(
                     "git_index_add_all failed (code: \(code), detail: \(detail)); "
@@ -945,8 +950,9 @@ actor GitService {
             var index: OpaquePointer? = nil
             try checkGit(git_repository_index(&index, repo), operation: "git_repository_index")
             defer { git_index_free(index) }
+            guard let idx = index else { throw GitError.operationFailed("git_repository_index 返回 nil index") }
             // Bug fix (P0, round 7): index 预热
-            warmupIndex(index)
+            warmupIndex(idx)
             let rc = filePath.withCString { git_index_remove_bypath(index, $0) }
             if rc != 0 { throw GitError.stageFailed("unstage failed for '\(filePath)' in empty repo") }
             try checkGit(git_index_write(index), operation: "git_index_write")
@@ -966,8 +972,9 @@ actor GitService {
             var index: OpaquePointer? = nil
             try checkGit(git_repository_index(&index, repo), operation: "git_repository_index")
             defer { git_index_free(index) }
+            guard let idx = index else { throw GitError.operationFailed("git_repository_index 返回 nil index") }
             // Bug fix (P0, round 7): index 预热
-            warmupIndex(index)
+            warmupIndex(idx)
             var pathspec = git_strarray(strings: nil, count: 0)
             _ = git_index_remove_all(index, &pathspec, nil, nil)
             try checkGit(git_index_write(index), operation: "git_index_write")
@@ -996,6 +1003,7 @@ actor GitService {
         var index: OpaquePointer? = nil
         try checkGit(git_repository_index(&index, repo), operation: "git_repository_index")
         defer { git_index_free(index) }
+        guard let idx = index else { throw GitError.operationFailed("git_repository_index 返回 nil index") }
 
         // Bug fix (P0, round 7): 尝试正常提交路径（git_index_write_tree + git_commit_create）。
         // 如果因 zlib 失败（"failed to initialize zlib"），回退到手动创建
@@ -1014,7 +1022,7 @@ actor GitService {
 
             // 回退到手动提交
             do {
-                try manualCommit(repo: repo, index: index, message: message)
+                try manualCommit(repo: repo, index: idx, message: message)
                 return // 手动提交成功，直接返回
             } catch {
                 throw GitError.commitFailed(
@@ -1046,7 +1054,7 @@ actor GitService {
                 }
                 // 回退到手动提交
                 do {
-                    try manualCommit(repo: repo, index: index, message: message)
+                    try manualCommit(repo: repo, index: idx, message: message)
                 } catch {
                     throw GitError.commitFailed(
                         "git_commit_create 失败 (code: \(createCode), detail: \(commitDetail)); "
@@ -1069,7 +1077,7 @@ actor GitService {
                 }
                 // 回退到手动提交（首次提交）
                 do {
-                    try manualCommit(repo: repo, index: index, message: message)
+                    try manualCommit(repo: repo, index: idx, message: message)
                 } catch {
                     throw GitError.commitFailed(
                         "git_commit_create (initial) 失败 (code: \(createCode), detail: \(commitDetail)); "
