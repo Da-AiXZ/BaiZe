@@ -23,14 +23,6 @@ struct ContentView: View {
                 ToolbarItemGroup(placement: .primaryAction) {
                     // Agent 运行状态指示器（脉冲圆点）
                     AgentStatusIndicator(isRunning: appState.isAgentRunning)
-
-                    // 焦点模式分段控件（代码 | 对话）
-                    Picker("焦点", selection: $appState.focusMode) {
-                        Text("代码").tag(FocusMode.code)
-                        Text("对话").tag(FocusMode.chat)
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 120)
                 }
             }
             .tabItem { Label(AppTab.workspace.title, systemImage: AppTab.workspace.systemImage) }
@@ -89,7 +81,61 @@ private struct WorkspacePane: View {
                     .frame(width: geo.size.width * appState.focusMode.chatRatio)
             }
         }
+        // Bug 1 fix: 显眼的焦点切换控件 — 浮动在 WorkspacePane 顶部中央
+        .overlay(alignment: .top) {
+            FocusModeBar(focusMode: $appState.focusMode, isAgentRunning: appState.isAgentRunning)
+                .padding(.top, 4)
+        }
         .animation(.easeInOut(duration: 0.3), value: appState.focusMode)
+    }
+}
+
+// MARK: - Focus Mode Bar (Bug 1 fix)
+
+/// 显眼的焦点模式切换控件 — 浮动在 WorkspacePane 顶部中央
+/// 用户一眼可见，支持代码/对话/平衡三种模式
+/// Agent 运行时锁定为对话模式，运行结束后用户可手动切换
+private struct FocusModeBar: View {
+    @Binding var focusMode: FocusMode
+    let isAgentRunning: Bool
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(FocusMode.allCases, id: \.self) { mode in
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        focusMode = mode
+                    }
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: mode.systemImage)
+                            .font(.system(size: 12, weight: .medium))
+                        Text(mode.label)
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        focusMode == mode
+                            ? Color.baizeAccent
+                            : Color.clear
+                    )
+                    .foregroundColor(
+                        focusMode == mode
+                            ? .white
+                            : .secondary
+                    )
+                    .cornerRadius(8)
+                }
+                .buttonStyle(.plain)
+                .disabled(isAgentRunning && mode != .chat)
+            }
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 4)
+        .background(Color(.systemBackground).opacity(0.95))
+        .cornerRadius(12)
+        .shadow(color: Color.black.opacity(0.12), radius: 4, x: 0, y: 2)
     }
 }
 

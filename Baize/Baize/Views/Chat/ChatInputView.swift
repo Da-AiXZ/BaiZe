@@ -9,22 +9,27 @@ struct ChatInputView: View {
     /// Agent 是否正在运行（W9 fix: 运行时禁用发送）
     let isRunning: Bool
     let onSend: (String) -> Void
-    @State private var editorHeight: CGFloat = 36
+    @State private var editorHeight: CGFloat = 40
     @State private var isFocused: Bool = false
 
     /// 最大输入高度（超过此高度后滚动）
     private let maxEditorHeight: CGFloat = 120
+    /// Bug 2 fix: 单行最小高度
+    private let minEditorHeight: CGFloat = 40
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
             // 多行文本输入
+            // Bug 2 fix: 应用 frame 高度限制，未输入时单行高度
             AutoResizingTextEditor(
                 text: $text,
                 height: $editorHeight,
                 maxHeight: maxEditorHeight,
+                minHeight: minEditorHeight,
                 isFocused: $isFocused,
                 isEditable: !isRunning
             )
+            .frame(height: editorHeight)
 
             // 发送按钮
             // W9 fix: isRunning 时按钮禁用（灰色、不可点击）
@@ -36,13 +41,29 @@ struct ChatInputView: View {
                     guard !trimmed.isEmpty else { return }
                     onSend(trimmed)
                     text = ""
-                    editorHeight = 36
+                    editorHeight = minEditorHeight
                 }
             )
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Color.baizeInputBackground)
+        // Bug 5 fix: Agent 运行状态变化时管理键盘焦点
+        .onChange(of: isRunning) { running in
+            if running {
+                // Agent 开始运行 — 收起键盘
+                isFocused = false
+            } else {
+                // Agent 响应完成 — 收起键盘，防止自动唤起
+                isFocused = false
+                DispatchQueue.main.async {
+                    UIApplication.shared.sendAction(
+                        #selector(UIResponder.resignFirstResponder),
+                        to: nil, from: nil, for: nil
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -55,11 +76,14 @@ struct AutoResizingTextEditor: UIViewRepresentable {
     @Binding var text: String
     @Binding var height: CGFloat
     let maxHeight: CGFloat
+    /// Bug 2 fix: 最小高度（单行）
+    var minHeight: CGFloat = 40
     @Binding var isFocused: Bool
     /// W9 fix: Agent 运行时禁用编辑
     var isEditable: Bool = true
 
-    private let placeholder = "输入消息... (Shift+Enter 换行)"
+    /// Bug 2 fix: 缩短 placeholder 避免换行导致输入框过高
+    private let placeholder = "输入消息..."
 
     func makeUIView(context: Context) -> UITextView {
         let textView = UITextView()
@@ -77,10 +101,13 @@ struct AutoResizingTextEditor: UIViewRepresentable {
         textView.returnKeyType = .send
         textView.enablesReturnKeyAutomatically = false
 
-        // Placeholder
+        // Placeholder / text
         if text.isEmpty {
             textView.text = placeholder
             textView.textColor = .placeholderText
+        } else {
+            textView.text = text
+            textView.textColor = .label
         }
 
         context.coordinator.textView = textView
@@ -92,6 +119,33 @@ struct AutoResizingTextEditor: UIViewRepresentable {
         textView.isEditable = isEditable
         textView.isSelectable = isEditable
 
+        // Bug 3 fix: 同步 binding 文本到 UITextView（处理发送后清空等外部变更）
+        // 注意：编程方式设置 textView.text 不会触发 textViewDidChange，无反馈循环
+        // 用户输入时 textView.text 已等于 binding 值，不会更新（无光标跳动）
+        if text.isEmpty {
+            if !textView.isFirstResponder {
+                // 非编辑状态 — 显示 placeholder
+                if textView.text != placeholder {
+                    textView.text = placeholder
+                    textView.textColor = .placeholderText
+                }
+            } else if !textView.text.isEmpty && textView.text != placeholder {
+                // 编辑状态但文本被外部清空（如发送后）— 清空显示
+                textView.text = ""
+                textView.textColor = .label
+            }
+            // Bug 2 fix: 文本为空时重置高度为单行
+            if height != minHeight {
+                height = minHeight
+            }
+        } else {
+            if textView.text != text {
+                textView.text = text
+                textView.textColor = .label
+            }
+        }
+
+        // 焦点管理
         if isFocused && !textView.isFirstResponder && isEditable {
             textView.becomeFirstResponder()
         } else if !isFocused && textView.isFirstResponder {
@@ -124,11 +178,11 @@ struct AutoResizingTextEditor: UIViewRepresentable {
                 parent.text = text
             }
 
-            // Auto-resize
+            // Bug 2 fix: Auto-resize with minimum height
             let size = textView.sizeThatFits(
                 CGSize(width: textView.frame.width, height: .greatestFiniteMagnitude)
             )
-            parent.height = min(size.height, parent.maxHeight)
+            parent.height = max(parent.minHeight, min(size.height, parent.maxHeight))
             textView.isScrollEnabled = size.height > parent.maxHeight
         }
 

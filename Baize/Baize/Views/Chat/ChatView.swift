@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// 对话面板完整视图 — 集成 AgentLoop 事件流
 /// 订阅 AgentLoop 的 AsyncThrowingStream<AgentEvent>，流式显示 LLM 响应
@@ -161,6 +162,13 @@ struct ChatView: View {
                 isStreaming = false
                 // W9 fix: 错误时也重置 isAgentRunning，防止按钮永久禁用
                 appState.isAgentRunning = false
+                // Bug 5 fix: 错误时也收起键盘
+                DispatchQueue.main.async {
+                    UIApplication.shared.sendAction(
+                        #selector(UIResponder.resignFirstResponder),
+                        to: nil, from: nil, for: nil
+                    )
+                }
             }
         }
 
@@ -170,6 +178,13 @@ struct ChatView: View {
             // 注意：.completed 事件已经设置了 isAgentRunning = false，
             // 但如果 stream 未正常 yield .completed（如被取消），这里兜底重置
             appState.isAgentRunning = false
+            // Bug 5 fix: 兜底收起键盘
+            DispatchQueue.main.async {
+                UIApplication.shared.sendAction(
+                    #selector(UIResponder.resignFirstResponder),
+                    to: nil, from: nil, for: nil
+                )
+            }
         }
     }
 
@@ -254,6 +269,13 @@ struct ChatView: View {
                 ))
             }
             appState.isAgentRunning = false
+            // Bug 5 fix: AI 响应完成后主动收起键盘，防止输入框自动获焦
+            DispatchQueue.main.async {
+                UIApplication.shared.sendAction(
+                    #selector(UIResponder.resignFirstResponder),
+                    to: nil, from: nil, for: nil
+                )
+            }
             // Agent 完成后焦点保持 .chat，用户手动切回 .code
         }
     }
@@ -368,46 +390,126 @@ private struct ChatHeader: View {
 // MARK: - Chat Message List
 
 /// 消息滚动列表
+/// Bug 4 fix: 修复自动滚底逻辑 + 添加悬浮"滚到底"按钮
 private struct ChatMessageList: View {
     let messages: [DisplayMessage]
     let streamingText: String
     let isStreaming: Bool
 
+    // Bug 4 fix: 滚动位置追踪
+    @State private var contentHeight: CGFloat = 0
+    @State private var scrollViewHeight: CGFloat = 0
+    @State private var scrollOffset: CGFloat = 0
+
+    /// 是否显示"滚到底"按钮 — 当用户上滑且不在底部时显示
+    private var showScrollToBottomButton: Bool {
+        let maxScrollOffset = contentHeight - scrollViewHeight
+        return maxScrollOffset > 120 && scrollOffset < maxScrollOffset - 120
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 8) {
-                    ForEach(messages) { message in
-                        MessageBubble(message: message)
-                            .id(message.id)
-                    }
+            ZStack(alignment: .bottomTrailing) {
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(messages) { message in
+                            MessageBubble(message: message)
+                                .id(message.id)
+                        }
 
-                    // 流式文本（Agent 正在输出）
-                    if isStreaming && !streamingText.isEmpty {
-                        StreamingTextBubble(text: streamingText)
-                            .id("streaming")
+                        // 流式文本（Agent 正在输出）
+                        if isStreaming && !streamingText.isEmpty {
+                            StreamingTextBubble(text: streamingText)
+                                .id("streaming")
+                        }
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    // Bug 4 fix: 追踪内容高度和滚动偏移
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear
+                                .preference(key: ChatContentHeightKey.self, value: geo.size.height)
+                                .preference(key: ChatScrollOffsetKey.self,
+                                            value: -geo.frame(in: .named("chatScroll")).minY)
+                        }
+                    )
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-            }
-            .onChange(of: messages.count) { _ in
-                scrollToBottom(proxy: proxy)
-            }
-            .onChange(of: streamingText) { _ in
-                scrollToBottom(proxy: proxy)
+                .coordinateSpace(name: "chatScroll")
+                .background(
+                    GeometryReader { geo in
+                        Color.clear.preference(key: ChatScrollViewHeightKey.self, value: geo.size.height)
+                    }
+                )
+                .onPreferenceChange(ChatContentHeightKey.self) { contentHeight = $0 }
+                .onPreferenceChange(ChatScrollViewHeightKey.self) { scrollViewHeight = $0 }
+                .onPreferenceChange(ChatScrollOffsetKey.self) { offset in
+                    scrollOffset = offset
+                }
+                .onChange(of: messages.count) { _ in
+                    scrollToBottom(proxy: proxy)
+                }
+                .onChange(of: streamingText) { _ in
+                    scrollToBottom(proxy: proxy)
+                }
+
+                // Bug 4 fix: 悬浮"滚到底"按钮
+                if showScrollToBottomButton {
+                    Button(action: {
+                        withAnimation(.easeOut(duration: 0.3)) {
+                            scrollToBottom(proxy: proxy)
+                        }
+                    }) {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .font(.system(size: 32))
+                            .foregroundColor(Color.baizeAccent)
+                            .background(Circle().fill(Color(.systemBackground).opacity(0.9)))
+                            .shadow(color: Color.black.opacity(0.15), radius: 3, x: 0, y: 2)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 16)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
             }
         }
     }
 
+    /// Bug 4 fix: 滚动到底部 — 流式输出时滚到 streaming，否则滚到最后一条消息
     private func scrollToBottom(proxy: ScrollViewProxy) {
         withAnimation(.easeOut(duration: 0.3)) {
-            if let lastId = messages.last?.id {
-                proxy.scrollTo(lastId, anchor: .bottom)
-            } else {
+            if isStreaming && !streamingText.isEmpty {
                 proxy.scrollTo("streaming", anchor: .bottom)
+            } else if let lastId = messages.last?.id {
+                proxy.scrollTo(lastId, anchor: .bottom)
             }
         }
+    }
+}
+
+// MARK: - Scroll Preference Keys (Bug 4 fix)
+
+/// 内容高度偏好键
+private struct ChatContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// ScrollView 可视高度偏好键
+private struct ChatScrollViewHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// 滚动偏移偏好键
+private struct ChatScrollOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 

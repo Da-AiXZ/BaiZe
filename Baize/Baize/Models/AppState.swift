@@ -51,6 +51,15 @@ enum FocusMode: String, CaseIterable, Hashable {
         case .balanced: return "平衡"
         }
     }
+
+    /// Bug 1 fix: 焦点模式图标 — 用于显眼的焦点切换控件
+    var systemImage: String {
+        switch self {
+        case .code: return "chevron.left.forwardslash.chevron.right"
+        case .chat: return "bubble.left.fill"
+        case .balanced: return "square.split.2x1"
+        }
+    }
 }
 
 /// 白泽全局 App 状态 — ObservableObject
