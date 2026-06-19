@@ -28,14 +28,26 @@ struct ContentView: View {
             .tabItem { Label(AppTab.workspace.title, systemImage: AppTab.workspace.systemImage) }
             .tag(AppTab.workspace)
 
-            // Tab 2: 首页 — 独立 NavigationStack
+            // Tab 2: Git — 独立 NavigationStack
+            NavigationStack {
+                if let gitVM = appState.gitViewModel {
+                    GitStatusView(viewModel: gitVM)
+                } else {
+                    Text("Git 服务未初始化")
+                        .foregroundColor(.secondary)
+                }
+            }
+            .tabItem { Label(AppTab.git.title, systemImage: AppTab.git.systemImage) }
+            .tag(AppTab.git)
+
+            // Tab 3: 首页 — 独立 NavigationStack
             NavigationStack {
                 DashboardView()
             }
             .tabItem { Label(AppTab.dashboard.title, systemImage: AppTab.dashboard.systemImage) }
             .tag(AppTab.dashboard)
 
-            // Tab 3: 设置 — 独立 NavigationStack（子页面用 NavigationLink 推入，不逃逸）
+            // Tab 4: 设置 — 独立 NavigationStack（子页面用 NavigationLink 推入，不逃逸）
             NavigationStack {
                 SettingsView(appState: appState)
             }

@@ -126,4 +126,29 @@ struct KeychainService {
     func hasAnyAPIKey() -> Bool {
         loadOpenAIKey() != nil || loadAnthropicKey() != nil || loadOpenRouterKey() != nil || loadCustomKey() != nil
     }
+
+    // MARK: - Git Token Convenience Methods
+
+    /// 保存 GitHub Token（用于 Git push 认证）
+    /// 遵循铁律 #6: Keychain + UserDefaults fallback
+    /// - Parameter token: GitHub Personal Access Token
+    func saveGitToken(_ token: String) throws {
+        try save(key: BaizeGit.tokenKeychainKey, value: token)
+    }
+
+    /// 读取 GitHub Token
+    /// - Returns: 存储的 token，不存在时返回 nil
+    func loadGitToken() -> String? {
+        load(key: BaizeGit.tokenKeychainKey)
+    }
+
+    /// 删除 GitHub Token
+    func deleteGitToken() throws {
+        try delete(key: BaizeGit.tokenKeychainKey)
+    }
+
+    /// 检查是否已配置 Git Token
+    func hasGitToken() -> Bool {
+        contains(key: BaizeGit.tokenKeychainKey)
+    }
 }

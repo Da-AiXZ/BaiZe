@@ -104,3 +104,91 @@ echo "✅ Patched $PATCHED_PLISTS Info.plist entries"
 echo "✅ Patched $PATCHED_BINARIES Mach-O binaries"
 echo "📊 Skipped (already 16.0): $SKIPPED"
 echo "========================================="
+
+# === New: Patch repo-local xcframeworks (libgit2 etc.) ===
+# These xcframeworks live in Baize/Baize/Frameworks/ and are downloaded by
+# scripts/download-libgit2.sh during CI. They may declare MinimumOSVersion > 16.0
+# which would cause Xcode to auto-raise the deployment target (same issue as ios_system).
+# We apply the same Info.plist + vtool patch to ensure iOS 16.0 compatibility.
+REPO_FRAMEWORKS_DIR="${PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}/Baize/Baize/Frameworks"
+if [ -d "$REPO_FRAMEWORKS_DIR" ]; then
+    echo ""
+    echo "🔧 Patching repo-local xcframeworks in $REPO_FRAMEWORKS_DIR..."
+
+    REPO_PATCHED_PLISTS=0
+    REPO_PATCHED_BINARIES=0
+    REPO_SKIPPED=0
+
+    for xcframework_dir in "$REPO_FRAMEWORKS_DIR"/*.xcframework; do
+        [ -d "$xcframework_dir" ] || continue
+
+        xcframework_name=$(basename "$xcframework_dir" .xcframework)
+
+        # --- 1. Patch xcframework Info.plist MinimumOSVersion ---
+        info_plist="$xcframework_dir/Info.plist"
+        if [ -f "$info_plist" ]; then
+            idx=0
+            while /usr/libexec/PlistBuddy -c "Print :AvailableLibraries:$idx:MinimumOSVersion" "$info_plist" 2>/dev/null; do
+                current_min=$(/usr/libexec/PlistBuddy -c "Print :AvailableLibraries:$idx:MinimumOSVersion" "$info_plist" 2>/dev/null || echo "?")
+                slice_id=$(/usr/libexec/PlistBuddy -c "Print :AvailableLibraries:$idx:LibraryIdentifier" "$info_plist" 2>/dev/null || echo "?")
+
+                if [ "$current_min" != "16.0" ]; then
+                    /usr/libexec/PlistBuddy -c "Set :AvailableLibraries:$idx:MinimumOSVersion 16.0" "$info_plist" 2>/dev/null
+                    echo "  📝 $xcframework_name [$slice_id]: Info.plist MinimumOSVersion $current_min → 16.0"
+                    ((REPO_PATCHED_PLISTS++))
+                else
+                    echo "  ✅ $xcframework_name [$slice_id]: already 16.0 (skip)"
+                fi
+                ((idx++))
+            done
+        fi
+
+        # --- 2. Patch Mach-O binaries' LC_BUILD_VERSION using vtool ---
+        for slice_dir in "$xcframework_dir"/ios-*; do
+            [ -d "$slice_dir" ] || continue
+            slice_name=$(basename "$slice_dir")
+
+            # Find .framework directories inside this slice
+            for fw_dir in "$slice_dir"/*.framework; do
+                [ -d "$fw_dir" ] || continue
+                fw_name=$(basename "$fw_dir" .framework)
+                binary="$fw_dir/$fw_name"
+
+                if [ ! -f "$binary" ]; then
+                    continue
+                fi
+                if ! file "$binary" | grep -q "Mach-O"; then
+                    continue
+                fi
+
+                # Check current minos
+                current_minos=$(vtool -show-build "$binary" 2>/dev/null | grep "minos" | head -1 | sed 's/.*minos //' || echo "unknown")
+
+                if [ "$current_minos" = "16.0" ]; then
+                    echo "  ✅ $xcframework_name [$slice_name]: binary already minos=16.0 (skip)"
+                    ((REPO_SKIPPED++))
+                    continue
+                fi
+
+                # Patch: set platform=iphoneos, minos=16.0, sdk=17.5
+                if vtool -set-build-version iphoneos 16.0 17.5 -replace -output "$binary.tmp" "$binary" 2>/dev/null; then
+                    mv "$binary.tmp" "$binary"
+                    echo "  🔧 $xcframework_name [$slice_name]: binary minos $current_minos → 16.0"
+                    ((REPO_PATCHED_BINARIES++))
+                else
+                    echo "  ⚠️  $xcframework_name [$slice_name]: vtool patch failed (no LC_BUILD_VERSION?)"
+                fi
+            done
+        done
+
+        echo ""
+    done
+
+    echo "========================================="
+    echo "✅ Repo xcframeworks: Patched $REPO_PATCHED_PLISTS Info.plist entries"
+    echo "✅ Repo xcframeworks: Patched $REPO_PATCHED_BINARIES Mach-O binaries"
+    echo "📊 Repo xcframeworks: Skipped (already 16.0): $REPO_SKIPPED"
+    echo "========================================="
+else
+    echo "ℹ️  No repo-local xcframeworks directory found at $REPO_FRAMEWORKS_DIR"
+fi

@@ -43,6 +43,16 @@ struct SettingsView: View {
                 )
             }
 
+            // Git 配置
+            NavigationLink(value: SettingsSection.gitConfig) {
+                SettingsRow(
+                    icon: "arrow.triangle.branch.fill",
+                    iconColor: Color.baizeAccent,
+                    title: "Git 配置",
+                    subtitle: gitConfigSubtitle
+                )
+            }
+
             // 关于白泽
             NavigationLink(value: SettingsSection.about) {
                 SettingsRow(
@@ -63,6 +73,8 @@ struct SettingsView: View {
                 PermissionSettingsView(appState: appState)
             case .storage:
                 StorageSettingsView(appState: appState)
+            case .gitConfig:
+                GitSettingsView(appState: appState)
             case .about:
                 AboutView()
             }
@@ -91,6 +103,20 @@ struct SettingsView: View {
         let monacoHtmlExists = Bundle.main.path(forResource: "index", ofType: "html", inDirectory: "monaco-editor") != nil
         return "Node \(nodeFrameworkExists ? "✅" : "❌")  Python \(pythonFrameworkExists ? "✅" : "❌")  Monaco \(monacoHtmlExists ? "✅" : "❌")"
     }
+
+    /// Git 配置状态描述
+    private var gitConfigSubtitle: String {
+        let keychain = KeychainService()
+        let hasToken = keychain.hasGitToken()
+        let remoteURL = UserDefaults.standard.string(forKey: BaizeGit.remoteURLUDKey) ?? ""
+        if hasToken && !remoteURL.isEmpty {
+            return "Token ✅  |  \(remoteURL)"
+        } else if hasToken {
+            return "Token ✅  |  远程 URL 未配置"
+        } else {
+            return "未配置"
+        }
+    }
 }
 
 // MARK: - Settings Section Enum
@@ -100,6 +126,7 @@ enum SettingsSection: Hashable, Identifiable {
     case aiModel    // merged: API key + model selection
     case permission
     case storage
+    case gitConfig
     case about
 
     var id: String { "\(self)" }
@@ -109,6 +136,7 @@ enum SettingsSection: Hashable, Identifiable {
         case .aiModel: return "AI 模型配置"
         case .permission: return "权限模式"
         case .storage: return "存储与运行时"
+        case .gitConfig: return "Git 配置"
         case .about: return "关于白泽"
         }
     }

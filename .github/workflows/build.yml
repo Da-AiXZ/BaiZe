@@ -68,6 +68,14 @@ jobs:
         run: |
           bash scripts/download-runtime.sh
 
+      - name: Download libgit2 xcframework
+        run: |
+          bash scripts/download-libgit2.sh
+
+      - name: Patch repo-local xcframeworks (libgit2 MinimumOSVersion)
+        run: |
+          bash scripts/patch-xcframeworks.sh SourcePackages
+
       - name: Download Monaco Editor
         run: |
           bash scripts/download-monaco.sh

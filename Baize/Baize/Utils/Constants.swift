@@ -510,3 +510,35 @@ enum BaizeError: LocalizedError {
         }
     }
 }
+
+// MARK: - Git Configuration
+
+/// Git 集成相关常量 — libgit2 桥接 + 凭据管理
+enum BaizeGit {
+    /// GitHub Token 的 Keychain 存储键名（遵循铁律 #6: Keychain + UserDefaults fallback）
+    static let tokenKeychainKey = "com.baize.github-token"
+
+    /// 远程仓库 URL 的 UserDefaults 存储键名（非敏感信息，直接存 UD）
+    static let remoteURLUDKey = "com.baize.git-remote-url"
+
+    /// Git 用户名的 UserDefaults 存储键名（非敏感信息，直接存 UD）
+    static let usernameUDKey = "com.baize.git-username"
+
+    /// 默认 commit log 加载条数
+    static let defaultLogLimit = 50
+
+    /// log 分页加载增量（每次下拉加载更多时增加的条数）
+    static let logPageIncrement = 50
+
+    /// GitHub API 用户信息端点（用于测试连接）
+    static let githubUserAPI = "https://api.github.com/user"
+
+    /// Git 提交者默认名称
+    static let defaultCommitAuthor = "Baize"
+
+    /// Git 提交者默认邮箱
+    static let defaultCommitEmail = "baize@local"
+
+    /// 默认远程名称
+    static let defaultRemoteName = "origin"
+}

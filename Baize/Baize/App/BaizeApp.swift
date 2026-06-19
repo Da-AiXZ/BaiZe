@@ -42,6 +42,9 @@ struct BaizeApp: App {
     /// Python Runtime Engine (CPython 3.13 嵌入模式)
     private let pythonRuntimeEngine: PythonRuntimeEngine
 
+    /// Git Service (actor，封装 libgit2 C API)
+    private let gitService: GitService
+
     // MARK: - Initialization
 
     init() {
@@ -59,6 +62,9 @@ struct BaizeApp: App {
 
         let pythonEngine = PythonRuntimeEngine()
         let pythonStrategy = PythonEmbeddingStrategy(engine: pythonEngine)
+
+        // Git Service — 封装 libgit2，传入工作目录和 Keychain 服务
+        let gitSvc = GitService(repositoryPath: workingRoot, keychainService: keychain)
 
         let runtime = RuntimeExecutor(nodeStrategy: nodeStrategy, pythonStrategy: pythonStrategy)
         let permission = PermissionEngine(mode: BaizePermission.defaultMode)
@@ -80,6 +86,7 @@ struct BaizeApp: App {
         self.runtimeExecutor = runtime
         self.nodeRuntimeEngine = nodeEngine
         self.pythonRuntimeEngine = pythonEngine
+        self.gitService = gitSvc
 
         // W22 fix: 将所有服务实例注入 AppState，供 ChatView 等视图共享
         _appState = StateObject(wrappedValue: {
@@ -95,6 +102,11 @@ struct BaizeApp: App {
             state.runtimeExecutor = runtime
             state.pythonRuntimeEngine = pythonEngine
             state.currentProjectPath = workingRoot
+
+            // Git 集成：创建 GitViewModel 并注入 AppState
+            let gitVM = GitViewModel(gitService: gitSvc)
+            state.gitService = gitSvc
+            state.gitViewModel = gitVM
 
             // Phase 2C: 恢复上次 Provider/Model 选择
             state.restoreProviderSelection()

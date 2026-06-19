@@ -3,15 +3,17 @@ import Foundation
 
 // MARK: - App Tab Enum
 
-/// 顶层导航 Tab 枚举 — 底部 TabView 三 Tab
+/// 顶层导航 Tab 枚举 — 底部 TabView 四 Tab
 enum AppTab: String, CaseIterable, Hashable {
     case workspace
+    case git
     case dashboard
     case settings
 
     var title: String {
         switch self {
         case .workspace: return "工作区"
+        case .git: return "Git"
         case .dashboard: return "首页"
         case .settings: return "设置"
         }
@@ -20,6 +22,7 @@ enum AppTab: String, CaseIterable, Hashable {
     var systemImage: String {
         switch self {
         case .workspace: return "hammer.fill"
+        case .git: return "arrow.triangle.branch"
         case .dashboard: return "house.fill"
         case .settings: return "gearshape.fill"
         }
@@ -152,6 +155,12 @@ class AppState: ObservableObject {
     /// Monaco Bridge（Monaco 诊断面板：供设置页读取编辑器加载诊断状态）
     /// 由 EditorContainerView 在 setupMonacoBridge() 中注入
     var monacoBridge: MonacoBridge?
+
+    /// Git Service（actor，封装 libgit2 C API）
+    var gitService: GitService?
+
+    /// Git ViewModel（@MainActor ObservableObject，Git Tab UI 状态管理）
+    var gitViewModel: GitViewModel?
 
     // MARK: - Error State
 
