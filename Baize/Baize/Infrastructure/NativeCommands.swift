@@ -19,7 +19,7 @@ struct NativeCommands {
     /// 支持的原生命令名称集合
     private static let supportedCommands: Set<String> = [
         "ls", "cat", "pwd", "wc", "stat", "touch",
-        "mkdir", "rm", "cp", "mv", "head", "tail", "find",
+        "mkdir", "rm", "cp", "mv", "head", "tail", "find", "grep",
     ]
 
     // MARK: - Public Entry Point
@@ -77,6 +77,8 @@ struct NativeCommands {
             return tail(args: args, workingDir: workingDir)
         case "find":
             return find(args: args, workingDir: workingDir)
+        case "grep":
+            return grep(args: args, workingDir: workingDir)
         default:
             return nil
         }
@@ -1316,6 +1318,343 @@ struct NativeCommands {
             stderr: "",
             exitCode: 0,
             isError: false
+        )
+    }
+
+    // MARK: - grep
+
+    /// grep 命令 — 文本搜索（纯 Swift 实现，绕过 ios_popen NULL 误判）
+    ///
+    /// 支持的 flags:
+    /// - `-i`: 忽略大小写
+    /// - `-v`: 反转匹配（输出不匹配的行）
+    /// - `-n`: 显示行号
+    /// - `-r`: 递归搜索目录
+    /// - `-l`: 只输出匹配的文件名
+    /// - `-c`: 只输出匹配行数
+    /// - `-w`: 单词匹配
+    /// - `-E`: 扩展正则（默认行为，ICU 正则是 grep -E 超集）
+    /// - 组合 flags: -in, -rn, -ir 等
+    ///
+    /// 退出码语义（★ 与 ios_popen 路径不同）:
+    /// - 0: 至少一行匹配
+    /// - 1: 无匹配（正常行为，isError=false）
+    /// - 2: 错误（文件不存在/正则无效）
+    ///
+    /// 多文件时每行输出前缀 "file:line"（grep 标准行为）
+    /// -r 递归：FileManager.enumerator，跳过二进制文件
+    /// 二进制文件（含 \0）：输出 "Binary file X matches"
+    private static func grep(args: [String], workingDir: String) -> RuntimeExecutor.ExecutionResult {
+        var ignoreCase = false
+        var invertMatch = false
+        var showLineNumber = false
+        var recursive = false
+        var filesWithMatches = false
+        var countOnly = false
+        var wordMatch = false
+        var pattern: String?
+        var paths: [String] = []
+
+        var i = 0
+        while i < args.count {
+            let arg = args[i]
+            if arg.hasPrefix("-") && arg.count > 1 {
+                // 解析组合 flags: -in, -rn, -ir, -inv 等
+                let flagChars = arg.dropFirst()
+                var validFlags = true
+                for ch in flagChars {
+                    switch ch {
+                    case "i": ignoreCase = true
+                    case "v": invertMatch = true
+                    case "n": showLineNumber = true
+                    case "r", "R": recursive = true
+                    case "l": filesWithMatches = true
+                    case "c": countOnly = true
+                    case "w": wordMatch = true
+                    case "E":
+                        // 扩展正则 — 默认行为，忽略
+                        break
+                    case "H":
+                        // 总是显示文件名前缀 — 多文件时默认行为，单文件时也加
+                        break
+                    case "h":
+                        // 不显示文件名前缀
+                        break
+                    case "s", "q", "F", "G", "P", "A", "B", "C", "e", "f", "a", "I", "T", "Z", "z", "m", "b", "o", "x":
+                        // 其他常见 flags — 简化实现忽略
+                        break
+                    default:
+                        validFlags = false
+                        break
+                    }
+                    if !validFlags { break }
+                }
+                // 如果不是有效 flag 组合，可能是 pattern 或路径
+                if !validFlags {
+                    if pattern == nil {
+                        pattern = arg
+                    } else {
+                        paths.append(arg)
+                    }
+                }
+            } else {
+                if pattern == nil {
+                    pattern = arg
+                } else {
+                    paths.append(arg)
+                }
+            }
+            i += 1
+        }
+
+        // 必须有 pattern
+        guard let regexPattern = pattern else {
+            return RuntimeExecutor.ExecutionResult(
+                stdout: "",
+                stderr: "grep: usage: grep [-invrlcwE] PATTERN [FILE...]\n",
+                exitCode: 2,
+                isError: true
+            )
+        }
+
+        // -r 模式：paths 为空时默认当前目录
+        if paths.isEmpty && recursive {
+            paths = ["."]
+        }
+
+        // 非 -r 模式：paths 为空时报错（需要至少一个文件）
+        if paths.isEmpty {
+            return RuntimeExecutor.ExecutionResult(
+                stdout: "",
+                stderr: "grep: no file specified\n",
+                exitCode: 2,
+                isError: true
+            )
+        }
+
+        // 编译正则
+        // -w 单词匹配：用 \b...\b 包裹
+        var fullPattern = regexPattern
+        if wordMatch {
+            fullPattern = "\\b" + regexPattern + "\\b"
+        }
+
+        let regex: NSRegularExpression
+        do {
+            var options: NSRegularExpression.Options = []
+            if ignoreCase {
+                options.insert(.caseInsensitive)
+            }
+            regex = try NSRegularExpression(pattern: fullPattern, options: options)
+        } catch {
+            return RuntimeExecutor.ExecutionResult(
+                stdout: "",
+                stderr: "grep: invalid pattern: \(regexPattern)\n  \(error.localizedDescription)\n",
+                exitCode: 2,
+                isError: true
+            )
+        }
+
+        let fm = FileManager.default
+
+        // 收集要搜索的文件列表
+        // -r 模式：递归展开目录
+        // 非 -r 模式：目录报错，文件直接用
+        var fileList: [(displayPath: String, absPath: String)] = []
+        var stderr = ""
+
+        for rawPath in paths {
+            let resolvedPath = resolvePath(rawPath, workingDir: workingDir)
+
+            var isDir: ObjCBool = false
+            if !fm.fileExists(atPath: resolvedPath, isDirectory: &isDir) {
+                stderr += "grep: \(rawPath): No such file or directory\n"
+                continue
+            }
+
+            if isDir.boolValue {
+                if recursive {
+                    // 递归展开目录
+                    let dirURL = URL(fileURLWithPath: resolvedPath)
+                    if let enumerator = fm.enumerator(at: dirURL, includingPropertiesForKeys: [.isDirectoryKey], options: []) {
+                        for case let fileURL as URL in enumerator {
+                            let resourceValues = try? fileURL.resourceValues(forKeys: [.isDirectoryKey])
+                            let isSubDir = resourceValues?.isDirectory ?? false
+                            if isSubDir {
+                                continue  // 跳过子目录，enumerator 会自动递归
+                            }
+                            // 构建显示路径：保留用户输入的前缀
+                            let relPath = fileURL.path.replacingOccurrences(of: resolvedPath + "/", with: "")
+                            let displayPath: String
+                            if rawPath == "." {
+                                displayPath = "./" + relPath
+                            } else {
+                                displayPath = rawPath + "/" + relPath
+                            }
+                            fileList.append((displayPath, fileURL.path))
+                        }
+                    }
+                } else {
+                    // 非 -r 模式，目录报错
+                    stderr += "grep: \(rawPath): Is a directory\n"
+                }
+            } else {
+                fileList.append((rawPath, resolvedPath))
+            }
+        }
+
+        // 如果所有路径都无效，返回错误
+        if fileList.isEmpty && !stderr.isEmpty {
+            return RuntimeExecutor.ExecutionResult(
+                stdout: "",
+                stderr: stderr,
+                exitCode: 2,
+                isError: true
+            )
+        }
+
+        // 多文件时显示文件名前缀
+        let showFilePrefix = fileList.count > 1 || recursive
+
+        var outputLines: [String] = []
+        var matchedFiles: [String] = []
+        var totalMatches = 0
+        var anyMatched = false
+
+        for (displayPath, absPath) in fileList {
+            // 读取文件内容
+            guard let data = fm.contents(atPath: absPath) else {
+                stderr += "grep: \(displayPath): Cannot read file\n"
+                continue
+            }
+
+            // 二进制文件检测：含 \0 字节
+            let isBinary = data.contains(0)
+            if isBinary {
+                // 对二进制文件，简单检查是否含 pattern
+                let content = String(data: data, encoding: .isoLatin1) ?? ""
+                let range = NSRange(content.startIndex..., in: content)
+                if regex.firstMatch(in: content, options: [], range: range) != nil {
+                    if filesWithMatches {
+                        matchedFiles.append(displayPath)
+                    } else if countOnly {
+                        outputLines.append(showFilePrefix ? "\(displayPath):1" : "1")
+                    } else {
+                        outputLines.append("Binary file \(displayPath) matches")
+                    }
+                    anyMatched = true
+                    totalMatches += 1
+                }
+                continue
+            }
+
+            // 文本文件：逐行处理
+            guard let content = String(data: data, encoding: .utf8) else {
+                // UTF-8 解码失败，当二进制处理
+                let latinContent = String(data: data, encoding: .isoLatin1) ?? ""
+                let range = NSRange(latinContent.startIndex..., in: latinContent)
+                if regex.firstMatch(in: latinContent, options: [], range: range) != nil {
+                    if filesWithMatches {
+                        matchedFiles.append(displayPath)
+                    } else {
+                        outputLines.append("Binary file \(displayPath) matches")
+                    }
+                    anyMatched = true
+                    totalMatches += 1
+                }
+                continue
+            }
+
+            let lines = content.components(separatedBy: "\n")
+            var fileMatchCount = 0
+            var fileHasMatch = false
+
+            for (lineIdx, line) in lines.enumerated() {
+                // 跳过最后的空行（components(separatedBy:) 副作用）
+                if lineIdx == lines.count - 1 && line.isEmpty {
+                    break
+                }
+
+                let range = NSRange(line.startIndex..., in: line)
+                let matched = regex.firstMatch(in: line, options: [], range: range) != nil
+
+                // -v 反转匹配
+                let shouldOutput = invertMatch ? !matched : matched
+
+                if matched {
+                    fileHasMatch = true
+                    fileMatchCount += 1
+                    totalMatches += 1
+                }
+
+                // -l 模式：只记录文件名，不输出行
+                if filesWithMatches {
+                    if fileHasMatch {
+                        matchedFiles.append(displayPath)
+                        break  // 这个文件已确认匹配，跳到下一个文件
+                    }
+                    continue
+                }
+
+                // -c 模式：只输出计数，不输出行
+                if countOnly {
+                    continue
+                }
+
+                if shouldOutput {
+                    var lineOutput = ""
+                    if showFilePrefix {
+                        lineOutput += "\(displayPath):"
+                    }
+                    if showLineNumber {
+                        lineOutput += "\(lineIdx + 1):"
+                    }
+                    lineOutput += line
+                    outputLines.append(lineOutput)
+                }
+            }
+
+            // -c 模式：输出每个文件的匹配数
+            if countOnly {
+                let countLine = showFilePrefix ? "\(displayPath):\(fileMatchCount)" : "\(fileMatchCount)"
+                outputLines.append(countLine)
+            }
+
+            if fileHasMatch {
+                anyMatched = true
+            }
+        }
+
+        // -l 模式：只输出匹配的文件名
+        if filesWithMatches {
+            let lout = matchedFiles.isEmpty ? "" : (matchedFiles.joined(separator: "\n") + "\n")
+            return RuntimeExecutor.ExecutionResult(
+                stdout: lout,
+                stderr: stderr,
+                exitCode: anyMatched ? 0 : 1,
+                isError: false  // ★ 无匹配也是正常行为
+            )
+        }
+
+        // -c 模式：输出已收集的计数行
+        if countOnly {
+            let cout = outputLines.isEmpty ? "" : (outputLines.joined(separator: "\n") + "\n")
+            return RuntimeExecutor.ExecutionResult(
+                stdout: cout,
+                stderr: stderr,
+                exitCode: anyMatched ? 0 : 1,
+                isError: false
+            )
+        }
+
+        // 普通模式：输出匹配行
+        let stdout = outputLines.isEmpty ? "" : (outputLines.joined(separator: "\n") + "\n")
+
+        return RuntimeExecutor.ExecutionResult(
+            stdout: stdout,
+            stderr: stderr,
+            exitCode: anyMatched ? 0 : 1,
+            isError: false  // ★ 关键：无匹配 exitCode=1 + isError=false
         )
     }
 

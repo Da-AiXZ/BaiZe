@@ -228,6 +228,24 @@ class RuntimeExecutor: @unchecked Sendable {
                     if cmdAvailable == 0 {
                         diagMsg += "\n  原因: '\(cmdName)' 不在 ios_system 命令列表中"
                         diagMsg += "\n  可用命令: ls, cat, grep, find, rm, mv, cp, tar, curl, head, tail, wc, sort, sed, awk 等"
+
+                        // ★ 命令名容错提示
+                        // 处理用户输入 "find." / "ls-la" 等手误（命令名与参数间漏空格）
+                        let knownCommands: Set<String> = [
+                            "ls","cat","pwd","wc","stat","touch","mkdir","rm","cp","mv",
+                            "head","tail","find","grep","sed","awk","sort","uniq","diff",
+                            "tar","curl","echo","printf","tr","cut","du","df","chmod","chown","ln"
+                        ]
+                        for known in knownCommands {
+                            if cmdName.hasPrefix(known) && cmdName.count > known.count {
+                                let nextIdx = cmdName.index(cmdName.startIndex, offsetBy: known.count)
+                                let nextChar = cmdName[nextIdx]
+                                if !nextChar.isLetter {
+                                    diagMsg += "\n  提示：'\(cmdName)' 不是有效命令，您是不是想输入 '\(known) ...'（注意空格）？"
+                                    break
+                                }
+                            }
+                        }
                     } else if !chdirSuccess {
                         diagMsg += "\n  原因: 无法切换到工作目录 '\(workingDirectory)'"
                     } else {
