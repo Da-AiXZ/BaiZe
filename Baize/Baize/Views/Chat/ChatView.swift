@@ -95,6 +95,8 @@ struct ChatView: View {
     // Bug 2 fix: 持有 agentTask 以便切换会话时取消；agentGeneration 用于丢弃旧 loop 的事件
     @State private var agentTask: Task<Void, Never>?
     @State private var agentGeneration: Int = 0
+    // Bug 7 fix: 切换会话时强制 ScrollView 重建，清除旧滚动位置
+    @State private var scrollIdentity: UUID = UUID()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -107,11 +109,13 @@ struct ChatView: View {
 
             // 消息列表
             // Bug 6 fix: 传入 streamBuffer.displayedText（节流后的显示文本）
+            // Bug 7 fix: .id(scrollIdentity) 强制 ScrollView 在切换会话时重建，清除旧滚动位置
             ChatMessageList(
                 messages: displayMessages,
                 streamingText: streamBuffer.displayedText,
                 isStreaming: isStreaming
             )
+            .id(scrollIdentity)
 
             // P2-5: 上下文用量指示器
             ContextUsageBar(
@@ -550,6 +554,8 @@ struct ChatView: View {
             self.streamBuffer.reset()
             self.isStreaming = false
             self.showSessionList = false
+            // Bug 7 fix: 重置 scrollIdentity 强制 ScrollView 重建，清除旧滚动位置
+            self.scrollIdentity = UUID()
         }
     }
 
@@ -574,6 +580,8 @@ struct ChatView: View {
         self.isStreaming = false
         self.appState.isAgentRunning = false
         self.showSessionList = false
+        // Bug 7 fix: 重置 scrollIdentity 强制 ScrollView 重建，清除旧滚动位置
+        self.scrollIdentity = UUID()
 
         // Bug 2 fix: 立即创建并保存空 session + 创建对应 AgentLoop，
         // 使新对话立即出现在列表中，且后续 sendMessage 能复用此 loop（不会创建第二个 session）
