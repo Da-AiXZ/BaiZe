@@ -177,13 +177,13 @@ class RuntimeExecutor: @unchecked Sendable {
                 // 它同时更新 POSIX CWD (chdir) 和 ios_system 内部会话状态
                 // 比 FileManager.changeCurrentDirectoryPath 更可靠 —
                 // 后者只改 POSIX CWD，不影响 ios_system session 的 workingDirectory
-                // 接受 NSURL*，需要 URL → NSURL 转换
+                // Swift 导入签名: ios_setDirectoryURL(_ url: URL?) — 直接传 URL，不要 as NSURL
                 let originalDir = FileManager.default.currentDirectoryPath
                 var chdirSuccess = false
 
                 if !workingDirectory.isEmpty && self.fileManager.fileExists(atPath: workingDirectory) {
                     let workURL = URL(fileURLWithPath: workingDirectory)
-                    ios_setDirectoryURL(workURL as NSURL)
+                    ios_setDirectoryURL(workURL)
                     chdirSuccess = true
                     runtimeLogger.info("ios_setDirectoryURL('\(workingDirectory)') called")
                 } else {
@@ -199,7 +199,7 @@ class RuntimeExecutor: @unchecked Sendable {
 
                 // 立即恢复原始工作目录 (方案 A: ios_setDirectoryURL)
                 // ios_popen 是同步调用 — 命令已执行完毕，输出已在管道缓冲区中
-                ios_setDirectoryURL(URL(fileURLWithPath: originalDir) as NSURL)
+                ios_setDirectoryURL(URL(fileURLWithPath: originalDir))
 
                 // ── Phase 3: 处理 NULL 返回值 ──
                 // ios_popen 在 ios_system 返回非零时返回 NULL
