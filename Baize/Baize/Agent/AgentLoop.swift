@@ -270,6 +270,8 @@ actor AgentLoop {
 
             // 6. 如果有 tool_calls，执行它们
             if !currentToolCallArguments.isEmpty {
+                // Bug 3 fix: 用户拒绝权限时中断 Agent 循环
+                var userDeniedTool = false
                 // 构建 assistant 消息（包含 tool_calls）
                 // OpenAI 格式要求 assistant 消息与 tool_result 消息配对
 
@@ -351,6 +353,9 @@ actor AgentLoop {
                             continuation.yield(.denied(toolCall, decision.reason))
                             session.messages.append(.toolResult(id: id, content: deniedResult.toToolResultContent()))
                             consecutiveFailures += 1
+                            // Bug 3 fix: 用户拒绝权限 → 标记中断
+                            userDeniedTool = true
+                            break
                         }
 
                     case .deny:
@@ -359,7 +364,17 @@ actor AgentLoop {
                         continuation.yield(.denied(toolCall, decision.reason))
                         session.messages.append(.toolResult(id: id, content: deniedResult.toToolResultContent()))
                         consecutiveFailures += 1
+                        // Bug 3 fix: 权限被拒 → 标记中断
+                        userDeniedTool = true
+                        break
                     }
+                }
+
+                // Bug 3 fix: 用户拒绝权限 → 中断 Agent 循环（不再让 LLM 换工具尝试）
+                if userDeniedTool {
+                    agentLogger.info("User denied tool call, stopping Agent Loop")
+                    continuation.yield(.textDelta("\n\n[用户拒绝了工具调用，Agent 已停止。]"))
+                    break
                 }
 
                 // 连续失败检查：超过阈值则停止循环

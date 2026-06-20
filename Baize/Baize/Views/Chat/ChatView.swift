@@ -152,10 +152,12 @@ struct ChatView: View {
             Divider()
 
             // 输入框
+            // Bug 3 fix: 添加 onStop 回调，运行时显示停止按钮
             ChatInputView(
                 text: $inputText,
                 isRunning: appState.isAgentRunning,
-                onSend: { sendMessage($0) }
+                onSend: { sendMessage($0) },
+                onStop: { stopAgent() }
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -499,6 +501,40 @@ struct ChatView: View {
         Task {
             await loop.confirmToolCall(toolCall: confirmation.toolCall, allowed: allowed)
         }
+    }
+
+    /// Bug 3 fix: 用户主动停止 Agent 生成
+    /// 递增 generation 使旧 task 的事件被丢弃，cancel task，停止 loop，flush 残留文本
+    private func stopAgent() {
+        // 递增 generation，使旧 task 的 catch/cleanup 被跳过
+        agentGeneration += 1
+        // 取消正在运行的 agentTask
+        agentTask?.cancel()
+        // 停止 AgentLoop
+        if let loop = agentLoop {
+            Task { await loop.stop() }
+        }
+        // Flush 残留的流式文本并转为正式消息
+        streamBuffer.flush()
+        if !streamBuffer.isEmpty {
+            displayMessages.append(DisplayMessage(
+                role: .assistant,
+                content: streamBuffer.fullText,
+                timestamp: Date()
+            ))
+            streamBuffer.reset()
+        }
+        isStreaming = false
+        appState.isAgentRunning = false
+        // 收起键盘
+        DispatchQueue.main.async {
+            UIApplication.shared.sendAction(
+                #selector(UIResponder.resignFirstResponder),
+                to: nil, from: nil, for: nil
+            )
+        }
+        // 刷新会话列表
+        Task { await loadSessionList() }
     }
 
     // MARK: - Session Persistence (P1-1)

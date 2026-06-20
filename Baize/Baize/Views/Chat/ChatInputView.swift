@@ -9,6 +9,8 @@ struct ChatInputView: View {
     /// Agent 是否正在运行（W9 fix: 运行时禁用发送）
     let isRunning: Bool
     let onSend: (String) -> Void
+    /// Bug 3 fix: 停止按钮回调 — Agent 运行时点击停止生成
+    let onStop: () -> Void
     @State private var editorHeight: CGFloat = 40
     @State private var isFocused: Bool = false
 
@@ -31,19 +33,24 @@ struct ChatInputView: View {
             )
             .frame(height: editorHeight)
 
-            // 发送按钮
-            // W9 fix: isRunning 时按钮禁用（灰色、不可点击）
-            SendButton(
-                isEnabled: !isRunning && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
-                onTap: {
-                    guard !isRunning else { return }
-                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !trimmed.isEmpty else { return }
-                    onSend(trimmed)
-                    text = ""
-                    editorHeight = minEditorHeight
-                }
-            )
+            // Bug 3 fix: Agent 运行时显示停止按钮，否则显示发送按钮
+            if isRunning {
+                StopButton(onTap: onStop)
+            } else {
+                // 发送按钮
+                // W9 fix: isRunning 时按钮禁用（灰色、不可点击）
+                SendButton(
+                    isEnabled: !isRunning && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+                    onTap: {
+                        guard !isRunning else { return }
+                        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !trimmed.isEmpty else { return }
+                        onSend(trimmed)
+                        text = ""
+                        editorHeight = minEditorHeight
+                    }
+                )
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -232,6 +239,22 @@ struct SendButton: View {
                 .foregroundColor(isEnabled ? Color.baizeAccent : Color.gray.opacity(0.4))
         }
         .disabled(!isEnabled)
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Stop Button (Bug 3 fix)
+
+/// 停止按钮 — Agent 运行时显示，点击停止生成
+struct StopButton: View {
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            Image(systemName: "stop.circle.fill")
+                .font(.system(size: 28))
+                .foregroundColor(.red)
+        }
         .buttonStyle(.plain)
     }
 }
