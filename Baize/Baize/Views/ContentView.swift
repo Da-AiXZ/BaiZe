@@ -63,9 +63,13 @@ struct ContentView: View {
         }
         .tint(Color.baizeAccent)
         // Agent 运行时自动切换焦点到对话面板
+        // Bug 5 fix: 使用 withAnimation 包裹，替代原 WorkspacePane 上的 .animation 修饰符
+        // （.animation 已移除以避免动画传导到 ChatView 内部长内容全量重绘）
         .onChange(of: appState.isAgentRunning) { running in
             if running {
-                appState.focusMode = .chat
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    appState.focusMode = .chat
+                }
             }
         }
         // 全局错误 Alert
@@ -80,7 +84,7 @@ struct ContentView: View {
 // MARK: - Workspace Pane (编辑器 + 对话面板, 焦点驱动宽度)
 
 /// 工作区面板 — 自定义 HStack，内含编辑器和对话面板
-/// 通过 FocusMode 枚举控制宽度比，.animation 实现平滑过渡
+/// 通过 FocusMode 枚举控制宽度比，withAnimation 实现平滑过渡（Bug 5: 动画范围隔离）
 private struct WorkspacePane: View {
     @ObservedObject var appState: AppState
 
@@ -96,12 +100,18 @@ private struct WorkspacePane: View {
                     .background(Color.baizeBorder)
 
                 // 对话面板（Agent 对话）
+                // Bug 5 fix: 移除 WorkspacePane 级别的 .animation，改由 FocusModeBar 的
+                // withAnimation 和 ContentView onChange 的 withAnimation 控制动画。
+                // 容器 frame 宽度仍平滑过渡，但动画不再整体作用于 WorkspacePane。
                 ChatView(appState: appState)
                     .frame(width: geo.size.width * appState.focusMode.chatRatio)
             }
         }
         // Bug B fix: FocusModeBar 使用 safeAreaInset 固定在 detail 顶部，不再使用 overlay 或 toolbar
-        .animation(.easeInOut(duration: 0.3), value: appState.focusMode)
+        // Bug 5 fix: 移除 .animation(.easeInOut(duration: 0.3), value: appState.focusMode)
+        // 原因：该 .animation 作用于整个 WorkspacePane，导致 focusMode 切换时 ChatView 内部
+        // ChatMessageList（长内容 ScrollView）也参与宽度动画重绘 → 18 帧全量重布局 → 卡顿。
+        // 动画范围隔离改在 ChatMessageList 内部用 .transaction 实现（见 ChatView.swift）。
     }
 }
 

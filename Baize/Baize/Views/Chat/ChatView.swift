@@ -206,7 +206,10 @@ struct ChatView: View {
         // W9 fix: 在 Task 之前同步设置 isAgentRunning = true，防止时序竞争
         appState.isAgentRunning = true
         // 焦点自动切换：Agent 运行时切到对话面板焦点（双保险，ContentView 的 onChange 也会触发）
-        appState.focusMode = .chat
+        // Bug 5 fix: 使用 withAnimation 包裹，替代原 WorkspacePane 上的 .animation 修饰符
+        withAnimation(.easeInOut(duration: 0.3)) {
+            appState.focusMode = .chat
+        }
 
         // 启动 Agent Loop（异步任务）
         // Bug 2 fix: 持有 Task 引用，切换会话时可取消
@@ -828,6 +831,15 @@ private struct ChatMessageList: View {
                         Color.clear.preference(key: ChatScrollViewHeightKey.self, value: geo.size.height)
                     }
                 )
+                // Bug 5 fix: 隔离动画范围 — .transaction 阻止动画传导到 ScrollView 内部长内容。
+                // 焦点切换/侧栏滑出时容器 frame 仍平滑过渡（由 withAnimation / 系统动画驱动），
+                // 但 ScrollView 内部的 LazyVStack 长内容不参与动画，直接跳到最终宽度布局，
+                // 避免动画期间每帧全量重绘导致的卡顿和内容抽动/消失。
+                // 注意：scrollToBottom 的 proxy.scrollTo 使用独立 transaction，不受此影响。
+                // 滚到底按钮在 ZStack 中与 ScrollView 平级，也不受此 .transaction 影响。
+                .transaction { t in
+                    t.animation = nil
+                }
                 .onPreferenceChange(ChatContentHeightKey.self) { contentHeight = $0 }
                 .onPreferenceChange(ChatScrollViewHeightKey.self) { scrollViewHeight = $0 }
                 .onPreferenceChange(ChatScrollOffsetKey.self) { offset in
