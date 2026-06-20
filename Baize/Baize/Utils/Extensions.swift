@@ -71,9 +71,36 @@ extension Color {
 // MARK: - String Extensions
 
 extension String {
-    /// 估算 Token 数（简单启发式：字符数 × 0.25）
+    /// 估算 Token 数（CJK 区分估算：中日韩字符按 0.6 token/字，其他按 UTF-8 byte × 0.25）
+    /// P1-5: 原 utf8.count × 0.25 对中文严重低估（1 个汉字 3 字节 → 0.75 token，
+    /// 实际 BPE 分词约 0.6-1.5 token），改用 unicodeScalars 遍历区分
     var estimatedTokens: Int {
-        Int(Double(utf8.count) * BaizeToken.tokenEstimateMultiplier)
+        var cjkCount = 0
+        var nonCjkByteCount = 0
+
+        for scalar in self.unicodeScalars {
+            if Self.isCJK(scalar) {
+                cjkCount += 1
+            } else {
+                nonCjkByteCount += String(scalar).utf8.count
+            }
+        }
+
+        let cjkTokens = Double(cjkCount) * BaizeToken.cjkTokenRatio
+        let nonCjkTokens = Double(nonCjkByteCount) * BaizeToken.nonCjkByteRatio
+        return Int(cjkTokens + nonCjkTokens)
+    }
+
+    /// 判断 Unicode 标量是否为 CJK（中日韩）字符
+    /// 覆盖：CJK 统一表意文字、扩展A、兼容表意、日文假名、韩文音节、全角字符
+    private static func isCJK(_ scalar: Unicode.Scalar) -> Bool {
+        let v = scalar.value
+        return (0x4E00...0x9FFF).contains(v)    // CJK 统一表意文字
+            || (0x3400...0x4DBF).contains(v)    // CJK 扩展 A
+            || (0xF900...0xFAFF).contains(v)    // CJK 兼容表意文字
+            || (0x3040...0x30FF).contains(v)    // 日文假名（平假名+片假名）
+            || (0xAC00...0xD7AF).contains(v)    // 韩文音节
+            || (0xFF00...0xFFEF).contains(v)    // 全角字符
     }
 
     /// 截断到最大长度，超过时添加截断提示

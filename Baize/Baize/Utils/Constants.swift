@@ -329,6 +329,12 @@ enum BaizeToken {
 
     /// 单次估算 Token 乘数（字符数 × 此系数 ≈ Token 数）
     static let tokenEstimateMultiplier = 0.25
+
+    /// CJK 字符 token 估算系数（每字符约 0.6 token，偏保守下界）
+    static let cjkTokenRatio = 0.6
+
+    /// 非 CJK 字符 token 估算系数（每 UTF-8 byte 约 0.25 token，与原逻辑一致）
+    static let nonCjkByteRatio = 0.25
 }
 
 // MARK: - Summary Configuration
