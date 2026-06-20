@@ -1270,7 +1270,9 @@ struct NativeCommands {
                 )
             }
 
-            for case let fileURL in enumerator {
+            // FileManager.enumerator 返回 NSDirectoryEnumerator，元素类型为 Any，
+            // 必须用 `as URL` 模式匹配转换为 URL。
+            for case let fileURL as URL in enumerator {
                 // 获取文件属性
                 let resourceValues = try? fileURL.resourceValues(forKeys: resourceKeys)
                 let isDirectory = resourceValues?.isDirectory ?? false
