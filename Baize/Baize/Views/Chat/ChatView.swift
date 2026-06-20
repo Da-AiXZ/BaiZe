@@ -743,9 +743,27 @@ private struct ContextUsageBar: View {
         return Double(tokens) / Double(window)
     }
 
-    /// 用量百分比（整数）
-    private var percent: Int {
-        Int(ratio * 100)
+    /// 格式化 token 数为可读字符串
+    /// 低于 1K 时显示原始数字，高于 1K 时显示 1 位小数 K，高于 1M 时显示 M
+    private func formatTokens(_ value: Int) -> String {
+        if value >= 1_000_000 {
+            return String(format: "%.1fM", Double(value) / 1_000_000.0)
+        } else if value >= 1000 {
+            return String(format: "%.1fK", Double(value) / 1000.0)
+        } else {
+            return "\(value)"
+        }
+    }
+
+    /// 格式化 contextWindow 为可读字符串
+    private func formatWindow(_ value: Int) -> String {
+        if value >= 1_000_000 {
+            return String(format: "%.0fM", Double(value) / 1_000_000.0)
+        } else if value >= 1000 {
+            return String(format: "%.0fK", Double(value) / 1000.0)
+        } else {
+            return "\(value)"
+        }
     }
 
     /// 颜色分级
@@ -768,7 +786,7 @@ private struct ContextUsageBar: View {
                     .foregroundColor(.baizeSuccess)
             }
 
-            Text("上下文: \(tokens / 1000)K / \(window / 1000)K (\(percent)%)")
+            Text("上下文: \(formatTokens(tokens)) / \(formatWindow(window)) (\(String(format: "%.1f", ratio * 100))%)")
                 .font(.caption)
                 .foregroundColor(barColor)
 
