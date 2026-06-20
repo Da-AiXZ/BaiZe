@@ -272,16 +272,21 @@ class RuntimeExecutor: @unchecked Sendable {
                 // T01-2 fix: 用 pclose 替代 fclose 捕获退出码
                 // pclose 和 fclose 不可对同一 FILE* 调用两次
                 // pcloseStatus == -1 表示 ios_popen 内部未使用 popen()，pclose 未关闭流
+                // 注意：WIFEXITED/WEXITSTATUS 是 C 宏，Swift 中需手动解析 wait status
+                // POSIX wait status 格式：
+                //   - 低 7 位 (0x7F) 为信号编号，0 表示正常退出
+                //   - 高 8 位 (>> 8 & 0xFF) 为退出码（仅正常退出时有效）
                 let pcloseStatus = pclose(filePtr)
                 let realExitCode: Int32
                 if pcloseStatus == -1 {
                     // pclose 未关闭流，需 fclose 补充关闭
                     fclose(filePtr)
                     realExitCode = 0  // 无法获取退出码，保持原有行为
-                } else if WIFEXITED(pcloseStatus) {
-                    realExitCode = WEXITSTATUS(pcloseStatus)
+                } else if (pcloseStatus & 0x7F) == 0 {
+                    // 正常退出：低 7 位为 0，退出码在高 8 位
+                    realExitCode = (pcloseStatus >> 8) & 0xFF
                 } else {
-                    // 进程被信号终止
+                    // 被信号终止（低 7 位非 0）
                     realExitCode = -1
                 }
 
