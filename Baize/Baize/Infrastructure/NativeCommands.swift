@@ -5,7 +5,7 @@ import Foundation
 /// 作为 ios_system 的双保险 fallback，确保高频命令在 ios_system 不可用或行为异常时仍能正常工作。
 /// 每个命令返回 `RuntimeExecutor.ExecutionResult?`，nil 表示不是原生命令（继续走 ios_popen）。
 ///
-/// 支持的命令：ls, cat, pwd, wc, stat, touch, mkdir, rm, cp, mv, head, tail
+/// 支持的命令：ls, cat, pwd, wc, stat, touch, mkdir, rm, cp, mv, head, tail, find
 ///
 /// 设计原则：
 /// - 纯 Swift 实现，不调用 ios_popen / ios_system
@@ -19,7 +19,7 @@ struct NativeCommands {
     /// 支持的原生命令名称集合
     private static let supportedCommands: Set<String> = [
         "ls", "cat", "pwd", "wc", "stat", "touch",
-        "mkdir", "rm", "cp", "mv", "head", "tail",
+        "mkdir", "rm", "cp", "mv", "head", "tail", "find",
     ]
 
     // MARK: - Public Entry Point
@@ -75,6 +75,8 @@ struct NativeCommands {
             return head(args: args, workingDir: workingDir)
         case "tail":
             return tail(args: args, workingDir: workingDir)
+        case "find":
+            return find(args: args, workingDir: workingDir)
         default:
             return nil
         }
@@ -1129,6 +1131,192 @@ struct NativeCommands {
         )
     }
 
+    // MARK: - find
+
+    /// find 命令 — 递归搜索文件系统
+    ///
+    /// 支持的参数：
+    /// - `<path>`: 搜索起始路径（默认 "."）
+    /// - `-name <pattern>`: 按文件名 glob 匹配（支持 * 和 ?）
+    /// - `-iname <pattern>`: 按文件名 glob 匹配（不区分大小写）
+    /// - `-type f`: 只匹配普通文件
+    /// - `-type d`: 只匹配目录
+    /// - `-maxdepth <N>`: 限制递归深度
+    ///
+    /// 不支持的参数（静默忽略）：-perm, -user, -group, -size, -mtime, -exec, -delete, -print0
+    private static func find(args: [String], workingDir: String) -> RuntimeExecutor.ExecutionResult {
+        var searchPath: String? = nil
+        var namePattern: String? = nil
+        var caseInsensitive = false
+        var typeFilter: String? = nil  // "f" or "d"
+        var maxDepth: Int? = nil
+
+        var i = 0
+        while i < args.count {
+            let arg = args[i]
+            switch arg {
+            case "-name":
+                i += 1
+                if i < args.count {
+                    namePattern = args[i]
+                }
+            case "-iname":
+                i += 1
+                if i < args.count {
+                    namePattern = args[i]
+                    caseInsensitive = true
+                }
+            case "-type":
+                i += 1
+                if i < args.count {
+                    typeFilter = args[i]
+                }
+            case "-maxdepth":
+                i += 1
+                if i < args.count, let depth = Int(args[i]) {
+                    maxDepth = depth
+                }
+            case "-not", "-a", "-and", "-o", "-or":
+                // 逻辑运算符 — 当前简化实现忽略，仅支持单条件
+                break
+            default:
+                // 以 - 开头的未知 flag 静默忽略；其他视为路径
+                if !arg.hasPrefix("-") && searchPath == nil {
+                    searchPath = arg
+                }
+            }
+            i += 1
+        }
+
+        // 默认搜索路径为当前目录
+        let rawSearchPath = searchPath ?? "."
+        let resolvedSearchPath = resolvePath(rawSearchPath, workingDir: workingDir)
+
+        let fm = FileManager.default
+
+        // 检查路径是否存在
+        var isDir: ObjCBool = false
+        if !fm.fileExists(atPath: resolvedSearchPath, isDirectory: &isDir) {
+            return RuntimeExecutor.ExecutionResult(
+                stdout: "",
+                stderr: "find: \(rawSearchPath): No such file or directory\n",
+                exitCode: 1,
+                isError: true
+            )
+        }
+
+        var results: [String] = []
+
+        // 编译 glob 正则（如果指定了 -name/-iname）
+        let nameRegex: NSRegularExpression? = {
+            guard let pattern = namePattern else { return nil }
+            return compileGlob(pattern: pattern, caseInsensitive: caseInsensitive)
+        }()
+
+        // 检查单个条目是否匹配过滤条件
+        let matchesFilters: (String, Bool) -> Bool = { (name: String, isDirectory: Bool) in
+            // -type 过滤
+            if let tf = typeFilter {
+                if tf == "f" && isDirectory { return false }
+                if tf == "d" && !isDirectory { return false }
+            }
+            // -name/-iname 过滤
+            if let regex = nameRegex {
+                let matchName = caseInsensitive ? name.lowercased() : name
+                let range = NSRange(matchName.startIndex..., in: matchName)
+                if regex.firstMatch(in: matchName, options: [], range: range) == nil {
+                    return false
+                }
+            }
+            return true
+        }
+
+        // 构建显示路径：保留用户输入的搜索路径前缀
+        // find . → ./file.txt, find src → src/file.txt, find /abs → /abs/file.txt
+        let displayPrefix: String = rawSearchPath
+        // 规范化前缀：移除末尾的 /（除非是根路径 "/"）
+        let normalizedPrefix = (displayPrefix.hasSuffix("/") && displayPrefix != "/")
+            ? String(displayPrefix.dropLast())
+            : displayPrefix
+
+        // 构建绝对路径前缀（用于从 fileURL.path 中截取相对路径）
+        let absPrefix = resolvedSearchPath.hasSuffix("/") ? resolvedSearchPath : resolvedSearchPath + "/"
+
+        // 检查根路径本身是否匹配
+        let rootName = (resolvedSearchPath as NSString).lastPathComponent
+        let rootIsDir = isDir.boolValue
+        if matchesFilters(rootName, rootIsDir) {
+            results.append(normalizedPrefix)
+        }
+
+        // 如果是目录，递归遍历
+        if rootIsDir {
+            let searchURL = URL(fileURLWithPath: resolvedSearchPath)
+            let resourceKeys: Set<URLResourceKey> = [.isDirectoryKey, .nameKey]
+
+            let enumeratorOptions: FileManager.DirectoryEnumerationOptions = []
+            // 注意：find 默认包含隐藏文件（.git 等），不使用 .skipsHiddenFiles
+
+            guard let enumerator = fm.enumerator(
+                at: searchURL,
+                includingPropertiesForKeys: Array(resourceKeys),
+                options: enumeratorOptions
+            ) else {
+                return RuntimeExecutor.ExecutionResult(
+                    stdout: "",
+                    stderr: "find: cannot enumerate '\(rawSearchPath)'\n",
+                    exitCode: 1,
+                    isError: true
+                )
+            }
+
+            for case let fileURL in enumerator {
+                // 获取文件属性
+                let resourceValues = try? fileURL.resourceValues(forKeys: resourceKeys)
+                let isDirectory = resourceValues?.isDirectory ?? false
+                let name = resourceValues?.name ?? fileURL.lastPathComponent
+
+                // -maxdepth 过滤：计算当前深度
+                if let maxD = maxDepth {
+                    let relativePath = fileURL.path.replacingOccurrences(of: absPrefix, with: "")
+                    let depth = relativePath.split(separator: "/").count
+                    if depth > maxD {
+                        // 超过最大深度，跳过此条目及其子目录
+                        enumerator.skipDescendants()
+                        continue
+                    }
+                }
+
+                // 检查是否匹配过滤条件
+                guard matchesFilters(name, isDirectory) else {
+                    continue
+                }
+
+                // 构建显示路径
+                let relativePath = fileURL.path.replacingOccurrences(of: absPrefix, with: "")
+                let displayPath: String
+                if normalizedPrefix == "/" {
+                    displayPath = "/" + relativePath
+                } else if normalizedPrefix == "." {
+                    displayPath = "./" + relativePath
+                } else {
+                    displayPath = normalizedPrefix + "/" + relativePath
+                }
+
+                results.append(displayPath)
+            }
+        }
+
+        let stdout = results.isEmpty ? "" : (results.joined(separator: "\n") + "\n")
+
+        return RuntimeExecutor.ExecutionResult(
+            stdout: stdout,
+            stderr: "",
+            exitCode: 0,
+            isError: false
+        )
+    }
+
     // MARK: - Utility Functions
 
     /// 检查命令是否包含 shell 操作符
@@ -1204,5 +1392,67 @@ struct NativeCommands {
             // 相对路径 → 基于 workingDir 拼接
             return (workingDir as NSString).appendingPathComponent(path)
         }
+    }
+
+    /// 将 shell glob 模式编译为正则表达式
+    ///
+    /// 支持的通配符：
+    /// - `*` — 匹配任意数量的字符（不含 /）
+    /// - `?` — 匹配单个字符
+    /// - `[abc]` — 字符类
+    /// - `[a-z]` — 范围字符类
+    /// - `[!abc]` — 取反字符类
+    ///
+    /// - Parameters:
+    ///   - pattern: glob 模式字符串（如 "*.swift", "test?.ts"）
+    ///   - caseInsensitive: 是否不区分大小写
+    /// - Returns: 编译后的 NSRegularExpression
+    private static func compileGlob(pattern: String, caseInsensitive: Bool) -> NSRegularExpression {
+        var regexPattern = "^"
+
+        var i = pattern.startIndex
+        while i < pattern.endIndex {
+            let char = pattern[i]
+            switch char {
+            case "*":
+                // * 匹配任意字符序列（find 的 -name 中 * 不跨 /，但简化实现允许跨 /）
+                regexPattern += ".*"
+            case "?":
+                // ? 匹配单个字符
+                regexPattern += "."
+            case ".":
+                regexPattern += "\\."
+            case "+", "(", ")", "{", "}", "|", "^", "$", "\\":
+                regexPattern += "\\\(char)"
+            case "[":
+                // 字符类处理
+                let nextIndex = pattern.index(after: i)
+                if nextIndex < pattern.endIndex && pattern[nextIndex] == "!" {
+                    regexPattern += "[^"
+                    i = nextIndex  // 跳过 !，i 会在循环末尾 +1
+                } else {
+                    regexPattern += "["
+                }
+            case "]":
+                regexPattern += "]"
+            default:
+                regexPattern += String(char)
+            }
+            i = pattern.index(after: i)
+        }
+
+        regexPattern += "$"
+
+        var options: NSRegularExpression.Options = []
+        if caseInsensitive {
+            options.insert(.caseInsensitive)
+        }
+
+        // 编译正则 — 如果失败则回退为匹配所有
+        guard let regex = try? NSRegularExpression(pattern: regexPattern, options: options) else {
+            runtimeLogger.warning("find: failed to compile glob pattern '\(pattern)', matching all files")
+            return try! NSRegularExpression(pattern: ".*", options: options)
+        }
+        return regex
     }
 }

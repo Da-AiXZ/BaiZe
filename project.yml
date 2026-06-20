@@ -179,3 +179,90 @@ targets:
             echo "❌ WARNING: Python.xcframework not found at $PYTHON_XCFW"
           fi
         basedOnDependencyAnalysis: false
+      - name: Embed ios_system Sub-Frameworks
+        script: |
+          set -e
+
+          APP_BUNDLE="$TARGET_BUILD_DIR/$PRODUCT_NAME.app"
+          FRAMEWORKS_DIR="$APP_BUNDLE/Frameworks"
+          mkdir -p "$FRAMEWORKS_DIR"
+
+          # ios_system sub-frameworks needed for command execution.
+          # These are dynamically loaded via dlopen by ios_system at runtime —
+          # they must be present in the App Bundle's Frameworks directory.
+          #
+          # shell.framework: find, pwd, echo, date, env, uname, xargs, tee, printenv
+          # text.framework:  grep, sed, head, tail, diff, sort, tr, uniq, wc, md5, cat
+          # files.framework: ls, cp, rm, mv, mkdir, touch, stat, chmod, ln, du, df, chown
+          # tar.framework:   tar
+          SUB_FRAMEWORKS=("shell" "text" "files" "tar")
+
+          echo "=== Embed ios_system Sub-Frameworks ==="
+
+          # Locate the SPM artifacts directory (binary xcframework targets are extracted here).
+          # Try several well-known relative paths from common build variables.
+          SPM_ARTIFACTS=""
+          CANDIDATE_PATHS=(
+            "$BUILD_DIR/../../SourcePackages/artifacts/ios_system"
+            "$CONFIGURATION_BUILD_DIR/../../../SourcePackages/artifacts/ios_system"
+            "$TARGET_BUILD_DIR/../../../SourcePackages/artifacts/ios_system"
+          )
+          for candidate in "${CANDIDATE_PATHS[@]}"; do
+            if [ -d "$candidate" ]; then
+              SPM_ARTIFACTS="$candidate"
+              break
+            fi
+          done
+
+          # Fallback: search the DerivedData tree for the artifacts directory.
+          if [ -z "$SPM_ARTIFACTS" ]; then
+            SPM_ARTIFACTS=$(find "$BUILD_DIR/.." -maxdepth 5 -type d -name "ios_system" -path "*/artifacts/*" 2>/dev/null | head -1)
+          fi
+
+          if [ -n "$SPM_ARTIFACTS" ]; then
+            echo "SPM artifacts found at: $SPM_ARTIFACTS"
+          else
+            echo "⚠️ SPM artifacts directory not found — will try build products only"
+          fi
+
+          for fw_name in "${SUB_FRAMEWORKS[@]}"; do
+            fw="${fw_name}.framework"
+
+            # Skip if already in bundle (Xcode may have embedded it automatically).
+            if [ -d "$FRAMEWORKS_DIR/$fw" ]; then
+              echo "✅ $fw already in bundle"
+              continue
+            fi
+
+            FOUND=""
+
+            # Location 1: Build products PackageFrameworks directory.
+            if [ -d "$BUILT_PRODUCTS_DIR/PackageFrameworks/$fw" ]; then
+              FOUND="$BUILT_PRODUCTS_DIR/PackageFrameworks/$fw"
+            fi
+
+            # Location 2: Configuration build directory PackageFrameworks.
+            if [ -z "$FOUND" ] && [ -d "$CONFIGURATION_BUILD_DIR/PackageFrameworks/$fw" ]; then
+              FOUND="$CONFIGURATION_BUILD_DIR/PackageFrameworks/$fw"
+            fi
+
+            # Location 3: SPM artifacts — framework may be inside xcframework/<slice>/.
+            if [ -z "$FOUND" ] && [ -n "$SPM_ARTIFACTS" ]; then
+              FOUND=$(find "$SPM_ARTIFACTS" -name "$fw" -type d 2>/dev/null | head -1)
+            fi
+
+            # Location 4: Target build directory PackageFrameworks.
+            if [ -z "$FOUND" ] && [ -d "$TARGET_BUILD_DIR/PackageFrameworks/$fw" ]; then
+              FOUND="$TARGET_BUILD_DIR/PackageFrameworks/$fw"
+            fi
+
+            if [ -n "$FOUND" ]; then
+              cp -R "$FOUND" "$FRAMEWORKS_DIR/"
+              echo "✅ Copied $fw from: $FOUND"
+            else
+              echo "⚠️ $fw not found — commands requiring it will use NativeCommands fallback"
+            fi
+          done
+
+          echo "=== Sub-framework embedding complete ==="
+        basedOnDependencyAnalysis: false

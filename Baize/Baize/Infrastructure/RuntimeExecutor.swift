@@ -143,8 +143,23 @@ class RuntimeExecutor: @unchecked Sendable {
             return nativeResult
         }
 
-        // 检查命令是否在 ios_system 字典中可用
+        // 提取命令名（用于 git 拦截和 ios_executable 检查）
         let cmdName = command.split(separator: " ").first.map(String.init) ?? command
+
+        // git 命令不在 ios_system 支持列表中（commandDictionary.plist 无 git key）。
+        // 项目有完整的 GitService (libgit2) 实现，应使用 GitService 而非 shell git。
+        // 拦截 git 命令，避免 ios_popen 60 秒超时。
+        if cmdName == "git" {
+            runtimeLogger.info("Git command intercepted — use GitService instead of ios_popen")
+            return ExecutionResult(
+                stdout: "",
+                stderr: "⚠️ 'git' 命令在 iOS 沙箱中不可用。\n白泽使用 GitService (libgit2) 提供 Git 操作支持。\n\n可用操作：status, log, stage, commit, push, pull, branch, diff, checkout",
+                exitCode: 1,
+                isError: true
+            )
+        }
+
+        // 检查命令是否在 ios_system 字典中可用
         let cmdAvailable = ios_executable(cmdName)
         runtimeLogger.info("ios_executable('\(cmdName)') = \(cmdAvailable)")
         if cmdAvailable == 0 {
