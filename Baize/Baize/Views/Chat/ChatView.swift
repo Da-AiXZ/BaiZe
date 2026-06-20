@@ -458,7 +458,12 @@ struct ChatView: View {
 
     /// 根据当前 activeProvider + activeModel 解析 contextWindow
     /// 匹配 BaizeModels 模型列表，未匹配时回退 BaizeToken.maxContextTokens
+    /// Bug 3 fix: Custom Provider 无 ModelInfo，使用 appState.customContextWindow
     private func resolveContextWindow() -> Int {
+        // Custom Provider：直接返回用户配置的 contextWindow
+        if appState.activeProvider == .custom {
+            return appState.customContextWindow
+        }
         let models: [ModelInfo]
         switch appState.activeProvider {
         case .openAI:     models = BaizeModels.OpenAI.allModels

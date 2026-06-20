@@ -120,6 +120,17 @@ class AppState: ObservableObject {
     /// 自定义 Provider 的模型名
     @Published var customModel: String = "deepseek-chat"
 
+    /// 自定义 Provider 的 contextWindow（Bug 3: Custom Provider 无 ModelInfo，需用户手动配置）
+    /// 默认 128_000，从 UserDefaults 读取，didSet 时写回
+    @Published var customContextWindow: Int = {
+        let stored = UserDefaults.standard.integer(forKey: BaizeAPI.customContextWindowUDKey)
+        return stored > 0 ? stored : 128_000
+    }() {
+        didSet {
+            UserDefaults.standard.set(customContextWindow, forKey: BaizeAPI.customContextWindowUDKey)
+        }
+    }
+
     // MARK: - Shared Services (W22 fix: DI 注入点)
 
     /// Keychain 安全存储服务

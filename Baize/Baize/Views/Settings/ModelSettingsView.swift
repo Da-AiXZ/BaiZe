@@ -17,6 +17,7 @@ struct UnifiedAIConfigView: View {
     @State private var saveErrorMessage = ""
     @State private var customEndpointInput: String = BaizeAPI.deepSeekEndpoint
     @State private var customModelInput: String = "deepseek-chat"
+    @State private var customContextWindowInput: String = "128000"
 
     private let keychain = KeychainService()
 
@@ -92,6 +93,8 @@ struct UnifiedAIConfigView: View {
                         // 自定义 Provider：加载已保存的端点和模型名
                         customEndpointInput = appState.customEndpoint
                         customModelInput = appState.customModel
+                        // Bug 3: 加载自定义 contextWindow
+                        customContextWindowInput = "\(appState.customContextWindow)"
                         selectedModel = customModelInput
                     } else {
                         // Auto-select first model for this provider
@@ -180,6 +183,18 @@ struct UnifiedAIConfigView: View {
                                 connectionResult = nil
                             }
                     }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("上下文窗口 (tokens)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        TextField("128000", text: $customContextWindowInput)
+                            .textFieldStyle(.roundedBorder)
+                            .keyboardType(.numberPad)
+                            .onChange(of: customContextWindowInput) { _ in
+                                connectionResult = nil
+                            }
+                    }
                 }
             }
 
@@ -255,6 +270,8 @@ struct UnifiedAIConfigView: View {
             // 加载自定义端点和模型名到输入框
             customEndpointInput = appState.customEndpoint
             customModelInput = appState.customModel
+            // Bug 3: 加载自定义 contextWindow
+            customContextWindowInput = "\(appState.customContextWindow)"
             loadApiKeyForProvider(selectedProvider)
         }
         .onChange(of: apiKeyInput) { _ in
@@ -411,6 +428,9 @@ struct UnifiedAIConfigView: View {
             appState.customEndpoint = customEndpointInput
             appState.customModel = customModelInput
             appState.persistCustomConfig()
+            // Bug 3: 持久化 contextWindow（最小 1000 防止误输入）
+            let windowValue = Int(customContextWindowInput) ?? 128_000
+            appState.customContextWindow = max(windowValue, 1000)
             selectedModel = customModelInput
         }
         appState.setActiveProvider(selectedProvider, model: selectedModel)

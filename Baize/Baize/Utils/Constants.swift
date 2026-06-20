@@ -72,6 +72,9 @@ enum BaizeAPI {
     /// UserDefaults: 自定义模型名
     static let customModelUDKey = "com.baize.custom-model"
 
+    /// UserDefaults: 自定义 Provider 的 contextWindow（Bug 3: Custom Provider 无 ModelInfo，需用户手动配置）
+    static let customContextWindowUDKey = "com.baize.custom-context-window"
+
     /// SSE 流式请求超时（秒）
     static let streamTimeout: TimeInterval = 120.0
 
