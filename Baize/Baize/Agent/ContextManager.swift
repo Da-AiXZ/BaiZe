@@ -52,7 +52,7 @@ struct ContextManager {
     ///
     /// - Parameter messages: 当前对话消息列表
     /// - Returns: PromptContext（包含构建好的消息列表 + 压缩元信息）
-    func buildContext(messages: [Message]) async -> PromptContext {
+    func buildContext(messages: [Message], contextWindow: Int = BaizeToken.maxContextTokens) async -> PromptContext {
         // 1. 构建系统提示
         let systemPrompt = buildSystemPrompt()
 
@@ -65,9 +65,9 @@ struct ContextManager {
         var compactedCount = 0
         var retainedCount = 0
 
-        if shouldCompact(messages: messages) {
+        if shouldCompact(messages: messages, contextWindow: contextWindow) {
             // 3. 执行压缩（async，含 LLM 摘要生成）
-            let result = await compact(messages: messages)
+            let result = await compact(messages: messages, contextWindow: contextWindow)
             processedMessages = result.compactedHistory
             didCompact = true
             compactedHistory = result.compactedHistory
@@ -95,11 +95,14 @@ struct ContextManager {
     }
 
     /// 判断是否需要压缩上下文
-    /// - Parameter messages: 当前消息列表
-    /// - Returns: 是否超过压缩阈值（tokenBudget × compactThresholdRatio）
-    func shouldCompact(messages: [Message]) -> Bool {
+    /// - Parameters:
+    ///   - messages: 当前消息列表
+    ///   - contextWindow: 当前模型的上下文窗口大小（默认 BaizeToken.maxContextTokens）
+    /// - Returns: 是否超过压缩阈值（(contextWindow - 预留) × compactThresholdRatio - outputReserveTokens）
+    func shouldCompact(messages: [Message], contextWindow: Int = BaizeToken.maxContextTokens) -> Bool {
         let estimatedTokens = messages.estimatedTokens
-        let threshold = Int(Double(tokenBudget) * BaizeToken.compactThresholdRatio)
+        let availableHistory = contextWindow - BaizeToken.systemPromptReserve - BaizeToken.toolDefinitionsReserve
+        let threshold = Int(Double(availableHistory) * BaizeToken.compactThresholdRatio) - BaizeToken.outputReserveTokens
         return estimatedTokens > threshold
     }
 
@@ -112,11 +115,13 @@ struct ContextManager {
     /// 2. generateSummary → 调 LLM 生成摘要（30s 超时降级）
     /// 3. 成功 → [摘要消息] + toRetain；失败 → toRetain（无摘要，降级）
     ///
-    /// - Parameter messages: 当前消息列表
+    /// - Parameters:
+    ///   - messages: 当前消息列表
+    ///   - contextWindow: 当前模型的上下文窗口大小
     /// - Returns: CompactResult（压缩后历史 + 摘要文本 + 错误信息 + 计数）
-    private func compact(messages: [Message]) async -> CompactResult {
+    private func compact(messages: [Message], contextWindow: Int) async -> CompactResult {
         // 1. 分割：按 token 预算 + 配对完整性
-        let (toSummarize, toRetain) = splitForCompaction(messages: messages)
+        let (toSummarize, toRetain) = splitForCompaction(messages: messages, contextWindow: contextWindow)
 
         // 边界：无待摘要消息 → 直接返回保留区
         guard !toSummarize.isEmpty else {
@@ -162,18 +167,20 @@ struct ContextManager {
     /// 分割消息列表为待摘要区和保留区（P0-5: token 预算 + P0-3: 配对完整性）
     ///
     /// 算法：
-    /// 1. 从末尾向前累积 token，达 retentionBudget（maxContextTokens × 30%）停止 → 初始 splitIndex
+    /// 1. 从末尾向前累积 token，达 retentionBudget（contextWindow × 30%）停止 → 初始 splitIndex
     /// 2. adjustSplitForPairIntegrity 修正 splitIndex，确保 tool_call/tool_result 配对完整
     ///
-    /// - Parameter messages: 当前消息列表
+    /// - Parameters:
+    ///   - messages: 当前消息列表
+    ///   - contextWindow: 当前模型的上下文窗口大小
     /// - Returns: (summarize: 待摘要消息, retain: 保留消息)
-    private func splitForCompaction(messages: [Message]) -> (summarize: [Message], retain: [Message]) {
+    private func splitForCompaction(messages: [Message], contextWindow: Int) -> (summarize: [Message], retain: [Message]) {
         guard !messages.isEmpty else {
             return (summarize: [], retain: [])
         }
 
-        // 近期保留 token 预算 = maxContextTokens × 30% = 38,400
-        let retentionBudget = Int(Double(BaizeToken.maxContextTokens) * BaizeToken.recentRetentionRatio)
+        // 近期保留 token 预算 = contextWindow × 30%（动态 contextWindow）
+        let retentionBudget = Int(Double(contextWindow) * BaizeToken.recentRetentionRatio)
 
         // 从末尾向前累积 token
         var accumulatedTokens = 0

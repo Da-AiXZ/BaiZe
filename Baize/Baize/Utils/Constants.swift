@@ -320,6 +320,9 @@ enum BaizeToken {
     /// P0: 从 0.8 下调至 0.7，使长对话更早触发压缩
     static let compactThresholdRatio = 0.7
 
+    /// LLM 输出预留 Token（shouldCompact 阈值减去此值，确保 LLM 有输出空间）
+    static let outputReserveTokens = 4_096
+
     /// 近期消息保留比例（压缩后保留的近期消息 token 预算占比）
     /// P0-5: 按 token 预算而非固定条数保留近期消息
     static let recentRetentionRatio = 0.30

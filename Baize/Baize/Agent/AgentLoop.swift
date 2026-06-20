@@ -24,6 +24,9 @@ actor AgentLoop {
     /// 当前对话会话
     private var session: ConversationSession
 
+    /// 当前模型的 contextWindow（P1-3 动态预算，由 ChatView 更新）
+    private var contextWindow: Int = BaizeToken.maxContextTokens
+
     /// 是否正在运行 Agent Loop
     private var isRunning: Bool = false
 
@@ -119,6 +122,11 @@ actor AgentLoop {
         session = newSession
     }
 
+    /// 更新 contextWindow（切换模型或会话恢复时由 ChatView 调用）
+    func updateContextWindow(_ window: Int) {
+        self.contextWindow = window
+    }
+
     /// 停止 Agent Loop
     func stop() {
         isRunning = false
@@ -147,12 +155,12 @@ actor AgentLoop {
 
             // 1. 构建上下文（系统提示 + BAIZE.md + 对话历史 + 工具定义）
             // P0-2: 压缩前发射事件，让 UI 显示"正在压缩"
-            if contextManager.shouldCompact(messages: session.messages) {
+            if contextManager.shouldCompact(messages: session.messages, contextWindow: contextWindow) {
                 continuation.yield(.contextCompacting)
             }
 
             // P0-2: buildContext 改为 async（compact 需调 LLM 生成摘要）
-            let promptContext = await contextManager.buildContext(messages: session.messages)
+            let promptContext = await contextManager.buildContext(messages: session.messages, contextWindow: contextWindow)
 
             // P0-2: 压缩后写回 session.messages，防止下轮迭代重复压缩（关键！）
             if let compacted = promptContext.compactedHistory {
