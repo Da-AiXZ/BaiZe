@@ -90,6 +90,8 @@ private struct AssistantMessageBubble: View {
                 Text(content)
                     .font(.system(size: 14))
                     .foregroundColor(.primary)
+                    // Bug 6 fix: 确保长文本垂直扩展、水平不溢出，优化布局计算
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(Color.baizeBubbleAssistant)

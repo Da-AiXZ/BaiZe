@@ -1,6 +1,74 @@
 import SwiftUI
 import UIKit
 
+/// Bug 6 fix: 流式文本缓冲区 — 解决 streamingText 拼接 O(n²) 性能问题
+/// textDelta 累积到非 @Published 的 buffer（不触发 UI 重绘），
+/// 定时 flush 到 @Published displayedText（每 80ms 触发一次 UI 重绘）
+/// 这样 10000 字生成时，@State 更新频率从「每个 chunk」降到「每 80ms 一次」
+@MainActor
+final class StreamingTextBuffer: ObservableObject {
+    /// 非 Published 的累积缓冲区 — 不触发 UI 重绘
+    private var buffer: String = ""
+
+    /// 定时 flush 到 displayedText — 触发 UI 重绘（每 80ms 一次）
+    @Published var displayedText: String = ""
+
+    /// flush 定时器
+    private var flushTimer: DispatchSourceTimer?
+
+    /// flush 间隔（秒）
+    private let flushInterval: TimeInterval = 0.08
+
+    /// 追加文本到缓冲区（不触发 UI 重绘）
+    func append(_ text: String) {
+        buffer += text
+        startTimerIfNeeded()
+    }
+
+    /// 立即 flush 缓冲区到 displayedText（触发一次 UI 重绘）
+    func flush() {
+        stopTimer()
+        displayedText = buffer
+    }
+
+    /// 重置缓冲区（清空 buffer + displayedText）
+    func reset() {
+        stopTimer()
+        buffer = ""
+        displayedText = ""
+    }
+
+    /// 获取当前完整文本（不触发 UI 重绘）
+    var fullText: String {
+        buffer
+    }
+
+    /// 缓冲区是否为空
+    var isEmpty: Bool {
+        buffer.isEmpty
+    }
+
+    private func startTimerIfNeeded() {
+        guard flushTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.main)
+        timer.schedule(deadline: .now() + flushInterval)
+        timer.setEventHandler { [weak self] in
+            self?.flush()
+        }
+        timer.resume()
+        flushTimer = timer
+    }
+
+    private func stopTimer() {
+        flushTimer?.cancel()
+        flushTimer = nil
+    }
+
+    deinit {
+        stopTimer()
+    }
+}
+
 /// 对话面板完整视图 — 集成 AgentLoop 事件流
 /// 订阅 AgentLoop 的 AsyncThrowingStream<AgentEvent>，流式显示 LLM 响应
 /// 支持工具调用状态可视化、权限确认交互
@@ -11,7 +79,9 @@ struct ChatView: View {
     @State private var isStreaming: Bool = false
     @State private var pendingConfirmation: PendingConfirmation?
     @State private var agentLoop: AgentLoop?
-    @State private var streamingText: String = ""
+    // Bug 6 fix: 使用 StreamingTextBuffer 替代 streamingText @State，
+    // 节流 @Published 更新频率（每 80ms 一次而非每个 textDelta）
+    @StateObject private var streamBuffer = StreamingTextBuffer()
     @State private var hasReceivedAnyResponse: Bool = false
     @State private var isCompacting: Bool = false
     // P2-5: 上下文用量指示器状态
@@ -36,9 +106,10 @@ struct ChatView: View {
             )
 
             // 消息列表
+            // Bug 6 fix: 传入 streamBuffer.displayedText（节流后的显示文本）
             ChatMessageList(
                 messages: displayMessages,
-                streamingText: streamingText,
+                streamingText: streamBuffer.displayedText,
                 isStreaming: isStreaming
             )
 
@@ -121,7 +192,8 @@ struct ChatView: View {
 
         inputText = ""
         isStreaming = true
-        streamingText = ""
+        // Bug 6 fix: 使用 streamBuffer 替代 streamingText
+        streamBuffer.reset()
         hasReceivedAnyResponse = false
 
         // W9 fix: 在 Task 之前同步设置 isAgentRunning = true，防止时序竞争
@@ -274,18 +346,21 @@ struct ChatView: View {
     private func handleAgentEvent(_ event: AgentEvent) {
         switch event {
         case .textDelta(let text):
-            streamingText += text
+            // Bug 6 fix: 累积到 buffer（不触发 UI 重绘），由 timer 每 80ms flush
+            streamBuffer.append(text)
             hasReceivedAnyResponse = true
 
         case .toolCall(let toolCall):
             // 将当前流式文本转为正式消息
-            if !streamingText.isEmpty {
+            // Bug 6 fix: flush 确保获取完整文本
+            streamBuffer.flush()
+            if !streamBuffer.isEmpty {
                 displayMessages.append(DisplayMessage(
                     role: .assistant,
-                    content: streamingText,
+                    content: streamBuffer.fullText,
                     timestamp: Date()
                 ))
-                streamingText = ""
+                streamBuffer.reset()
             }
             displayMessages.append(DisplayMessage(
                 role: .toolCall,
@@ -317,13 +392,15 @@ struct ChatView: View {
 
         case .error(let error):
             hasReceivedAnyResponse = true
-            if !streamingText.isEmpty {
+            // Bug 6 fix: flush 确保获取完整文本
+            streamBuffer.flush()
+            if !streamBuffer.isEmpty {
                 displayMessages.append(DisplayMessage(
                     role: .assistant,
-                    content: streamingText,
+                    content: streamBuffer.fullText,
                     timestamp: Date()
                 ))
-                streamingText = ""
+                streamBuffer.reset()
             }
             displayMessages.append(DisplayMessage(
                 role: .error,
@@ -361,13 +438,15 @@ struct ChatView: View {
             contextWindow = window
 
         case .completed:
-            if !streamingText.isEmpty {
+            // Bug 6 fix: flush 确保获取完整文本
+            streamBuffer.flush()
+            if !streamBuffer.isEmpty {
                 displayMessages.append(DisplayMessage(
                     role: .assistant,
-                    content: streamingText,
+                    content: streamBuffer.fullText,
                     timestamp: Date()
                 ))
-                streamingText = ""
+                streamBuffer.reset()
             } else if !hasReceivedAnyResponse {
                 // 空响应兜底：AgentLoop 完成但未收到任何文本或错误
                 let providerId = appState.activeProvider.providerId
@@ -467,7 +546,8 @@ struct ChatView: View {
             self.hasCompacted = restored.messages.contains { $0.isSummary }
             self.contextTokens = restored.estimatedTokens
             self.contextWindow = window
-            self.streamingText = ""
+            // Bug 6 fix: 使用 streamBuffer
+            self.streamBuffer.reset()
             self.isStreaming = false
             self.showSessionList = false
         }
@@ -489,7 +569,8 @@ struct ChatView: View {
         self.displayMessages = []
         self.hasCompacted = false
         self.contextTokens = 0
-        self.streamingText = ""
+        // Bug 6 fix: 使用 streamBuffer
+        self.streamBuffer.reset()
         self.isStreaming = false
         self.appState.isAgentRunning = false
         self.showSessionList = false
@@ -810,6 +891,8 @@ private struct StreamingTextBubble: View {
                 Text(text)
                     .font(.system(size: 14))
                     .foregroundColor(.primary)
+                    // Bug 6 fix: 确保长文本垂直扩展、水平不溢出
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(Color.baizeBubbleAssistant)
