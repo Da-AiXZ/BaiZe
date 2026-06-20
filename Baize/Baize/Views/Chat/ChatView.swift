@@ -65,7 +65,8 @@ final class StreamingTextBuffer: ObservableObject {
     }
 
     deinit {
-        stopTimer()
+        // 直接 cancel，不调 stopTimer()（避免 @MainActor 隔离问题）
+        flushTimer?.cancel()
     }
 }
 
