@@ -41,8 +41,8 @@ class RuntimeExecutor: @unchecked Sendable {
     /// FileManager 实例
     private let fileManager = FileManager.default
 
-    /// Serial queue for ios_popen execution — prevents chdir() races.
-    /// chdir() is process-wide (not thread-local), so concurrent executions
+    /// Serial queue for ios_popen execution — prevents ios_setDirectoryURL() races.
+    /// ios_setDirectoryURL() is process-wide (not thread-local), so concurrent executions
     /// would interfere with each other's working directory.
     private static let executeQueue = DispatchQueue(label: "com.baize.runtime.execute", qos: .userInitiated)
 
@@ -59,16 +59,29 @@ class RuntimeExecutor: @unchecked Sendable {
         self.nodeStrategy = nodeStrategy
         self.pythonStrategy = pythonStrategy
 
+        // ── 方案 A：补全 ios_system 初始化序列 ──
+        // initializeEnvironment() 设置 $HOME=~/Documents/, $PATH, $PYTHONHOME 等关键环境变量
+        // 必须在任何 ios_system 命令执行前调用，否则命令可能因缺少环境变量而失败
+        // 参考：ios_system/ios_system.h — extern void initializeEnvironment(void);
+        initializeEnvironment()
+        runtimeLogger.info("ios_system: initializeEnvironment() called — PATH/HOME/PYTHONHOME set")
+
+        // 设置 miniRoot — 限制 ios_system 的可访问根目录
+        // ios_setMiniRoot 接受 NSString*（Swift 导入为 String），传入路径字符串
+        // 参考：ios_system.h — extern int ios_setMiniRoot(NSString*);
+        let miniRootResult = ios_setMiniRoot(BaizePath.projectRoot)
+        runtimeLogger.info("ios_system: miniRoot set to \(BaizePath.projectRoot) (result=\(miniRootResult))")
+
         // ios_system 将 70+ Unix 命令编译为进程内函数，无需 fork()
         // ios_system 默认不限制路径，安全由 PermissionEngine 负责
 
-        // 诊断：检查 ios_system 命令字典是否加载成功
+        // 诊断：检查 ios_system 命令字典是否加载成功（initializeEnvironment 后重新检查）
         let cmdList = commandsAsString() ?? "(empty)"
         let lsAvailable = ios_executable("ls")
         let echoAvailable = ios_executable("echo")
         runtimeLogger.info("ios_system initialized: \(cmdList.split(separator: " ").count) commands available, ls executable=\(lsAvailable), echo executable=\(echoAvailable)")
         if lsAvailable == 0 {
-            runtimeLogger.error("ios_system: 'ls' not found! commandDictionary.plist may be missing from App Bundle resources")
+            runtimeLogger.error("ios_system: 'ls' not found after initializeEnvironment! commandDictionary.plist may be missing from App Bundle resources. NativeCommands fallback will handle ls.")
         }
         if echoAvailable == 0 {
             runtimeLogger.info("ios_system: 'echo' not found in command list — builtin handler will be used instead")
@@ -95,10 +108,14 @@ class RuntimeExecutor: @unchecked Sendable {
     /// 3. ios_popen 在 ios_system 返回非零时返回 NULL → 无输出
     /// 4. 2>&1 语法可能不被 parser 识别，被当作命令参数 → 命令失败
     ///
-    /// **修复方案**：
-    /// - 用 FileManager.changeCurrentDirectoryPath（底层 chdir()）替代 `cd 'path' && ` 前缀
+    /// **修复方案**（A+B 双保险）：
+    /// - 方案 A：init() 调用 initializeEnvironment() + ios_setMiniRoot() 补全 ios_system 初始化
+    /// - 方案 A：用 ios_setDirectoryURL 替代 FileManager.changeCurrentDirectoryPath（chdir）
+    ///           ios_setDirectoryURL 同时更新 POSIX CWD 和 ios_system 会话状态
+    /// - 方案 B：高频命令（ls/cat/pwd/wc/stat/touch/mkdir/rm/cp/mv/head/tail）由 NativeCommands
+    ///           Swift 原生实现，不依赖 ios_system，双保险 fallback
     /// - 移除 `2>&1` 后缀，只传裸命令给 ios_popen
-    /// - 使用串行队列防止 chdir() 竞态（chdir 是进程级，非线程级）
+    /// - 使用串行队列防止 ios_setDirectoryURL() 竞态（进程级，非线程级）
     /// - 移除激进的空输出检测（touch/mkdir 等命令合法地无输出）
     /// - 对 find/grep/du 等递归命令增加超时至 60 秒
     ///
@@ -115,6 +132,15 @@ class RuntimeExecutor: @unchecked Sendable {
         if let builtinResult = handleBuiltinCommand(command: command) {
             runtimeLogger.info("Builtin command handled: \(command)")
             return builtinResult
+        }
+
+        // 方案 B：高频命令 Swift 原生 fallback
+        // ls/cat/pwd/wc/stat/touch/mkdir/rm/cp/mv/head/tail 由 NativeCommands 直接处理
+        // 不依赖 ios_system，确保即使 ios_system 未正确初始化也能正常工作
+        // 返回 nil 表示不是原生命令（含 shell 操作符或不在支持列表中），继续走 ios_popen
+        if let nativeResult = NativeCommands.execute(command: command, workingDir: workingDirectory) {
+            runtimeLogger.info("Native command handled: \(command)")
+            return nativeResult
         }
 
         // 检查命令是否在 ios_system 字典中可用
@@ -144,18 +170,22 @@ class RuntimeExecutor: @unchecked Sendable {
                 }
             }
 
-            // 串行队列执行 — chdir() 是进程级操作，必须串行化
+            // 串行队列执行 — ios_setDirectoryURL 是进程级操作，必须串行化
             RuntimeExecutor.executeQueue.async {
-                // ── Phase 1: 设置工作目录 ──
-                // 用 chdir() 替代 `cd 'path' && ` 前缀
-                // ios_system 的 cd_main 依赖 currentSession，可能返回失败
-                // chdir() 在 POSIX 层直接生效，不依赖 ios_system 会话状态
+                // ── Phase 1: 设置工作目录 (方案 A: ios_setDirectoryURL) ──
+                // ios_setDirectoryURL 是 ios_system 提供的正确设置工作目录方式
+                // 它同时更新 POSIX CWD (chdir) 和 ios_system 内部会话状态
+                // 比 FileManager.changeCurrentDirectoryPath 更可靠 —
+                // 后者只改 POSIX CWD，不影响 ios_system session 的 workingDirectory
+                // 接受 NSURL*，需要 URL → NSURL 转换
                 let originalDir = FileManager.default.currentDirectoryPath
                 var chdirSuccess = false
 
                 if !workingDirectory.isEmpty && self.fileManager.fileExists(atPath: workingDirectory) {
-                    chdirSuccess = FileManager.default.changeCurrentDirectoryPath(workingDirectory)
-                    runtimeLogger.info("chdir('\(workingDirectory)') = \(chdirSuccess)")
+                    let workURL = URL(fileURLWithPath: workingDirectory)
+                    ios_setDirectoryURL(workURL as NSURL)
+                    chdirSuccess = true
+                    runtimeLogger.info("ios_setDirectoryURL('\(workingDirectory)') called")
                 } else {
                     runtimeLogger.warning("Working directory not accessible: \(workingDirectory), running in '\(originalDir)'")
                 }
@@ -167,9 +197,9 @@ class RuntimeExecutor: @unchecked Sendable {
                 runtimeLogger.info("ios_popen raw command: '\(command)'")
                 let fp = ios_popen(command, "r")
 
-                // 立即恢复原始工作目录
+                // 立即恢复原始工作目录 (方案 A: ios_setDirectoryURL)
                 // ios_popen 是同步调用 — 命令已执行完毕，输出已在管道缓冲区中
-                _ = FileManager.default.changeCurrentDirectoryPath(originalDir)
+                ios_setDirectoryURL(URL(fileURLWithPath: originalDir) as NSURL)
 
                 // ── Phase 3: 处理 NULL 返回值 ──
                 // ios_popen 在 ios_system 返回非零时返回 NULL
