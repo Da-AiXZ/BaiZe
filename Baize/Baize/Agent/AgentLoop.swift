@@ -308,7 +308,7 @@ actor AgentLoop {
 
                         // 终端事件：execute_command 命令开始执行
                         if name == "execute_command" {
-                            let cmd = toolCall.argumentString(for: "command") ?? ""
+                            let cmd = toolCall.argumentString(for: "command") ?? "(参数缺失)"
                             continuation.yield(.commandExecuting(command: cmd, source: .agent))
                         }
 
@@ -316,7 +316,7 @@ actor AgentLoop {
 
                         // 终端事件：execute_command 命令输出完成
                         if name == "execute_command" {
-                            let cmd = toolCall.argumentString(for: "command") ?? ""
+                            let cmd = toolCall.argumentString(for: "command") ?? "(参数缺失)"
                             let exitCode = Int(result.metadata["exitCode"] ?? "0") ?? 0
                             continuation.yield(.commandOutput(
                                 command: cmd,
@@ -329,6 +329,7 @@ actor AgentLoop {
                         continuation.yield(.toolResult(toolCall, result))
 
                         // 将结果注入对话历史（P2-1: 分层截断）
+                        // Bug 1 fix: tool_result 必须在所有代码路径都注入，防止 API 400
                         let rawContent = result.toToolResultContent()
                         let truncatedContent = ToolResultTruncator.truncate(toolName: name, output: rawContent)
                         session.messages.append(.toolResult(id: id, content: truncatedContent))
@@ -358,7 +359,7 @@ actor AgentLoop {
 
                             // 终端事件：execute_command 命令开始执行
                             if name == "execute_command" {
-                                let cmd = toolCall.argumentString(for: "command") ?? ""
+                                let cmd = toolCall.argumentString(for: "command") ?? "(参数缺失)"
                                 continuation.yield(.commandExecuting(command: cmd, source: .agent))
                             }
 
@@ -366,7 +367,7 @@ actor AgentLoop {
 
                             // 终端事件：execute_command 命令输出完成
                             if name == "execute_command" {
-                                let cmd = toolCall.argumentString(for: "command") ?? ""
+                                let cmd = toolCall.argumentString(for: "command") ?? "(参数缺失)"
                                 let exitCode = Int(result.metadata["exitCode"] ?? "0") ?? 0
                                 continuation.yield(.commandOutput(
                                     command: cmd,
@@ -378,6 +379,7 @@ actor AgentLoop {
 
                             continuation.yield(.toolResult(toolCall, result))
                             // P2-1: 分层截断后注入对话历史
+                            // Bug 1 fix: tool_result 必须在所有代码路径都注入，防止 API 400
                             let rawContent = result.toToolResultContent()
                             let truncatedContent = ToolResultTruncator.truncate(toolName: name, output: rawContent)
                             session.messages.append(.toolResult(id: id, content: truncatedContent))

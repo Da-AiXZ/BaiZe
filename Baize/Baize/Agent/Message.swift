@@ -425,6 +425,57 @@ extension Array where Element == Message {
     }
 }
 
+// MARK: - Message Array Tool Result Repair (Bug 1 fix: API 400 safety net)
+
+extension Array where Element == Message {
+    /// 修复孤立的 tool_call — 为没有对应 tool_result 的 tool_call_id 注入占位结果
+    ///
+    /// OpenAI API 要求：assistant 消息中的每个 tool_call_id 必须有对应的 tool 消息。
+    /// 如果由于任何原因（工具执行异常、竞态等）导致 tool_result 缺失，
+    /// 下一次 API 调用会返回 HTTP 400：
+    /// "An assistant message with 'tool_calls' must be followed by tool messages
+    ///  responding to each tool_call_id (insufficient tool messages following tool calls)"
+    ///
+    /// 此方法作为安全网，在发送 API 请求前检查并修复孤立 tool_call。
+    /// - Returns: 修复后的消息数组（可能追加了占位 tool_result 消息）
+    func repairingOrphanedToolCalls() -> [Message] {
+        // 收集所有 tool_call id（来自 .assistantWithToolCalls 和 .toolCall）
+        var toolCallIds: Set<String> = []
+        for msg in self {
+            switch msg {
+            case .assistantWithToolCalls(_, let toolCalls):
+                toolCallIds.formUnion(toolCalls.map(\.id))
+            case .toolCall(let id, _, _):
+                toolCallIds.insert(id)
+            default:
+                break
+            }
+        }
+
+        // 收集所有 tool_result id
+        var toolResultIds: Set<String> = []
+        for msg in self {
+            if case .toolResult(let id, _) = msg {
+                toolResultIds.insert(id)
+            }
+        }
+
+        // 找出没有对应 tool_result 的 tool_call id
+        let orphanedIds = toolCallIds.subtracting(toolResultIds)
+        if orphanedIds.isEmpty {
+            return self
+        }
+
+        // 为每个孤立 id 注入占位 tool_result
+        agentLogger.warning("repairingOrphanedToolCalls: found \(orphanedIds.count) orphaned tool_call(s), injecting placeholder tool_results: \(orphanedIds)")
+        var result = self
+        for id in orphanedIds {
+            result.append(.toolResult(id: id, content: "[工具执行结果缺失 — 已自动补全以防止 API 400 错误]"))
+        }
+        return result
+    }
+}
+
 // MARK: - Message Array Token Estimation (P0-4: 统一 token 估算)
 
 extension Array where Element == Message {

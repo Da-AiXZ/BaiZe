@@ -60,9 +60,13 @@ class RuntimeExecutor: @unchecked Sendable {
         // 诊断：检查 ios_system 命令字典是否加载成功
         let cmdList = commandsAsString() ?? "(empty)"
         let lsAvailable = ios_executable("ls")
-        runtimeLogger.info("ios_system initialized: \(cmdList.split(separator: " ").count) commands available, ls executable=\(lsAvailable)")
+        let echoAvailable = ios_executable("echo")
+        runtimeLogger.info("ios_system initialized: \(cmdList.split(separator: " ").count) commands available, ls executable=\(lsAvailable), echo executable=\(echoAvailable)")
         if lsAvailable == 0 {
             runtimeLogger.error("ios_system: 'ls' not found! commandDictionary.plist may be missing from App Bundle resources")
+        }
+        if echoAvailable == 0 {
+            runtimeLogger.info("ios_system: 'echo' not found in command list — builtin handler will be used instead")
         }
     }
 
@@ -90,6 +94,13 @@ class RuntimeExecutor: @unchecked Sendable {
 
         let workingDirectory = workingDir ?? BaizePath.projectRoot
 
+        // Bug 2 fix: echo 等简单命令在 ios_system 中可能不被 ios_popen 支持
+        // 作为内置命令直接处理，确保基本命令始终有输出
+        if let builtinResult = handleBuiltinCommand(command: command) {
+            runtimeLogger.info("Builtin command handled: \(command)")
+            return builtinResult
+        }
+
         // 构建完整命令：仅当工作目录存在且可访问时才 cd
         let fullCommand: String
         if !workingDirectory.isEmpty && fileManager.fileExists(atPath: workingDirectory) {
@@ -99,15 +110,39 @@ class RuntimeExecutor: @unchecked Sendable {
             fullCommand = "\(command) 2>&1"
         }
 
-        // 使用 ios_popen 执行命令（ios_system 库内置命令，进程内调用）
+        // Bug 2 fix: 检查命令是否在 ios_system 中可用
+        let cmdName = command.split(separator: " ").first.map(String.init) ?? command
+        let cmdAvailable = ios_executable(cmdName)
+        if cmdAvailable == 0 {
+            runtimeLogger.warning("Command '\(cmdName)' may not be available in ios_system (ios_executable=0), will attempt ios_popen anyway")
+        }
+
+        // Bug 1 fix: 添加超时机制，防止 ios_popen 阻塞导致 Agent 卡住
+        // ios_popen 是阻塞调用，如果命令等待输入（如 cat 无参数），会永久阻塞
+        let timeoutSeconds = BaizeRuntime.commandTimeout
+
         return await withCheckedContinuation { continuation in
+            // 使用锁保护 resumed 标志，防止超时和正常完成双重 resume
+            let lock = NSLock()
+            var hasResumed = false
+
+            let resumeOnce: (ExecutionResult) -> Void = { result in
+                lock.lock()
+                let shouldResume = !hasResumed
+                hasResumed = true
+                lock.unlock()
+                if shouldResume {
+                    continuation.resume(returning: result)
+                }
+            }
+
             DispatchQueue.global(qos: .userInitiated).async {
                 let fp = ios_popen(fullCommand, "r")
 
                 guard let filePtr = fp else {
                     runtimeLogger.error("ios_popen returned nil for: \(fullCommand)")
                     runtimeLogger.error("This usually means ios_system command dictionary not loaded, or command not supported")
-                    continuation.resume(returning: ExecutionResult(
+                    resumeOnce(ExecutionResult(
                         stdout: "",
                         stderr: "命令不可用: ios_system 不支持 '\(command)'。可能原因: ios_system 未正确初始化，或该命令不在内置命令列表中。支持的命令: ls, cat, grep, find, rm, mv, cp, tar, curl 等 70+ Unix 命令。",
                         exitCode: -1,
@@ -124,18 +159,141 @@ class RuntimeExecutor: @unchecked Sendable {
                 }
 
                 fclose(filePtr)
-                let exitCode: Int32 = 0
 
-                runtimeLogger.info("ios_popen completed: exit code \(exitCode), output \(output.utf8.count) bytes")
+                // Bug 2 fix: 诊断日志 — 记录输出详情
+                runtimeLogger.info("ios_popen completed: output \(output.utf8.count) bytes, first 200 chars: '\(output.prefix(200))'")
 
-                continuation.resume(returning: ExecutionResult(
+                // 如果输出为空但命令应该有输出，可能是 ios_system 不支持该命令
+                if output.isEmpty && cmdAvailable == 0 {
+                    runtimeLogger.warning("Command '\(cmdName)' produced no output and is not in ios_system command list. It may not be supported.")
+                    resumeOnce(ExecutionResult(
+                        stdout: "",
+                        stderr: "命令 '\(command)' 没有产生输出。可能 ios_system 不支持此命令。可用命令包括: ls, cat, grep, find, git, curl 等 70+ Unix 命令。",
+                        exitCode: 127,
+                        isError: true
+                    ))
+                    return
+                }
+
+                resumeOnce(ExecutionResult(
                     stdout: output,
                     stderr: "",
-                    exitCode: exitCode,
-                    isError: exitCode != 0
+                    exitCode: 0,
+                    isError: false
+                ))
+            }
+
+            // 超时处理：超时后返回错误，ios_popen 在后台继续运行但不影响结果
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeoutSeconds) {
+                resumeOnce(ExecutionResult(
+                    stdout: "",
+                    stderr: "命令执行超时（\(Int(timeoutSeconds))秒）：\(command)",
+                    exitCode: -1,
+                    isError: true
                 ))
             }
         }
+    }
+
+    // MARK: - Builtin Command Handling (Bug 2 fix)
+
+    /// 处理 ios_system 可能不支持的简单命令（echo、printf、true、false 等）
+    /// 这些命令是 shell 内置命令，ios_popen 可能无法正确捕获其输出
+    /// 仅处理不含 shell 操作符（|, &&, ||, ;, >, <）的简单命令
+    /// - Parameter command: 原始命令字符串
+    /// - Returns: 如果是内置命令则返回执行结果，否则返回 nil（继续走 ios_popen 路径）
+    private func handleBuiltinCommand(command: String) -> ExecutionResult? {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // 含 shell 操作符的命令不走 builtin（需要 ios_system 解析）
+        let shellOperators: Set<Character> = ["|", ">", "<"]
+        if trimmed.contains("&&") || trimmed.contains("||") || trimmed.contains(";") {
+            return nil
+        }
+        if trimmed.contains(where: { shellOperators.contains($0) }) {
+            return nil
+        }
+
+        // echo 命令 — ios_system 可能不支持通过 ios_popen 执行
+        if trimmed == "echo" {
+            return ExecutionResult(stdout: "\n", stderr: "", exitCode: 0, isError: false)
+        }
+        if trimmed.hasPrefix("echo ") {
+            return handleEchoBuiltin(command: trimmed)
+        }
+
+        // printf 命令 — 简化版，仅支持基本格式
+        if trimmed == "printf" {
+            return ExecutionResult(stdout: "", stderr: "", exitCode: 0, isError: false)
+        }
+
+        // true / false 命令
+        if trimmed == "true" {
+            return ExecutionResult(stdout: "", stderr: "", exitCode: 0, isError: false)
+        }
+        if trimmed == "false" {
+            return ExecutionResult(stdout: "", stderr: "", exitCode: 1, isError: true)
+        }
+
+        // whoami 命令 — 返回 mobile（iOS 默认用户）
+        if trimmed == "whoami" {
+            return ExecutionResult(stdout: "mobile\n", stderr: "", exitCode: 0, isError: false)
+        }
+
+        return nil
+    }
+
+    /// 处理 echo 内置命令
+    /// 支持 -n（不换行）和基本引号处理
+    private func handleEchoBuiltin(command: String) -> ExecutionResult {
+        // 提取 echo 后面的参数
+        let argsStr = String(command.dropFirst(5)) // 去掉 "echo "
+
+        var noNewline = false
+        var interpretEscapes = false
+        var remaining = argsStr
+
+        // 解析 flags (-n, -e, -E, -ne, -en 等)
+        while remaining.hasPrefix("-") && remaining.count > 1 {
+            let flagPart = remaining.split(separator: " ", maxSplits: 1).first ?? Substring(remaining)
+            let flags = String(flagPart)
+            // 只处理已知 flag 组合
+            let knownFlags = Set(["-n", "-e", "-E", "-ne", "-en", "-nE", "-En"])
+            if !knownFlags.contains(flags) {
+                break
+            }
+            if flags.contains("n") { noNewline = true }
+            if flags.contains("e") { interpretEscapes = true }
+            if flags.contains("E") { interpretEscapes = false }
+            remaining = String(remaining.dropFirst(flags.count)).trimmingCharacters(in: .whitespaces)
+        }
+
+        var text = remaining
+
+        // 处理引号：移除最外层引号
+        if text.count >= 2 {
+            if (text.hasPrefix("\"") && text.hasSuffix("\"")) {
+                text = String(text.dropFirst().dropLast())
+            } else if (text.hasPrefix("'") && text.hasSuffix("'")) {
+                text = String(text.dropFirst().dropLast())
+            }
+        }
+
+        // 处理转义序列（-e 标志）
+        if interpretEscapes {
+            text = text.replacingOccurrences(of: "\\n", with: "\n")
+                       .replacingOccurrences(of: "\\t", with: "\t")
+                       .replacingOccurrences(of: "\\\\", with: "\\")
+        }
+
+        let output = noNewline ? text : text + "\n"
+
+        return ExecutionResult(
+            stdout: output,
+            stderr: "",
+            exitCode: 0,
+            isError: false
+        )
     }
 
     // MARK: - Node.js Script Execution (delegate to strategy)

@@ -195,11 +195,22 @@ final class TerminalViewModel: ObservableObject {
 
             // 路径不存在 → 错误提示，不更新工作目录
             if !fileManager.fileExists(atPath: target) {
-                outputLines.append(TerminalLine(
-                    content: "cd: no such directory: \(rawTarget)",
-                    type: .error,
-                    source: source
-                ))
+                // Bug 3 fix: 改进错误提示，帮助用户理解当前所在位置
+                let currentDirName = (currentWorkingDir as NSString).lastPathComponent
+                if rawTarget == currentDirName {
+                    // 用户试图 cd 进入当前目录的同名子目录（如已在 Baize/ 下执行 cd Baize）
+                    outputLines.append(TerminalLine(
+                        content: "cd: 已在 '\(currentDirName)' 目录中（当前路径: \(currentWorkingDir)）。\n如需进入子目录，请使用 'ls' 查看可用目录。",
+                        type: .error,
+                        source: source
+                    ))
+                } else {
+                    outputLines.append(TerminalLine(
+                        content: "cd: no such directory: \(rawTarget)\n  (当前路径: \(currentWorkingDir))",
+                        type: .error,
+                        source: source
+                    ))
+                }
                 return
             }
         }

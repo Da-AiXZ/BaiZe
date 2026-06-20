@@ -81,6 +81,10 @@ struct ContextManager {
         var contextMessages: [Message] = [.system(systemPrompt)]
         contextMessages.append(contentsOf: processedMessages)
 
+        // Bug 1 fix: 安全网 — 修复孤立的 tool_call，防止 API 400 错误
+        // （工具执行异常或竞态导致 tool_result 缺失时自动补全占位结果）
+        contextMessages = contextMessages.repairingOrphanedToolCalls()
+
         return PromptContext(
             systemPrompt: systemPrompt,
             messages: contextMessages,

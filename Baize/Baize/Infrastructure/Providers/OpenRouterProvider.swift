@@ -51,6 +51,10 @@ struct OpenRouterProvider: LLMProvider {
                     }
                     apiLogger.info("OpenRouter provider: API key loaded, starting stream for model: \(model)")
 
+                    // Bug 1 fix: 重置流式状态（index → id 映射），防止上次请求的残留条目
+                    // 导致 tool_call arguments delta 关联到错误的 id
+                    OpenAICompatibleHelper.resetStreamState()
+
                     // 2. 构建消息和工具定义
                     let openAIMessages = messages.toOpenAIMergedFormat()
                     let openAITools = tools.isEmpty ? nil : tools.map { $0.toOpenAIFormat() }
