@@ -41,6 +41,11 @@ class RuntimeExecutor: @unchecked Sendable {
     /// FileManager 实例
     private let fileManager = FileManager.default
 
+    /// Serial queue for ios_popen execution — prevents chdir() races.
+    /// chdir() is process-wide (not thread-local), so concurrent executions
+    /// would interfere with each other's working directory.
+    private static let executeQueue = DispatchQueue(label: "com.baize.runtime.execute", qos: .userInitiated)
+
     // MARK: - Initialization
 
     /// 主初始化器 — 接受策略注入
@@ -82,47 +87,50 @@ class RuntimeExecutor: @unchecked Sendable {
     // MARK: - Shell Command Execution (ios_system)
 
     /// 执行 Shell 命令 — 使用 ios_system 库的 ios_popen
-    /// ios_system 不需要 fork()，每个命令编译为独立函数直接在进程内调用
-    /// 支持 ls/cat/grep/find/rm/mv/cp/tar/curl 等 70+ Unix 命令
-    /// 如果 ios_popen 返回 nil（命令不可用），返回清晰的错误信息
+    ///
+    /// **根因修复**：ios_popen 不是真正的 shell，它调用 ios_system() 解析命令字符串。
+    /// 旧代码构建 `cd 'path' && command 2>&1` 传给 ios_popen，但：
+    /// 1. ios_system 的 cd_main 依赖 currentSession，若为 NULL 则返回 1
+    /// 2. && 操作符在前命令失败时跳过后命令 → ls/cat/find 永不执行
+    /// 3. ios_popen 在 ios_system 返回非零时返回 NULL → 无输出
+    /// 4. 2>&1 语法可能不被 parser 识别，被当作命令参数 → 命令失败
+    ///
+    /// **修复方案**：
+    /// - 用 FileManager.changeCurrentDirectoryPath（底层 chdir()）替代 `cd 'path' && ` 前缀
+    /// - 移除 `2>&1` 后缀，只传裸命令给 ios_popen
+    /// - 使用串行队列防止 chdir() 竞态（chdir 是进程级，非线程级）
+    /// - 移除激进的空输出检测（touch/mkdir 等命令合法地无输出）
+    /// - 对 find/grep/du 等递归命令增加超时至 60 秒
+    ///
     /// - Parameters:
-    ///   - command: 命令字符串（如 "ls -la /var/mobile/Documents/Baize/"）
-    ///   - workingDir: 工作目录（可选）
+    ///   - command: 命令字符串（如 "ls -la", "find . -name '*.swift'"）
+    ///   - workingDir: 工作目录（可选，默认 BaizePath.projectRoot）
     /// - Returns: ExecutionResult
     func executeCommand(command: String, workingDir: String? = nil) async -> ExecutionResult {
-        runtimeLogger.info("Execute command: \(command)")
+        runtimeLogger.info("Execute command: '\(command)' workingDir: \(workingDir ?? "nil")")
 
         let workingDirectory = workingDir ?? BaizePath.projectRoot
 
-        // Bug 2 fix: echo 等简单命令在 ios_system 中可能不被 ios_popen 支持
-        // 作为内置命令直接处理，确保基本命令始终有输出
+        // echo/printf/true/false/whoami 等 builtin 命令直接处理
         if let builtinResult = handleBuiltinCommand(command: command) {
             runtimeLogger.info("Builtin command handled: \(command)")
             return builtinResult
         }
 
-        // 构建完整命令：仅当工作目录存在且可访问时才 cd
-        let fullCommand: String
-        if !workingDirectory.isEmpty && fileManager.fileExists(atPath: workingDirectory) {
-            fullCommand = "cd '\(workingDirectory)' && \(command) 2>&1"
-        } else {
-            runtimeLogger.warning("Working directory not accessible: \(workingDirectory), running in default dir")
-            fullCommand = "\(command) 2>&1"
-        }
-
-        // Bug 2 fix: 检查命令是否在 ios_system 中可用
+        // 检查命令是否在 ios_system 字典中可用
         let cmdName = command.split(separator: " ").first.map(String.init) ?? command
         let cmdAvailable = ios_executable(cmdName)
+        runtimeLogger.info("ios_executable('\(cmdName)') = \(cmdAvailable)")
         if cmdAvailable == 0 {
-            runtimeLogger.warning("Command '\(cmdName)' may not be available in ios_system (ios_executable=0), will attempt ios_popen anyway")
+            runtimeLogger.warning("Command '\(cmdName)' not in ios_system dictionary (ios_executable=0)")
         }
 
-        // Bug 1 fix: 添加超时机制，防止 ios_popen 阻塞导致 Agent 卡住
-        // ios_popen 是阻塞调用，如果命令等待输入（如 cat 无参数），会永久阻塞
-        let timeoutSeconds = BaizeRuntime.commandTimeout
+        // 动态超时：递归/搜索类命令给 60 秒，其他 30 秒
+        let longRunningCommands: Set<String> = ["find", "grep", "du", "tar", "diff", "curl"]
+        let timeoutSeconds: TimeInterval = longRunningCommands.contains(cmdName) ? 60.0 : BaizeRuntime.commandTimeout
 
         return await withCheckedContinuation { continuation in
-            // 使用锁保护 resumed 标志，防止超时和正常完成双重 resume
+            // NSLock 保护 resumed 标志，防止超时和正常完成双重 resume
             let lock = NSLock()
             var hasResumed = false
 
@@ -136,45 +144,75 @@ class RuntimeExecutor: @unchecked Sendable {
                 }
             }
 
-            DispatchQueue.global(qos: .userInitiated).async {
-                let fp = ios_popen(fullCommand, "r")
+            // 串行队列执行 — chdir() 是进程级操作，必须串行化
+            RuntimeExecutor.executeQueue.async {
+                // ── Phase 1: 设置工作目录 ──
+                // 用 chdir() 替代 `cd 'path' && ` 前缀
+                // ios_system 的 cd_main 依赖 currentSession，可能返回失败
+                // chdir() 在 POSIX 层直接生效，不依赖 ios_system 会话状态
+                let originalDir = FileManager.default.currentDirectoryPath
+                var chdirSuccess = false
 
+                if !workingDirectory.isEmpty && self.fileManager.fileExists(atPath: workingDirectory) {
+                    chdirSuccess = FileManager.default.changeCurrentDirectoryPath(workingDirectory)
+                    runtimeLogger.info("chdir('\(workingDirectory)') = \(chdirSuccess)")
+                } else {
+                    runtimeLogger.warning("Working directory not accessible: \(workingDirectory), running in '\(originalDir)'")
+                }
+
+                // ── Phase 2: 执行裸命令 ──
+                // 只传原始命令给 ios_popen，不加 cd 前缀和 2>&1 后缀
+                // ios_popen 内部调用 ios_system() 解析命令字符串
+                // 命令中的 shell 操作符（|, >, <, &&, ||, ;）由 ios_system parser 处理
+                runtimeLogger.info("ios_popen raw command: '\(command)'")
+                let fp = ios_popen(command, "r")
+
+                // 立即恢复原始工作目录
+                // ios_popen 是同步调用 — 命令已执行完毕，输出已在管道缓冲区中
+                _ = FileManager.default.changeCurrentDirectoryPath(originalDir)
+
+                // ── Phase 3: 处理 NULL 返回值 ──
+                // ios_popen 在 ios_system 返回非零时返回 NULL
+                // 可能原因：命令不存在、命令执行失败、命令字符串解析失败
                 guard let filePtr = fp else {
-                    runtimeLogger.error("ios_popen returned nil for: \(fullCommand)")
-                    runtimeLogger.error("This usually means ios_system command dictionary not loaded, or command not supported")
+                    runtimeLogger.error("ios_popen returned nil for: '\(command)'")
+                    runtimeLogger.error("  cmdAvailable=\(cmdAvailable), chdirSuccess=\(chdirSuccess), workingDir=\(workingDirectory)")
+
+                    // 构建诊断信息
+                    var diagMsg = "命令执行失败: '\(command)'"
+                    if cmdAvailable == 0 {
+                        diagMsg += "\n  原因: '\(cmdName)' 不在 ios_system 命令列表中"
+                        diagMsg += "\n  可用命令: ls, cat, grep, find, rm, mv, cp, tar, curl, head, tail, wc, sort, sed, awk 等"
+                    } else if !chdirSuccess {
+                        diagMsg += "\n  原因: 无法切换到工作目录 '\(workingDirectory)'"
+                    } else {
+                        diagMsg += "\n  命令存在但执行返回非零退出码（可能权限不足或参数错误）"
+                    }
+
                     resumeOnce(ExecutionResult(
                         stdout: "",
-                        stderr: "命令不可用: ios_system 不支持 '\(command)'。可能原因: ios_system 未正确初始化，或该命令不在内置命令列表中。支持的命令: ls, cat, grep, find, rm, mv, cp, tar, curl 等 70+ Unix 命令。",
+                        stderr: diagMsg,
                         exitCode: -1,
                         isError: true
                     ))
                     return
                 }
 
-                // 通过 fgets 循环读取 stdout（已含 stderr 重定向）
+                // ── Phase 4: 读取输出 ──
                 var buffer = [CChar](repeating: 0, count: 4096)
                 var output = ""
+                var lineCount = 0
                 while fgets(&buffer, Int32(buffer.count), filePtr) != nil {
                     output += String(cString: buffer)
+                    lineCount += 1
                 }
-
                 fclose(filePtr)
 
-                // Bug 2 fix: 诊断日志 — 记录输出详情
-                runtimeLogger.info("ios_popen completed: output \(output.utf8.count) bytes, first 200 chars: '\(output.prefix(200))'")
+                runtimeLogger.info("ios_popen completed: \(lineCount) lines, \(output.utf8.count) bytes, first 200: '\(output.prefix(200))'")
 
-                // 如果输出为空但命令应该有输出，可能是 ios_system 不支持该命令
-                if output.isEmpty && cmdAvailable == 0 {
-                    runtimeLogger.warning("Command '\(cmdName)' produced no output and is not in ios_system command list. It may not be supported.")
-                    resumeOnce(ExecutionResult(
-                        stdout: "",
-                        stderr: "命令 '\(command)' 没有产生输出。可能 ios_system 不支持此命令。可用命令包括: ls, cat, grep, find, git, curl 等 70+ Unix 命令。",
-                        exitCode: 127,
-                        isError: true
-                    ))
-                    return
-                }
-
+                // ── Phase 5: 返回结果 ──
+                // 空输出是合法的 — touch/mkdir/true 等命令不产生输出
+                // 不再将空输出视为错误
                 resumeOnce(ExecutionResult(
                     stdout: output,
                     stderr: "",
