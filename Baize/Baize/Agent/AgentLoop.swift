@@ -93,6 +93,12 @@ actor AgentLoop {
                     session.updatedAt = Date()
                     try await conversationStore.save(session: session)
 
+                    // Bug 1 fix: 循环结束后补一次 contextUsage 发射（最终用量）
+                    continuation.yield(.contextUsage(
+                        estimatedTokens: session.messages.estimatedTokens,
+                        contextWindow: self.contextWindow
+                    ))
+
                     // 4. 发送完成事件
                     continuation.yield(.completed)
                     agentLogger.info("Agent Loop completed")
@@ -149,7 +155,7 @@ actor AgentLoop {
         var iterationCount = 0
         var consecutiveFailures = 0
 
-        // Bug 1 fix: contextUsage 事件节流状态 — 用量变化超过 5% 或每 10 次迭代才发射
+        // Bug 1 fix: contextUsage 事件节流状态 — 用量变化超过 1% 或每 5 次迭代才发射
         var lastEmittedTokens: Int = 0
         var contextUsageEmitCount: Int = 0
 
@@ -186,13 +192,13 @@ actor AgentLoop {
             }
 
             // P2-5: 发射上下文用量事件（压缩完成后发射，session.messages 已更新为最新）
-            // Bug 1 fix: 节流 — 用量变化超过 5%（最少 500 tokens）或每 10 次迭代才发射，
-            // 避免每次 agentLoop 迭代都触发 UI 重绘
+            // Bug 1 fix: 节流 — 第 1 次迭代强制发射（用户发消息立即看到初始用量），
+            // 后续用量变化超过 1%（最少 200 tokens）或每 5 次迭代才发射
             contextUsageEmitCount += 1
             let currentTokens = session.messages.estimatedTokens
             let tokenDelta = abs(currentTokens - lastEmittedTokens)
-            let usageThreshold = max(Int(Double(contextWindow) * 0.05), 500)
-            if tokenDelta >= usageThreshold || contextUsageEmitCount >= 10 {
+            let usageThreshold = max(Int(Double(contextWindow) * 0.01), 200)
+            if iterationCount == 1 || tokenDelta >= usageThreshold || contextUsageEmitCount >= 5 {
                 continuation.yield(.contextUsage(
                     estimatedTokens: currentTokens,
                     contextWindow: self.contextWindow
