@@ -149,6 +149,10 @@ actor AgentLoop {
         var iterationCount = 0
         var consecutiveFailures = 0
 
+        // Bug 1 fix: contextUsage 事件节流状态 — 用量变化超过 5% 或每 10 次迭代才发射
+        var lastEmittedTokens: Int = 0
+        var contextUsageEmitCount: Int = 0
+
         while isRunning && iterationCount < maxIterations {
             iterationCount += 1
             agentLogger.info("Agent Loop iteration \(iterationCount), consecutive failures: \(consecutiveFailures)")
@@ -182,10 +186,20 @@ actor AgentLoop {
             }
 
             // P2-5: 发射上下文用量事件（压缩完成后发射，session.messages 已更新为最新）
-            continuation.yield(.contextUsage(
-                estimatedTokens: session.messages.estimatedTokens,
-                contextWindow: self.contextWindow
-            ))
+            // Bug 1 fix: 节流 — 用量变化超过 5%（最少 500 tokens）或每 10 次迭代才发射，
+            // 避免每次 agentLoop 迭代都触发 UI 重绘
+            contextUsageEmitCount += 1
+            let currentTokens = session.messages.estimatedTokens
+            let tokenDelta = abs(currentTokens - lastEmittedTokens)
+            let usageThreshold = max(Int(Double(contextWindow) * 0.05), 500)
+            if tokenDelta >= usageThreshold || contextUsageEmitCount >= 10 {
+                continuation.yield(.contextUsage(
+                    estimatedTokens: currentTokens,
+                    contextWindow: self.contextWindow
+                ))
+                lastEmittedTokens = currentTokens
+                contextUsageEmitCount = 0
+            }
 
             let toolDefinitions = await toolRegistry.getToolDefinitions()
 

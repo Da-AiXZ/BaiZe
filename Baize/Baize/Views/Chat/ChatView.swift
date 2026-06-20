@@ -592,6 +592,9 @@ private struct ChatMessageList: View {
     @State private var scrollViewHeight: CGFloat = 0
     @State private var scrollOffset: CGFloat = 0
 
+    // Bug 1 fix: 流式输出滚动节流 — 距上次滚动 < 100ms 跳过，避免高频 UI 重绘
+    @State private var lastScrollTime: Date = .distantPast
+
     /// 是否显示"滚到底"按钮 — 当用户上滑且不在底部时显示
     private var showScrollToBottomButton: Bool {
         let maxScrollOffset = contentHeight - scrollViewHeight
@@ -638,18 +641,19 @@ private struct ChatMessageList: View {
                     scrollOffset = offset
                 }
                 .onChange(of: messages.count) { _ in
-                    scrollToBottom(proxy: proxy)
+                    // Bug 1 fix: 新消息加入时强制滚动（无节流）
+                    scrollToBottom(proxy: proxy, force: true)
                 }
                 .onChange(of: streamingText) { _ in
+                    // Bug 1 fix: 流式输出时节流滚动（force=false，距上次 < 100ms 跳过）
                     scrollToBottom(proxy: proxy)
                 }
 
                 // Bug 4 fix: 悬浮"滚到底"按钮
                 if showScrollToBottomButton {
                     Button(action: {
-                        withAnimation(.easeOut(duration: 0.3)) {
-                            scrollToBottom(proxy: proxy)
-                        }
+                        // Bug 1 fix: 用户点击时强制滚动（无节流），动画由 scrollToBottom 内部处理
+                        scrollToBottom(proxy: proxy, force: true)
                     }) {
                         Image(systemName: "arrow.down.circle.fill")
                             .font(.system(size: 32))
@@ -666,13 +670,32 @@ private struct ChatMessageList: View {
         }
     }
 
-    /// Bug 4 fix: 滚动到底部 — 流式输出时滚到 streaming，否则滚到最后一条消息
-    private func scrollToBottom(proxy: ScrollViewProxy) {
-        withAnimation(.easeOut(duration: 0.3)) {
-            if isStreaming && !streamingText.isEmpty {
+    /// Bug 1 fix: 滚动到底部 — 流式输出时去动画 + 节流，非流式时带动画
+    /// - Parameter force: true 时跳过节流（用于 messages.count 变化、用户点击按钮）
+    /// - 流式输出时：去动画（proxy.scrollTo 直接调用），force=false 时距上次滚动 < 100ms 跳过
+    /// - 非流式时：带 withAnimation(.easeOut) 动画
+    private func scrollToBottom(proxy: ScrollViewProxy, force: Bool = false) {
+        if isStreaming {
+            // 流式输出时节流（除非 force）
+            if !force {
+                let now = Date()
+                if now.timeIntervalSince(lastScrollTime) < 0.1 {
+                    return
+                }
+                lastScrollTime = now
+            }
+            // 流式输出时去动画，直接滚动
+            if !streamingText.isEmpty {
                 proxy.scrollTo("streaming", anchor: .bottom)
             } else if let lastId = messages.last?.id {
                 proxy.scrollTo(lastId, anchor: .bottom)
+            }
+        } else {
+            // 非流式时带动画
+            withAnimation(.easeOut(duration: 0.3)) {
+                if let lastId = messages.last?.id {
+                    proxy.scrollTo(lastId, anchor: .bottom)
+                }
             }
         }
     }
