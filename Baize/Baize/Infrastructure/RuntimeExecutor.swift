@@ -269,32 +269,23 @@ class RuntimeExecutor: @unchecked Sendable {
                     output += String(cString: buffer)
                     lineCount += 1
                 }
-                // T01-2 fix: 用 pclose 替代 fclose 捕获退出码
-                // pclose 和 fclose 不可对同一 FILE* 调用两次
-                // pcloseStatus == -1 表示 ios_popen 内部未使用 popen()，pclose 未关闭流
-                // 注意：WIFEXITED/WEXITSTATUS 是 C 宏，Swift 中需手动解析 wait status
-                // POSIX wait status 格式：
-                //   - 低 7 位 (0x7F) 为信号编号，0 表示正常退出
-                //   - 高 8 位 (>> 8 & 0xFF) 为退出码（仅正常退出时有效）
-                let pcloseStatus = pclose(filePtr)
-                let realExitCode: Int32
-                if pcloseStatus == -1 {
-                    // pclose 未关闭流，需 fclose 补充关闭
-                    fclose(filePtr)
-                    realExitCode = 0  // 无法获取退出码，保持原有行为
-                } else if (pcloseStatus & 0x7F) == 0 {
-                    // 正常退出：低 7 位为 0，退出码在高 8 位
-                    realExitCode = (pcloseStatus >> 8) & 0xFF
-                } else {
-                    // 被信号终止（低 7 位非 0）
-                    realExitCode = -1
-                }
+                // T01-2 fix 尝试: 用 pclose 替代 fclose 捕获退出码
+                // 但实测 iOS Swift 中 pclose 被标记为不可用：
+                //   'pclose' is unavailable in Swift: Use posix_spawn APIs or NSTask instead.
+                //   (On iOS, process spawning is unavailable.)
+                // ios_popen 是 ios_system 库的进程内实现（非标准 popen），
+                // ios_system 未提供 ios_pclose API，iOS 又禁止 pclose → 无法获取退出码
+                // 保留 fclose 关闭流，exitCode 保持 0（已知限制）
+                // 高频命令（ls/cat/grep/find 等）已由 NativeCommands 正确返回 exitCode
+                fclose(filePtr)
+                let realExitCode: Int32 = 0
 
                 runtimeLogger.info("ios_popen completed: \(lineCount) lines, \(output.utf8.count) bytes, exitCode: \(realExitCode), first 200: '\(output.prefix(200))'")
 
                 // ── Phase 5: 返回结果 ──
                 // 空输出是合法的 — touch/mkdir/true 等命令不产生输出
-                // T01-2 fix: 使用真实退出码替代硬编码 0
+                // 注意：ios_popen 路径 exitCode 恒为 0（iOS 限制无法用 pclose 获取真实退出码）
+                // 高频命令的 exitCode 由 NativeCommands 正确处理（ls/cat/grep/find 等）
                 resumeOnce(ExecutionResult(
                     stdout: output,
                     stderr: "",
