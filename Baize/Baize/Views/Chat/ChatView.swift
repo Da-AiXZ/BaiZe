@@ -782,6 +782,11 @@ private struct ChatMessageList: View {
     // Bug 1 fix: 流式输出滚动节流 — 距上次滚动 < 100ms 跳过，避免高频 UI 重绘
     @State private var lastScrollTime: Date = .distantPast
 
+    // Bug 4 fix: 滚动跟踪状态 — 用户上滑时停止自动跟踪，点按钮恢复
+    @State private var isTrackingBottom: Bool = true
+    // Bug 4 fix: 标记编程式滚动，防止 onPreferenceChange 误判为用户上滑
+    @State private var isProgrammaticScroll: Bool = false
+
     /// 是否显示"滚到底"按钮 — 当用户上滑且不在底部时显示
     private var showScrollToBottomButton: Bool {
         let maxScrollOffset = contentHeight - scrollViewHeight
@@ -826,12 +831,22 @@ private struct ChatMessageList: View {
                 .onPreferenceChange(ChatScrollViewHeightKey.self) { scrollViewHeight = $0 }
                 .onPreferenceChange(ChatScrollOffsetKey.self) { offset in
                     scrollOffset = offset
+                    // Bug 4 fix: 检测用户上滑离开底部 → 打断自动跟踪
+                    // 编程式滚动期间忽略（防止 scrollToBottom 触发误判）
+                    guard !isProgrammaticScroll else { return }
+                    let maxOffset = contentHeight - scrollViewHeight
+                    if maxOffset > 120 && offset < maxOffset - 120 {
+                        isTrackingBottom = false
+                    }
                 }
                 .onChange(of: messages.count) { _ in
-                    // Bug 1 fix: 新消息加入时强制滚动（无节流）
+                    // Bug 4 fix: 新消息加入时恢复跟踪 + 强制滚动（无节流）
+                    isTrackingBottom = true
                     scrollToBottom(proxy: proxy, force: true)
                 }
                 .onChange(of: streamingText) { _ in
+                    // Bug 4 fix: 仅在跟踪底部时才自动滚动，用户上滑后不打断
+                    guard isTrackingBottom else { return }
                     // Bug 1 fix: 流式输出时节流滚动（force=false，距上次 < 100ms 跳过）
                     scrollToBottom(proxy: proxy)
                 }
@@ -839,7 +854,8 @@ private struct ChatMessageList: View {
                 // Bug 4 fix: 悬浮"滚到底"按钮
                 if showScrollToBottomButton {
                     Button(action: {
-                        // Bug 1 fix: 用户点击时强制滚动（无节流），动画由 scrollToBottom 内部处理
+                        // Bug 4 fix: 点击按钮恢复跟踪 + 强制滚动
+                        isTrackingBottom = true
                         scrollToBottom(proxy: proxy, force: true)
                     }) {
                         Image(systemName: "arrow.down.circle.fill")
@@ -858,6 +874,7 @@ private struct ChatMessageList: View {
     }
 
     /// Bug 1 fix: 滚动到底部 — 流式输出时去动画 + 节流，非流式时带动画
+    /// Bug 4 fix: 设置 isProgrammaticScroll 防止 onPreferenceChange 误判为用户上滑
     /// - Parameter force: true 时跳过节流（用于 messages.count 变化、用户点击按钮）
     /// - 流式输出时：去动画（proxy.scrollTo 直接调用），force=false 时距上次滚动 < 100ms 跳过
     /// - 非流式时：带 withAnimation(.easeOut) 动画
@@ -871,18 +888,30 @@ private struct ChatMessageList: View {
                 }
                 lastScrollTime = now
             }
+            // Bug 4 fix: 标记编程式滚动，防止 onPreferenceChange 误判
+            isProgrammaticScroll = true
             // 流式输出时去动画，直接滚动
             if !streamingText.isEmpty {
                 proxy.scrollTo("streaming", anchor: .bottom)
             } else if let lastId = messages.last?.id {
                 proxy.scrollTo(lastId, anchor: .bottom)
             }
+            // 短暂延迟后解除标记
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                isProgrammaticScroll = false
+            }
         } else {
+            // Bug 4 fix: 标记编程式滚动
+            isProgrammaticScroll = true
             // 非流式时带动画
             withAnimation(.easeOut(duration: 0.3)) {
                 if let lastId = messages.last?.id {
                     proxy.scrollTo(lastId, anchor: .bottom)
                 }
+            }
+            // 动画结束后解除标记
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                isProgrammaticScroll = false
             }
         }
     }
