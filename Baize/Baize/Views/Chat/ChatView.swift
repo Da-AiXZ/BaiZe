@@ -409,6 +409,11 @@ struct ChatView: View {
 
     /// 恢复历史会话 — 创建新 AgentLoop 加载恢复的 session
     private func restoreSession(_ restored: ConversationSession) async {
+        // Bug 4 fix: 先停止当前 AgentLoop（如果在运行），防止恢复会话中断正在进行的生成
+        if let loop = agentLoop {
+            await loop.stop()
+        }
+
         guard let apiGateway = appState.apiGateway,
               let toolRegistry = appState.toolRegistry,
               let permissionEngine = appState.permissionEngine,
@@ -445,6 +450,10 @@ struct ChatView: View {
 
     /// 开始新会话 — 清空当前状态
     private func startNewSession() {
+        // Bug 4 fix: 先停止当前 AgentLoop（如果在运行），防止新建会话中断正在进行的生成
+        if let loop = agentLoop {
+            Task { await loop.stop() }
+        }
         self.agentLoop = nil
         self.currentSessionId = nil
         self.displayMessages = []
@@ -452,6 +461,7 @@ struct ChatView: View {
         self.contextTokens = 0
         self.streamingText = ""
         self.isStreaming = false
+        self.appState.isAgentRunning = false
         self.showSessionList = false
         Task { await loadSessionList() }
     }
