@@ -18,11 +18,19 @@ struct ChatView: View {
     @State private var contextTokens: Int = 0
     @State private var contextWindow: Int = BaizeToken.maxContextTokens
     @State private var hasCompacted: Bool = false
+    // P1-1: 会话持久化 UI 状态
+    @State private var showSessionList: Bool = false
+    @State private var savedSessions: [ConversationSession] = []
+    @State private var currentSessionId: UUID?
 
     var body: some View {
         VStack(spacing: 0) {
             // 对话标题 + Agent 状态
-            ChatHeader(appState: appState, isStreaming: isStreaming)
+            ChatHeader(
+                appState: appState,
+                isStreaming: isStreaming,
+                onShowSessionList: { showSessionList = true }
+            )
 
             // 消息列表
             ChatMessageList(
@@ -74,6 +82,21 @@ struct ChatView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.baizeChatBackground)
+        // P1-1: 启动时加载会话列表
+        .onAppear {
+            Task { await loadSessionList() }
+        }
+        // P1-1: 会话列表 Sheet
+        .sheet(isPresented: $showSessionList) {
+            SessionListView(
+                sessions: savedSessions,
+                currentSessionId: currentSessionId,
+                onSelect: { session in
+                    Task { await restoreSession(session) }
+                },
+                onNewSession: { startNewSession() }
+            )
+        }
     }
 
     // MARK: - Message Handling
@@ -180,6 +203,8 @@ struct ChatView: View {
             )
             self.agentLoop = loop
             baizeLogger.info("Created new AgentLoop for new conversation")
+            // P1-3: 新建 AgentLoop 后同步当前模型的 contextWindow
+            await loop.updateContextWindow(resolveContextWindow())
         }
 
         let eventStream = try await loop.run(userMessage: userMessage)
@@ -342,6 +367,8 @@ struct ChatView: View {
                 )
             }
             // Agent 完成后焦点保持 .chat，用户手动切回 .code
+            // P1-1: 对话完成后刷新会话列表（新消息已保存到磁盘）
+            Task { await loadSessionList() }
         }
     }
 
@@ -369,6 +396,80 @@ struct ChatView: View {
         Task {
             await loop.confirmToolCall(toolCall: confirmation.toolCall, allowed: allowed)
         }
+    }
+
+    // MARK: - Session Persistence (P1-1)
+
+    /// 加载已保存的会话列表
+    private func loadSessionList() async {
+        guard let store = appState.conversationStore else { return }
+        let sessions = await store.listSessions()
+        await MainActor.run { self.savedSessions = sessions }
+    }
+
+    /// 恢复历史会话 — 创建新 AgentLoop 加载恢复的 session
+    private func restoreSession(_ restored: ConversationSession) async {
+        guard let apiGateway = appState.apiGateway,
+              let toolRegistry = appState.toolRegistry,
+              let permissionEngine = appState.permissionEngine,
+              let contextManager = appState.contextManager,
+              let conversationStore = appState.conversationStore,
+              let fileSystemService = appState.fileSystemService,
+              let runtimeExecutor = appState.runtimeExecutor else { return }
+
+        let loop = AgentLoop(
+            apiGateway: apiGateway,
+            toolRegistry: toolRegistry,
+            permissionEngine: permissionEngine,
+            contextManager: contextManager,
+            conversationStore: conversationStore,
+            fileSystemService: fileSystemService,
+            runtimeExecutor: runtimeExecutor,
+            session: restored
+        )
+        let window = resolveContextWindow()
+        await loop.updateContextWindow(window)
+
+        await MainActor.run {
+            self.agentLoop = loop
+            self.currentSessionId = restored.id
+            self.displayMessages = restored.messages.toDisplayMessages()
+            self.hasCompacted = restored.messages.contains { $0.isSummary }
+            self.contextTokens = restored.estimatedTokens
+            self.contextWindow = window
+            self.streamingText = ""
+            self.isStreaming = false
+            self.showSessionList = false
+        }
+    }
+
+    /// 开始新会话 — 清空当前状态
+    private func startNewSession() {
+        self.agentLoop = nil
+        self.currentSessionId = nil
+        self.displayMessages = []
+        self.hasCompacted = false
+        self.contextTokens = 0
+        self.streamingText = ""
+        self.isStreaming = false
+        self.showSessionList = false
+        Task { await loadSessionList() }
+    }
+
+    /// 根据当前 activeProvider + activeModel 解析 contextWindow
+    /// 匹配 BaizeModels 模型列表，未匹配时回退 BaizeToken.maxContextTokens
+    private func resolveContextWindow() -> Int {
+        let models: [ModelInfo]
+        switch appState.activeProvider {
+        case .openAI:     models = BaizeModels.OpenAI.allModels
+        case .anthropic:  models = BaizeModels.Anthropic.allModels
+        case .openRouter: models = BaizeModels.OpenRouter.allModels
+        case .custom:     models = []
+        }
+        if let info = models.first(where: { $0.id == appState.activeModel }) {
+            return info.contextWindow
+        }
+        return BaizeToken.maxContextTokens
     }
 }
 
@@ -412,9 +513,18 @@ struct PendingConfirmation {
 private struct ChatHeader: View {
     @ObservedObject var appState: AppState
     let isStreaming: Bool
+    let onShowSessionList: () -> Void
 
     var body: some View {
         HStack(spacing: 8) {
+            // P1-1: 会话列表按钮（左侧）
+            Button(action: onShowSessionList) {
+                Image(systemName: "list.bullet.rectangle")
+                    .font(.system(size: 16))
+                    .foregroundColor(.baizeTextSecondary)
+            }
+            .buttonStyle(.plain)
+
             Text("对话")
                 .font(.headline)
 
@@ -672,5 +782,101 @@ private struct ContextUsageBar: View {
         .padding(.vertical, 4)
         .frame(height: 28)
         .background(Color.baizeCardBackground)
+    }
+}
+
+// MARK: - Session List View (P1-1)
+
+/// 会话列表视图 — 显示已保存的对话，支持选择恢复或新建
+private struct SessionListView: View {
+    let sessions: [ConversationSession]
+    let currentSessionId: UUID?
+    let onSelect: (ConversationSession) -> Void
+    let onNewSession: () -> Void
+
+    var body: some View {
+        NavigationView {
+            List {
+                // 顶部新建会话按钮
+                Section {
+                    Button(action: onNewSession) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "plus.circle.fill")
+                                .foregroundColor(.baizeAccent)
+                            Text("新建会话")
+                                .foregroundColor(.baizeAccent)
+                        }
+                    }
+                }
+
+                // 已保存的会话列表
+                Section {
+                    if sessions.isEmpty {
+                        Text("暂无历史会话")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        ForEach(sessions) { session in
+                            SessionRow(
+                                session: session,
+                                isCurrent: session.id == currentSessionId
+                            )
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                onSelect(session)
+                            }
+                        }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("历史会话")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
+
+/// 单个会话行 — 标题 + 相对时间 + 消息数
+private struct SessionRow: View {
+    let session: ConversationSession
+    let isCurrent: Bool
+
+    /// 会话标题：优先用首条用户消息前 30 字，否则用 session.title
+    private var displayTitle: String {
+        for message in session.messages {
+            if case .user(let text) = message {
+                let firstLine = text.split(separator: "\n").first ?? ""
+                let title = String(firstLine.prefix(30))
+                return title.isEmpty ? session.title : title
+            }
+        }
+        return session.title
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                if isCurrent {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundColor(.baizeSuccess)
+                }
+                Text(displayTitle)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.baizeTextPrimary)
+                    .lineLimit(1)
+            }
+
+            HStack(spacing: 8) {
+                Text(session.updatedAt.chatTimestamp)
+                    .font(.caption2)
+                    .foregroundColor(.baizeTextSecondary)
+
+                Text("\(session.messages.count) 条消息")
+                    .font(.caption2)
+                    .foregroundColor(.baizeTextSecondary)
+            }
+        }
+        .padding(.vertical, 2)
     }
 }

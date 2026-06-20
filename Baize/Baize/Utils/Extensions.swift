@@ -201,3 +201,64 @@ enum Effect: String, Codable, Sendable {
     case ask
     case deny
 }
+
+// MARK: - Message → DisplayMessage Conversion (P1-1)
+
+/// 将 [Message] 转换为 [DisplayMessage] 供 UI 显示
+/// assistantWithToolCalls 展开为多条 DisplayMessage（文本 + 每个工具调用各一条）
+/// toolResult 简化为 system 消息显示前 100 字（UI 层已在 toolCall 中展示状态）
+extension Array where Element == Message {
+    func toDisplayMessages() -> [DisplayMessage] {
+        flatMap { msg -> [DisplayMessage] in
+            switch msg {
+            case .user(let text):
+                return [DisplayMessage(role: .user, content: text, timestamp: Date())]
+
+            case .assistant(let text):
+                return [DisplayMessage(role: .assistant, content: text, timestamp: Date())]
+
+            case .assistantWithToolCalls(let content, let toolCalls):
+                // 展开为多条：先显示文本（如有），再显示每个工具调用
+                var results: [DisplayMessage] = []
+                if !content.isEmpty {
+                    results.append(DisplayMessage(role: .assistant, content: content, timestamp: Date()))
+                }
+                for call in toolCalls {
+                    results.append(DisplayMessage(
+                        role: .toolCall,
+                        content: "调用 \(call.name)",
+                        timestamp: Date(),
+                        toolCall: call,
+                        toolStatus: .completed
+                    ))
+                }
+                return results
+
+            case .toolResult(let id, let content):
+                // 工具结果简化为系统消息（UI 层已在 toolCall 中展示状态）
+                let preview = content.count > 100
+                    ? "\(content.prefix(100))..."
+                    : content
+                return [DisplayMessage(
+                    role: .system,
+                    content: "工具结果: \(preview)",
+                    timestamp: Date()
+                )]
+
+            case .system(let text):
+                return [DisplayMessage(role: .system, content: text, timestamp: Date())]
+
+            case .toolCall(let id, let name, let arguments):
+                // 历史兼容：独立 toolCall 消息
+                let call = ToolCall(id: id, name: name, arguments: arguments)
+                return [DisplayMessage(
+                    role: .toolCall,
+                    content: "调用 \(name)",
+                    timestamp: Date(),
+                    toolCall: call,
+                    toolStatus: .completed
+                )]
+            }
+        }
+    }
+}
