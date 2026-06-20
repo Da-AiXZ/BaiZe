@@ -412,6 +412,10 @@ enum BaizeRuntime {
     /// 工具执行结果最大长度（超过截断）
     static let maxResultSize = 10_000
 
+    /// 工具结果 OOM 安全网阈值（ToolResult.init 的最终截断，防止超大输出导致内存问题）
+    /// 高于 maxResultSize（10,000），确保 ToolResultTruncator 处理前数据完整
+    static let maxResultSafetyNet = 200_000
+
     /// 工具执行结果截断提示
     static let truncationNotice = "\n... (结果已截断，共 {total} 字符)"
 

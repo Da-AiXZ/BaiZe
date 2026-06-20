@@ -286,8 +286,10 @@ actor AgentLoop {
                         let result = await toolRegistry.execute(toolCall: toolCall, context: executionContext)
                         continuation.yield(.toolResult(toolCall, result))
 
-                        // 将结果注入对话历史
-                        session.messages.append(.toolResult(id: id, content: result.toToolResultContent()))
+                        // 将结果注入对话历史（P2-1: 分层截断）
+                        let rawContent = result.toToolResultContent()
+                        let truncatedContent = ToolResultTruncator.truncate(toolName: name, output: rawContent)
+                        session.messages.append(.toolResult(id: id, content: truncatedContent))
 
                         // 失败计数：如果工具执行返回错误，增加连续失败计数
                         if result.isError {
@@ -313,7 +315,10 @@ actor AgentLoop {
                             continuation.yield(.toolExecuting(toolCall))
                             let result = await toolRegistry.execute(toolCall: toolCall, context: executionContext)
                             continuation.yield(.toolResult(toolCall, result))
-                            session.messages.append(.toolResult(id: id, content: result.toToolResultContent()))
+                            // P2-1: 分层截断后注入对话历史
+                            let rawContent = result.toToolResultContent()
+                            let truncatedContent = ToolResultTruncator.truncate(toolName: name, output: rawContent)
+                            session.messages.append(.toolResult(id: id, content: truncatedContent))
                             if result.isError {
                                 consecutiveFailures += 1
                                 agentLogger.warning("Tool \(name) failed (\(consecutiveFailures)/\(maxConsecutiveFailures)): \(result.toToolResultContent())")

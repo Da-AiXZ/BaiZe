@@ -21,8 +21,9 @@ struct ToolResult: Sendable, Codable {
     // MARK: - Initialization
 
     init(output: String, isError: Bool = false, metadata: [String: String] = [:]) {
-        // 截断过长输出
-        self.output = output.truncated(to: BaizeRuntime.maxResultSize)
+        // 截断过长输出 — P2-1: 安全网阈值上调至 maxResultSafetyNet，
+        // 分层截断由 ToolResultTruncator 在 AgentLoop 注入前处理
+        self.output = output.truncated(to: BaizeRuntime.maxResultSafetyNet)
         self.isError = isError
         self.metadata = metadata
     }
@@ -51,5 +52,59 @@ struct ToolResult: Sendable, Codable {
             return "Error: \(output)"
         }
         return output
+    }
+}
+
+// MARK: - Tool Result Truncator (P2-1)
+
+/// 工具结果分层截断器 — 按工具类型采用不同截断策略
+/// 在 AgentLoop 将工具结果注入 session.messages 前调用
+/// - read_file/search_content: 头尾保留（文件内容头尾都有用）
+/// - execute_command/run_python/run_node: 尾部保留（命令输出末尾更重要）
+/// - 默认（list_directory/search_files 等）: 头部保留
+enum ToolResultTruncator {
+    /// 按工具名分层截断输出，超过 maxResultSize 时触发
+    /// - Parameters:
+    ///   - toolName: 工具名称（snake_case）
+    ///   - output: 原始工具输出
+    /// - Returns: 截断后的字符串（未超阈值则原样返回）
+    static func truncate(toolName: String, output: String) -> String {
+        let maxSize = BaizeRuntime.maxResultSize
+        guard output.count > maxSize else { return output }
+
+        switch toolName {
+        case "read_file", "search_content":
+            return truncateHeadAndTail(output)
+        case "execute_command", "run_python", "run_node":
+            return truncateTail(output)
+        default:
+            return truncateHead(output)
+        }
+    }
+
+    /// 头尾保留截断 — 适用于文件读取/内容搜索（头部含声明，尾部含结果）
+    private static func truncateHeadAndTail(_ output: String) -> String {
+        let headSize = 3_000
+        let tailSize = 3_000
+        let head = String(output.prefix(headSize))
+        let tail = String(output.suffix(tailSize))
+        let truncated = output.count - headSize - tailSize
+        return "\(head)\n\n[truncated \(truncated) chars]\n\n\(tail)"
+    }
+
+    /// 尾部保留截断 — 适用于命令执行（末尾含最终结果/错误信息）
+    private static func truncateTail(_ output: String) -> String {
+        let tailSize = 8_000
+        let tail = String(output.suffix(tailSize))
+        let truncated = output.count - tailSize
+        return "[truncated \(truncated) chars — showing last \(tailSize) chars]\n\n\(tail)"
+    }
+
+    /// 头部保留截断 — 适用于目录列表/文件搜索（头部含主要结果）
+    private static func truncateHead(_ output: String) -> String {
+        let headSize = 8_000
+        let head = String(output.prefix(headSize))
+        let truncated = output.count - headSize
+        return "\(head)\n\n[truncated \(truncated) chars]"
     }
 }
