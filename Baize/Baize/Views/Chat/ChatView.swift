@@ -22,6 +22,9 @@ struct ChatView: View {
     @State private var showSessionList: Bool = false
     @State private var savedSessions: [ConversationSession] = []
     @State private var currentSessionId: UUID?
+    // Bug 2 fix: 持有 agentTask 以便切换会话时取消；agentGeneration 用于丢弃旧 loop 的事件
+    @State private var agentTask: Task<Void, Never>?
+    @State private var agentGeneration: Int = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -127,14 +130,17 @@ struct ChatView: View {
         appState.focusMode = .chat
 
         // 启动 Agent Loop（异步任务）
-        Task {
-            await runAgentLoop(userMessage: message)
+        // Bug 2 fix: 持有 Task 引用，切换会话时可取消
+        let gen = agentGeneration
+        agentTask = Task {
+            await runAgentLoop(userMessage: message, generation: gen)
         }
     }
 
     /// 运行 AgentLoop 并处理事件流
     /// W5 fix: 使用 AppState 中注入的共享服务实例，不再每次重建
-    private func runAgentLoop(userMessage: String) async {
+    /// Bug 2 fix: generation 参数用于检测会话切换，丢弃旧 loop 的事件
+    private func runAgentLoop(userMessage: String, generation: Int) async {
         // W5 fix: 从 AppState 获取共享服务，避免每次发消息都重建新实例
         guard let apiGateway = appState.apiGateway,
               let toolRegistry = appState.toolRegistry,
@@ -211,9 +217,19 @@ struct ChatView: View {
 
         do {
             for try await event in eventStream {
+                // Bug 2 fix: 会话切换后丢弃旧 loop 的事件，防止内容串到新会话
+                if Task.isCancelled { break }
+                let isStale = await MainActor.run { self.agentGeneration != generation }
+                if isStale {
+                    baizeLogger.warning("Discarding stale agent event: session switched (gen=\(generation))")
+                    break
+                }
                 await handleAgentEvent(event)
             }
         } catch {
+            // Bug 2 fix: 会话已切换则跳过错误处理（防止错误消息串到新会话）
+            let isStale = await MainActor.run { self.agentGeneration != generation }
+            guard !isStale else { return }
             await MainActor.run {
                 displayMessages.append(DisplayMessage(
                     role: .error,
@@ -232,6 +248,10 @@ struct ChatView: View {
                 }
             }
         }
+
+        // Bug 2 fix: 会话已切换则跳过清理（防止干扰新会话状态）
+        let isStaleCleanup = await MainActor.run { self.agentGeneration != generation }
+        guard !isStaleCleanup else { return }
 
         await MainActor.run {
             isStreaming = false
@@ -408,8 +428,13 @@ struct ChatView: View {
     }
 
     /// 恢复历史会话 — 创建新 AgentLoop 加载恢复的 session
+    /// Bug 2 fix: 递增 generation + 取消 agentTask，防止旧 loop 的事件串到恢复的会话
     private func restoreSession(_ restored: ConversationSession) async {
-        // Bug 4 fix: 先停止当前 AgentLoop（如果在运行），防止恢复会话中断正在进行的生成
+        // Bug 2 fix: 递增 generation，使旧 loop 的后续事件被丢弃
+        agentGeneration += 1
+        // 取消正在运行的 agentTask
+        agentTask?.cancel()
+        // 停止当前 AgentLoop（如果在运行）
         if let loop = agentLoop {
             await loop.stop()
         }
@@ -449,8 +474,13 @@ struct ChatView: View {
     }
 
     /// 开始新会话 — 清空当前状态
+    /// Bug 2 fix: 取消正在运行的 agentTask + 立即创建并保存空 session（使其出现在列表中）
     private func startNewSession() {
-        // Bug 4 fix: 先停止当前 AgentLoop（如果在运行），防止新建会话中断正在进行的生成
+        // Bug 2 fix: 递增 generation，使旧 loop 的后续事件被丢弃
+        agentGeneration += 1
+        // 取消正在运行的 agentTask
+        agentTask?.cancel()
+        // 停止当前 AgentLoop（如果在运行）
         if let loop = agentLoop {
             Task { await loop.stop() }
         }
@@ -463,7 +493,39 @@ struct ChatView: View {
         self.isStreaming = false
         self.appState.isAgentRunning = false
         self.showSessionList = false
-        Task { await loadSessionList() }
+
+        // Bug 2 fix: 立即创建并保存空 session + 创建对应 AgentLoop，
+        // 使新对话立即出现在列表中，且后续 sendMessage 能复用此 loop（不会创建第二个 session）
+        Task {
+            guard let apiGateway = appState.apiGateway,
+                  let toolRegistry = appState.toolRegistry,
+                  let permissionEngine = appState.permissionEngine,
+                  let contextManager = appState.contextManager,
+                  let conversationStore = appState.conversationStore,
+                  let fileSystemService = appState.fileSystemService,
+                  let runtimeExecutor = appState.runtimeExecutor else {
+                await loadSessionList()
+                return
+            }
+            let session = ConversationSession(projectPath: appState.currentProjectPath)
+            try? await conversationStore.save(session: session)
+            let loop = AgentLoop(
+                apiGateway: apiGateway,
+                toolRegistry: toolRegistry,
+                permissionEngine: permissionEngine,
+                contextManager: contextManager,
+                conversationStore: conversationStore,
+                fileSystemService: fileSystemService,
+                runtimeExecutor: runtimeExecutor,
+                session: session
+            )
+            await loop.updateContextWindow(resolveContextWindow())
+            await MainActor.run {
+                self.agentLoop = loop
+                self.currentSessionId = session.id
+            }
+            await loadSessionList()
+        }
     }
 
     /// 根据当前 activeProvider + activeModel 解析 contextWindow
