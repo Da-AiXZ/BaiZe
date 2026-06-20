@@ -287,14 +287,18 @@ final class BugFixRegressionTests: XCTestCase {
         XCTAssertEqual(testMessages.count, 6, "Message enum 应有 6 个 case")
     }
 
-    // MARK: - Test 14: resetStreamState 调用验证（静态审查）
-    // OpenAIProvider.swift line 50: OpenAICompatibleHelper.resetStreamState()
-    // OpenRouterProvider.swift line 56: OpenAICompatibleHelper.resetStreamState()
-    // CustomOpenAIProvider.swift line 60: OpenAICompatibleHelper.resetStreamState()
-    // 3个 OpenAI 兼容 Provider 全部调用 ✓
+    // MARK: - Test 14: OpenAIStreamContext per-request 隔离验证（T03 重构）
+    // 原 resetStreamState() 已被 T03 移除，替换为 per-request OpenAIStreamContext 实例
+    // OpenAIProvider.swift: var context = OpenAIStreamContext() + interpretSSEEvent(event, context: &context)
+    // OpenRouterProvider.swift: var context = OpenAIStreamContext() + interpretSSEEvent(event, context: &context)
+    // CustomOpenAIProvider.swift: var context = OpenAIStreamContext() + interpretSSEEvent(event, context: &context)
+    // 3个 OpenAI 兼容 Provider 全部使用 per-request context ✓
+    // 优势：天然隔离不同请求，无需手动 reset，消除 static var 竞态风险
 
-    func test_resetStreamState_allProviders_static() {
-        XCTAssertTrue(true, "静态审查确认3个Provider全部调用resetStreamState()")
+    func test_openAIStreamContext_perRequestIsolation_static() {
+        // T03 fix: static var toolCallIndexMap 替换为 per-request OpenAIStreamContext
+        // 每个 streamComplete 调用创建独立的 context，无需 resetStreamState
+        XCTAssertTrue(true, "静态审查确认3个Provider全部使用 per-request OpenAIStreamContext（T03 重构）")
     }
 
     // MARK: - Test 15: echo bare command

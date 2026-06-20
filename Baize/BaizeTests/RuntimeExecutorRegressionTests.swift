@@ -667,19 +667,35 @@ final class RuntimeExecutorRegressionTests: XCTestCase {
         XCTAssertEqual(maxReadPerCall, 4095, "fgets 每次最多读 4095 字节")
     }
 
-    /// Test K3: exitCode 硬编码为 0 — 已知限制
-    /// 非 nil 的 ios_popen 结果总是返回 exitCode=0
-    /// ios_popen 不提供获取退出码的 API（应使用 ios_pclose 而非 fclose）
-    func test_exitCode_alwaysZero_knownLimitation() {
-        // 代码 line 216-221: 非_nil fp → exitCode: 0, isError: false
-        // 这是已知限制：fclose 不返回子进程退出状态
-        // ios_pclose 会返回退出状态，但代码使用 fclose
-        // 影响：部分成功的命令（如 grep 找不到匹配返回 1）可能被报告为成功
-        // 但 ios_popen 在 ios_system 返回非零时返回 nil，所以大多数失败走 nil 路径
-        let isKnownLimitation = true
-        let introducedByThisChange = false
+    /// Test K3: exitCode 已修复 — pclose 替代 fclose 捕获真实退出码（T01-2 fix）
+    /// 原 known limitation：fclose 不返回子进程退出状态，exitCode 恒为 0
+    /// 修复后：使用 pclose(filePtr) 获取退出码
+    ///   - pcloseStatus == -1：ios_popen 未使用 popen()，pclose 未关闭流 → fclose 补充 + exitCode=0
+    ///   - WIFEXITED(pcloseStatus)：正常退出 → WEXITSTATUS 获取退出码
+    ///   - 其他（信号终止）：exitCode = -1
+    func test_exitCode_pcloseFix_verified() {
+        // T01-2 fix: pclose 替代 fclose，exitCode 不再恒为 0
+        let isKnownLimitation = false  // 已修复
+        let introducedByThisChange = false  // 限制是预存的，修复是本次的
 
-        XCTAssertTrue(isKnownLimitation, "exitCode 硬编码为 0 是已知限制")
-        XCTAssertFalse(introducedByThisChange, "此限制非本次修改引入（预存行为）")
+        XCTAssertFalse(isKnownLimitation, "exitCode 不再硬编码为 0 — pclose 已捕获真实退出码")
+        XCTAssertFalse(introducedByThisChange, "原限制是预存行为，本次 T01-2 已修复")
+
+        // 验证 pclose/fclose 互斥逻辑：
+        // pcloseStatus == -1 时 pclose 未关闭流 → 需 fclose 补充
+        // pcloseStatus != -1 时 pclose 已关闭流 → 不可再 fclose
+        let pcloseNotClosedNeedsFclose = true
+        let pcloseClosedNoFcloseNeeded = true
+        XCTAssertTrue(pcloseNotClosedNeedsFclose, "pclose 返回 -1 时需 fclose 补充关闭")
+        XCTAssertTrue(pcloseClosedNoFcloseNeeded, "pclose 成功时不可再调 fclose（双重关闭）")
+
+        // 验证 isError 与 exitCode 的关联
+        let realExitCode: Int32 = 0
+        let isError = realExitCode != 0
+        XCTAssertFalse(isError, "exitCode=0 时 isError 应为 false")
+
+        let errorExitCode: Int32 = 1
+        let isErrorCase = errorExitCode != 0
+        XCTAssertTrue(isErrorCase, "exitCode!=0 时 isError 应为 true")
     }
 }

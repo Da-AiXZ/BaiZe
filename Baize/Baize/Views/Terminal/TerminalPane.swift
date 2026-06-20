@@ -359,8 +359,8 @@ private struct TerminalInputBar: View {
         .padding(.horizontal, 12)
         .frame(height: 36)
         .background(Color.baizeInputFieldBackground)
-        .onAppear {
-            // 自动聚焦输入框
+        .onTapGesture {
+            // T04-1 fix: 点击输入栏聚焦，替代 onAppear 自动聚焦（避免面板展开时抢焦）
             isFocused = true
         }
     }

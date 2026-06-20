@@ -45,9 +45,8 @@ struct OpenAIProvider: LLMProvider {
                     }
                     apiLogger.info("OpenAI provider: API key loaded, starting stream for model: \(model)")
 
-                    // Bug 1 fix: 重置流式状态（index → id 映射），防止上次请求的残留条目
-                    // 导致 tool_call arguments delta 关联到错误的 id，进而出现"无参数"问题
-                    OpenAICompatibleHelper.resetStreamState()
+                    // T03 fix: 使用 per-request context 替代 static var，天然隔离不同请求
+                    var context = OpenAIStreamContext()
 
                     // 2. 构建消息和工具定义
                     let openAIMessages = messages.toOpenAIMergedFormat()
@@ -68,7 +67,7 @@ struct OpenAIProvider: LLMProvider {
 
                     // 5. 消费 SSE 事件，解释为 LLMChunk
                     for try await event in sseEvents {
-                        let chunks = OpenAICompatibleHelper.interpretSSEEvent(event)
+                        let chunks = OpenAICompatibleHelper.interpretSSEEvent(event, context: &context)
                         for chunk in chunks {
                             continuation.yield(chunk)
                         }

@@ -1,20 +1,27 @@
 import Foundation
 
+/// OpenAI 流式上下文 — 每次请求独立实例，替代 static var 状态（T03 重构）
+/// OpenAI 流式 tool_calls 用 index 标识，后续 chunk 没有 id，只有 index
+/// 需要维护 index → id 映射，否则 arguments delta 会丢失
+/// 使用 per-request 实例替代 static var，天然隔离不同请求，无需手动 reset
+struct OpenAIStreamContext {
+    private var toolCallIndexMap: [Int: String] = [:]
+
+    /// 注册 tool_call index → id 映射
+    mutating func registerToolCall(index: Int, id: String) {
+        toolCallIndexMap[index] = id
+    }
+
+    /// 通过 index 解析已注册的 tool_call id
+    func resolveId(for index: Int) -> String? {
+        toolCallIndexMap[index]
+    }
+}
+
 /// OpenAI 兼容 API 请求构建与 SSE 解释工具
 /// 从原 APIGateway 迁移的 OpenAI Chat Completions 请求构建逻辑和 SSE 事件解释逻辑
 /// 被 OpenAIProvider 和 OpenRouterProvider 共用
 enum OpenAICompatibleHelper {
-
-    // MARK: - Stream State (per-request)
-    // OpenAI 流式 tool_calls 用 index 标识，后续 chunk 没有 id，只有 index
-    // 需要维护 index → id 映射，否则 arguments delta 会丢失
-    // 注意：每次新请求前需要清空
-    static var toolCallIndexMap: [Int: String] = [:]
-
-    /// 重置流式状态（每次 streamComplete 调用前由 Provider 调用）
-    static func resetStreamState() {
-        toolCallIndexMap.removeAll()
-    }
 
     // MARK: - Request Building
 
@@ -104,7 +111,7 @@ enum OpenAICompatibleHelper {
     /// }
     /// - Parameter event: SSE 原始事件
     /// - Returns: 解释后的 LLMChunk 数组
-    static func interpretSSEEvent(_ event: SSEStream.SSEEvent) -> [LLMChunk] {
+    static func interpretSSEEvent(_ event: SSEStream.SSEEvent, context: inout OpenAIStreamContext) -> [LLMChunk] {
         let data = event.data
 
         // [DONE] 标记流结束
@@ -186,13 +193,13 @@ enum OpenAICompatibleHelper {
                     }
 
                     if !name.isEmpty && !id.isEmpty {
-                        // 工具调用开始 — 注册 index → id 映射
-                        Self.toolCallIndexMap[index] = id
+                        // 工具调用开始 — 注册 index → id 映射（T03: context 替代 static var）
+                        context.registerToolCall(index: index, id: id)
                         chunks.append(.toolCallBegin(id: id, name: name))
                     }
                     if !argumentsDelta.isEmpty {
-                        // 参数增量 — 用 index 查找对应的 id
-                        let resolvedId = id.isEmpty ? (Self.toolCallIndexMap[index] ?? id) : id
+                        // 参数增量 — 用 index 查找对应的 id（T03: context 替代 static var）
+                        let resolvedId = id.isEmpty ? (context.resolveId(for: index) ?? id) : id
                         if !resolvedId.isEmpty {
                             chunks.append(.toolCallDelta(id: resolvedId, argumentsDelta: argumentsDelta))
                         }

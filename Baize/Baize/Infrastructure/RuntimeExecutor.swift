@@ -269,18 +269,32 @@ class RuntimeExecutor: @unchecked Sendable {
                     output += String(cString: buffer)
                     lineCount += 1
                 }
-                fclose(filePtr)
+                // T01-2 fix: 用 pclose 替代 fclose 捕获退出码
+                // pclose 和 fclose 不可对同一 FILE* 调用两次
+                // pcloseStatus == -1 表示 ios_popen 内部未使用 popen()，pclose 未关闭流
+                let pcloseStatus = pclose(filePtr)
+                let realExitCode: Int32
+                if pcloseStatus == -1 {
+                    // pclose 未关闭流，需 fclose 补充关闭
+                    fclose(filePtr)
+                    realExitCode = 0  // 无法获取退出码，保持原有行为
+                } else if WIFEXITED(pcloseStatus) {
+                    realExitCode = WEXITSTATUS(pcloseStatus)
+                } else {
+                    // 进程被信号终止
+                    realExitCode = -1
+                }
 
-                runtimeLogger.info("ios_popen completed: \(lineCount) lines, \(output.utf8.count) bytes, first 200: '\(output.prefix(200))'")
+                runtimeLogger.info("ios_popen completed: \(lineCount) lines, \(output.utf8.count) bytes, exitCode: \(realExitCode), first 200: '\(output.prefix(200))'")
 
                 // ── Phase 5: 返回结果 ──
                 // 空输出是合法的 — touch/mkdir/true 等命令不产生输出
-                // 不再将空输出视为错误
+                // T01-2 fix: 使用真实退出码替代硬编码 0
                 resumeOnce(ExecutionResult(
                     stdout: output,
                     stderr: "",
-                    exitCode: 0,
-                    isError: false
+                    exitCode: realExitCode,
+                    isError: realExitCode != 0
                 ))
             }
 

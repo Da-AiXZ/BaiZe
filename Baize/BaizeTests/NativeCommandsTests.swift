@@ -380,9 +380,8 @@ final class NativeCommandsTests: XCTestCase {
     // MARK: - Test 13: 不支持的命令返回 nil
 
     func test_unsupportedCommand_returnNil() {
+        // 注意：find 和 grep 已加入 NativeCommands supportedCommands，不再返回 nil
         let testCases = [
-            "find . -name '*.swift'",
-            "grep -r pattern /path",
             "git status",
             "sed 's/old/new/g' file.txt",
             "sort file.txt",
@@ -396,6 +395,22 @@ final class NativeCommandsTests: XCTestCase {
             let result = NativeCommands.execute(command: cmd, workingDir: "/tmp")
             XCTAssertNil(result, "不支持的命令 '\(cmd)' 应返回 nil（走 ios_popen）")
         }
+    }
+
+    // MARK: - Test 13b: find 和 grep 现在是原生支持的命令
+
+    func test_findAndGrep_areNowSupported() {
+        let dir = makeTempDir()
+        defer { cleanup(dir) }
+        writeFile(dir, name: "test.txt", content: "hello world")
+
+        // find 现在是原生命令（之前就加入了 supportedCommands）
+        let findResult = NativeCommands.execute(command: "find . -name 'test.txt'", workingDir: dir)
+        XCTAssertNotNil(findResult, "find 应被 NativeCommands 处理（不再返回 nil）")
+
+        // grep 现在是原生命令（本次新增）
+        let grepResult = NativeCommands.execute(command: "grep hello test.txt", workingDir: dir)
+        XCTAssertNotNil(grepResult, "grep 应被 NativeCommands 处理（不再返回 nil）")
     }
 
     // MARK: - Test 14: touch 创建空文件

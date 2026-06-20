@@ -56,8 +56,8 @@ struct CustomOpenAIProvider: LLMProvider {
                         apiLogger.info("Custom provider: thinking mode DISABLED (tools present, avoids 400 on multi-turn)")
                     }
 
-                    // 重置流式状态（index → id 映射）
-                    OpenAICompatibleHelper.resetStreamState()
+                    // T03 fix: 使用 per-request context 替代 static var，天然隔离不同请求
+                    var context = OpenAIStreamContext()
 
                     let urlRequest = try OpenAICompatibleHelper.buildRequest(
                         endpoint: endpoint,
@@ -83,7 +83,7 @@ struct CustomOpenAIProvider: LLMProvider {
                         if eventCount == 1 {
                             firstEventData = event.data
                         }
-                        let chunks = OpenAICompatibleHelper.interpretSSEEvent(event)
+                        let chunks = OpenAICompatibleHelper.interpretSSEEvent(event, context: &context)
                         for chunk in chunks {
                             // 检测错误响应
                             if case .done(let finishReason) = chunk, finishReason.hasPrefix("error:") {
