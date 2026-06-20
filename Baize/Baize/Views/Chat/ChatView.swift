@@ -447,6 +447,15 @@ struct ChatView: View {
             contextTokens = tokens
             contextWindow = window
 
+        case .commandExecuting(let command, _):
+            // P1-2: Agent 命令联动 — 转发到终端面板
+            // 不影响 displayMessages（终端和对话是独立通道）
+            appState.terminalViewModel?.appendAgentCommand(command)
+
+        case .commandOutput(_, let output, _, let exitCode):
+            // P1-2: Agent 命令输出 — 转发到终端面板
+            appState.terminalViewModel?.appendAgentOutput(output, exitCode: exitCode)
+
         case .completed:
             // Bug 6 fix: flush 确保获取完整文本
             streamBuffer.flush()

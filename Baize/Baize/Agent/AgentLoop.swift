@@ -305,7 +305,27 @@ actor AgentLoop {
                     case .allow:
                         // 执行工具
                         continuation.yield(.toolExecuting(toolCall))
+
+                        // 终端事件：execute_command 命令开始执行
+                        if name == "execute_command" {
+                            let cmd = toolCall.argumentString(for: "command") ?? ""
+                            continuation.yield(.commandExecuting(command: cmd, source: .agent))
+                        }
+
                         let result = await toolRegistry.execute(toolCall: toolCall, context: executionContext)
+
+                        // 终端事件：execute_command 命令输出完成
+                        if name == "execute_command" {
+                            let cmd = toolCall.argumentString(for: "command") ?? ""
+                            let exitCode = Int(result.metadata["exitCode"] ?? "0") ?? 0
+                            continuation.yield(.commandOutput(
+                                command: cmd,
+                                output: result.output,
+                                source: .agent,
+                                exitCode: exitCode
+                            ))
+                        }
+
                         continuation.yield(.toolResult(toolCall, result))
 
                         // 将结果注入对话历史（P2-1: 分层截断）
@@ -335,7 +355,27 @@ actor AgentLoop {
                         if allowed {
                             // 用户允许 — 执行工具（与 .allow 路径一致）
                             continuation.yield(.toolExecuting(toolCall))
+
+                            // 终端事件：execute_command 命令开始执行
+                            if name == "execute_command" {
+                                let cmd = toolCall.argumentString(for: "command") ?? ""
+                                continuation.yield(.commandExecuting(command: cmd, source: .agent))
+                            }
+
                             let result = await toolRegistry.execute(toolCall: toolCall, context: executionContext)
+
+                            // 终端事件：execute_command 命令输出完成
+                            if name == "execute_command" {
+                                let cmd = toolCall.argumentString(for: "command") ?? ""
+                                let exitCode = Int(result.metadata["exitCode"] ?? "0") ?? 0
+                                continuation.yield(.commandOutput(
+                                    command: cmd,
+                                    output: result.output,
+                                    source: .agent,
+                                    exitCode: exitCode
+                                ))
+                            }
+
                             continuation.yield(.toolResult(toolCall, result))
                             // P2-1: 分层截断后注入对话历史
                             let rawContent = result.toToolResultContent()

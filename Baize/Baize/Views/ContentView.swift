@@ -90,21 +90,32 @@ private struct WorkspacePane: View {
 
     var body: some View {
         GeometryReader { geo in
-            HStack(spacing: 0) {
-                // 编辑器（Monaco）
-                EditorContainerView(appState: appState)
-                    .frame(width: geo.size.width * appState.focusMode.editorRatio)
+            VStack(spacing: 0) {
+                // 编辑器 + 对话面板（焦点驱动宽度）
+                // Bug 5 fix: .transaction 隔离终端展开/折叠时的高度变化动画，
+                // 防止动画传导到 HStack 内部的 ChatMessageList 长内容全量重绘
+                HStack(spacing: 0) {
+                    // 编辑器（Monaco）
+                    EditorContainerView(appState: appState)
+                        .frame(width: geo.size.width * appState.focusMode.editorRatio)
 
-                // 分隔线
-                Divider()
-                    .background(Color.baizeBorder)
+                    // 分隔线
+                    Divider()
+                        .background(Color.baizeBorder)
 
-                // 对话面板（Agent 对话）
-                // Bug 5 fix: 移除 WorkspacePane 级别的 .animation，改由 FocusModeBar 的
-                // withAnimation 和 ContentView onChange 的 withAnimation 控制动画。
-                // 容器 frame 宽度仍平滑过渡，但动画不再整体作用于 WorkspacePane。
-                ChatView(appState: appState)
-                    .frame(width: geo.size.width * appState.focusMode.chatRatio)
+                    // 对话面板（Agent 对话）
+                    ChatView(appState: appState)
+                        .frame(width: geo.size.width * appState.focusMode.chatRatio)
+                }
+                .frame(maxHeight: .infinity)
+                .transaction { t in t.animation = nil }
+
+                // 终端面板（底部，可折叠/展开）
+                // TerminalPane 内部管理高度（折叠 36pt / 展开 35%），
+                // VStack 自动将剩余空间分配给上方 HStack
+                if let terminalVM = appState.terminalViewModel {
+                    TerminalPane(viewModel: terminalVM, availableHeight: geo.size.height)
+                }
             }
         }
         // Bug B fix: FocusModeBar 使用 safeAreaInset 固定在 detail 顶部，不再使用 overlay 或 toolbar

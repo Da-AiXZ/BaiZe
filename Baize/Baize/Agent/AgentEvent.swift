@@ -44,6 +44,18 @@ enum AgentEvent: @unchecked Sendable {
 
     /// 上下文用量更新 — 携带当前估算 token 数和 contextWindow
     case contextUsage(estimatedTokens: Int, contextWindow: Int)
+
+    /// 终端命令开始执行（Agent 调用 execute_command 工具时）
+    /// - Parameter command: 执行的命令字符串
+    /// - Parameter source: 命令来源（.agent — AgentLoop 发射时固定为 .agent）
+    case commandExecuting(command: String, source: CommandSource)
+
+    /// 终端命令输出完成（Agent 调用 execute_command 工具后）
+    /// - Parameter command: 执行的命令字符串
+    /// - Parameter output: 命令输出（stdout + stderr）
+    /// - Parameter source: 命令来源
+    /// - Parameter exitCode: 退出码（0 = 成功，非 0 = 失败）
+    case commandOutput(command: String, output: String, source: CommandSource, exitCode: Int)
 }
 
 // MARK: - AgentEvent Convenience
@@ -66,6 +78,12 @@ extension AgentEvent {
         case .contextCompactionFailed(let error): return "上下文压缩失败: \(error)"
         case .contextUsage(let estimatedTokens, let contextWindow):
             return "上下文用量: \(estimatedTokens)/\(contextWindow) tokens"
+
+        case .commandExecuting(let command, let source):
+            return "命令执行中: \(command) [\(source == .agent ? "Agent" : "用户")]"
+
+        case .commandOutput(let command, let output, let source, let exitCode):
+            return "命令输出: \(command) → exit=\(exitCode), \(output.prefix(30))..."
         }
     }
 

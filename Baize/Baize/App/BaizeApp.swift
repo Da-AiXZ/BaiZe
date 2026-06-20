@@ -103,6 +103,14 @@ struct BaizeApp: App {
             state.pythonRuntimeEngine = pythonEngine
             state.currentProjectPath = workingRoot
 
+            // 终端 UI：创建 TerminalViewModel 并注入 AppState
+            // TerminalViewModel 是 @MainActor，init() 在主线程执行，安全
+            // 生命周期：App 启动创建一次，App 生命周期内不销毁
+            state.terminalViewModel = TerminalViewModel(
+                runtimeExecutor: runtime,
+                initialWorkingDir: workingRoot
+            )
+
             // Git 集成：创建 GitViewModel 并注入 AppState
             let gitVM = GitViewModel(gitService: gitSvc)
             state.gitService = gitSvc

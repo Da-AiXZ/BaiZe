@@ -173,6 +173,10 @@ class AppState: ObservableObject {
     /// Git ViewModel（@MainActor ObservableObject，Git Tab UI 状态管理）
     var gitViewModel: GitViewModel?
 
+    /// Terminal ViewModel（@MainActor ObservableObject，终端面板状态管理）
+    /// BaizeApp.init() 中创建一次，App 生命周期内不销毁
+    var terminalViewModel: TerminalViewModel?
+
     // MARK: - Error State
 
     /// 最近错误消息（用于全局 Alert）
