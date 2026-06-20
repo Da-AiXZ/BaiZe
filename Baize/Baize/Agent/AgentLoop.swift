@@ -181,6 +181,12 @@ actor AgentLoop {
                 }
             }
 
+            // P2-5: 发射上下文用量事件（压缩完成后发射，session.messages 已更新为最新）
+            continuation.yield(.contextUsage(
+                estimatedTokens: session.messages.estimatedTokens,
+                contextWindow: self.contextWindow
+            ))
+
             let toolDefinitions = await toolRegistry.getToolDefinitions()
 
             // 2. 调用 LLM API（SSE 流式）

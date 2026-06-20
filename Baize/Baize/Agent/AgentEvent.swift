@@ -41,6 +41,9 @@ enum AgentEvent: @unchecked Sendable {
 
     /// 上下文压缩失败 — 携带错误描述，降级为近期消息保留
     case contextCompactionFailed(error: String)
+
+    /// 上下文用量更新 — 携带当前估算 token 数和 contextWindow
+    case contextUsage(estimatedTokens: Int, contextWindow: Int)
 }
 
 // MARK: - AgentEvent Convenience
@@ -61,6 +64,8 @@ extension AgentEvent {
         case .contextCompacted(let summary, let compactedCount, let retainedCount):
             return "上下文已压缩: \(compactedCount)条→摘要, 保留\(retainedCount)条 — \(summary.prefix(50))..."
         case .contextCompactionFailed(let error): return "上下文压缩失败: \(error)"
+        case .contextUsage(let estimatedTokens, let contextWindow):
+            return "上下文用量: \(estimatedTokens)/\(contextWindow) tokens"
         }
     }
 

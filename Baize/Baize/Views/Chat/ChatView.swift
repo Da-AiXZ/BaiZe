@@ -14,6 +14,10 @@ struct ChatView: View {
     @State private var streamingText: String = ""
     @State private var hasReceivedAnyResponse: Bool = false
     @State private var isCompacting: Bool = false
+    // P2-5: 上下文用量指示器状态
+    @State private var contextTokens: Int = 0
+    @State private var contextWindow: Int = BaizeToken.maxContextTokens
+    @State private var hasCompacted: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,6 +29,13 @@ struct ChatView: View {
                 messages: displayMessages,
                 streamingText: streamingText,
                 isStreaming: isStreaming
+            )
+
+            // P2-5: 上下文用量指示器
+            ContextUsageBar(
+                tokens: contextTokens,
+                window: contextWindow,
+                hasCompacted: hasCompacted
             )
 
             // P0-2: 压缩 Loading 状态（摘要 LLM 调用期间显示）
@@ -282,6 +293,7 @@ struct ChatView: View {
         case .contextCompacted(let summary, let compactedCount, let retainedCount):
             // P0-2: 压缩完成 — 插入压缩提示（UI 层标记，不进入 LLM 上下文）
             isCompacting = false
+            hasCompacted = true
             displayMessages.append(DisplayMessage(
                 role: .system,
                 content: "📦 上下文已压缩:已将 \(compactedCount) 条历史消息摘要为 1 条,保留最近 \(retainedCount) 条完整对话",
@@ -291,11 +303,17 @@ struct ChatView: View {
         case .contextCompactionFailed(let error):
             // P0-2: 压缩失败降级 — 提示用户，Agent 继续工作
             isCompacting = false
+            hasCompacted = true
             displayMessages.append(DisplayMessage(
                 role: .error,
                 content: "⚠️ 上下文压缩失败:\(error)。已保留最近对话,Agent 继续工作。",
                 timestamp: Date()
             ))
+
+        case .contextUsage(let tokens, let window):
+            // P2-5: 更新上下文用量指示器
+            contextTokens = tokens
+            contextWindow = window
 
         case .completed:
             if !streamingText.isEmpty {
@@ -594,5 +612,65 @@ private struct StreamingTextBubble: View {
 
             Spacer(minLength: 40)
         }
+    }
+}
+
+// MARK: - Context Usage Bar (P2-5)
+
+/// 上下文用量指示器 — 显示当前 token 用量 / contextWindow + 颜色分级 + 进度条
+/// 颜色分级：
+///   - hasCompacted = true → 绿色（已压缩，历史被摘要）
+///   - ratio >= 0.7 → 橙色（接近阈值，即将触发压缩）
+///   - 正常 → 灰色
+private struct ContextUsageBar: View {
+    let tokens: Int
+    let window: Int
+    let hasCompacted: Bool
+
+    /// 用量比例 (0.0 ~ 1.0)
+    private var ratio: Double {
+        guard window > 0 else { return 0 }
+        return Double(tokens) / Double(window)
+    }
+
+    /// 用量百分比（整数）
+    private var percent: Int {
+        Int(ratio * 100)
+    }
+
+    /// 颜色分级
+    private var barColor: Color {
+        if hasCompacted {
+            return .baizeSuccess
+        } else if ratio >= 0.7 {
+            return .baizeWarning
+        } else {
+            return .baizeTextSecondary
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            // 📦 图标：已压缩时显示
+            if hasCompacted {
+                Image(systemName: "shippingbox")
+                    .font(.caption2)
+                    .foregroundColor(.baizeSuccess)
+            }
+
+            Text("上下文: \(tokens / 1000)K / \(window / 1000)K (\(percent)%)")
+                .font(.caption)
+                .foregroundColor(barColor)
+
+            ProgressView(value: Double(tokens), total: Double(max(window, 1)))
+                .progressViewStyle(LinearProgressViewStyle(tint: barColor))
+                .frame(maxWidth: .infinity)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .frame(height: 28)
+        .background(Color.baizeCardBackground)
     }
 }
