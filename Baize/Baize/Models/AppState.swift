@@ -375,6 +375,10 @@ class AppState: ObservableObject {
         openFiles = []
         selectedFilePath = nil
 
+        // Bug 3 fix: 持久化当前项目路径到 UserDefaults，
+        // App 重启后恢复上次的项目路径，确保终端历史等按项目隔离的数据能正确加载
+        UserDefaults.standard.set(projectPath, forKey: BaizeGit.lastProjectPathUDKey)
+
         baizeLogger.info("switchProject: completed switch to '\(projectPath)'")
     }
 
@@ -425,15 +429,22 @@ class AppState: ObservableObject {
             try fm.ensureDirectoryExists(atPath: BaizePath.projectRoot)
             try fm.ensureDirectoryExists(atPath: BaizePath.internalData)
             try fm.ensureDirectoryExists(atPath: BaizePath.conversations)
+            // Bug 5 fix: 确保终端历史和用量数据目录存在
+            try fm.ensureDirectoryExists(atPath: BaizePath.terminalHistory)
+            try fm.ensureDirectoryExists(atPath: BaizePath.usageData)
         } catch {
             // Fallback: use the app's Documents directory (sandboxed but always works)
             let docsDir = fm.urls(for: .documentDirectory, in: .userDomainMask).first!.path
             let fallbackRoot = (docsDir as NSString).appendingPathComponent("Baize")
             let fallbackInternal = (fallbackRoot as NSString).appendingPathComponent(".baize")
             let fallbackConv = (fallbackInternal as NSString).appendingPathComponent("conversations")
+            let fallbackTermHistory = (fallbackInternal as NSString).appendingPathComponent("terminal_history")
+            let fallbackUsage = (fallbackInternal as NSString).appendingPathComponent("usage")
             try? fm.ensureDirectoryExists(atPath: fallbackRoot)
             try? fm.ensureDirectoryExists(atPath: fallbackInternal)
             try? fm.ensureDirectoryExists(atPath: fallbackConv)
+            try? fm.ensureDirectoryExists(atPath: fallbackTermHistory)
+            try? fm.ensureDirectoryExists(atPath: fallbackUsage)
             // Update the current project path to the fallback
             currentProjectPath = fallbackRoot + "/"
             baizeLogger.info("Using fallback project directory: \(self.currentProjectPath)")

@@ -265,7 +265,10 @@ class GitViewModel: ObservableObject {
 
         do {
             try await gitService.push()
-            showSuccessMessage("推送成功")
+            await refreshStatus()
+            await loadLog()
+            // Bug 4 fix: 推送成功后刷新状态和日志，给用户更明确的反馈
+            showSuccessMessage("推送成功！远程仓库已更新")
         } catch let gitError as GitError {
             showError(gitError.errorDescription ?? "推送失败")
         } catch {

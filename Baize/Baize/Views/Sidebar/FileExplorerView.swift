@@ -8,7 +8,6 @@ struct FileExplorerView: View {
     @State private var selectedFilePath: String?
     @State private var isLoading = false
     @State private var searchText = ""
-    @State private var expandedPaths: Set<String> = []
 
     /// W5 fix: 从 AppState 获取共享 FileSystemService（延迟初始化）
     /// W15/W21 fix: fallback 使用 appState.currentProjectPath 而非默认路径
@@ -34,13 +33,16 @@ struct FileExplorerView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
-                    OutlineGroup(rootItems, children: \.children) { item in
-                        FileItemRow(
+                    // Bug 1 fix: 用递归 DisclosureGroup 替代 OutlineGroup，
+                    // 解决深层目录 children=nil 无法展开的问题。
+                    // 每个目录节点独立懒加载子项，展开时才读取磁盘。
+                    ForEach(rootItems) { item in
+                        FileTreeNode(
                             item: item,
-                            isSelected: selectedFilePath == item.path,
-                            onTap: { handleItemTap(item) }
+                            selectedFilePath: $selectedFilePath,
+                            appState: appState,
+                            fileSystemService: fileSystemService
                         )
-                        .contextMenu { FileItemContextMenu(item: item, appState: appState) }
                     }
                 }
                 .listStyle(.sidebar)
@@ -58,46 +60,12 @@ struct FileExplorerView: View {
         fileSystemService.setRootPath(appState.currentProjectPath)
 
         do {
+            // Bug 1 fix: 只加载根目录项，子目录的 children 由 FileTreeNode 展开时懒加载
             rootItems = try fileSystemService.listDirectory(at: appState.currentProjectPath)
-            // 为目录项延迟加载子节点
-            for index in rootItems.indices {
-                if rootItems[index].isDirectory {
-                    rootItems[index].children = try? fileSystemService.listDirectory(at: rootItems[index].path)
-                }
-            }
             isLoading = false
         } catch {
             appState.showError("无法加载目录: \(error.localizedDescription)")
             isLoading = false
-        }
-    }
-
-    /// 递归加载目录的子节点
-    private func loadChildren(for item: FileItem) -> [FileItem]? {
-        guard item.isDirectory else { return nil }
-        return try? fileSystemService.listDirectory(at: item.path)
-    }
-
-    private func handleItemTap(_ item: FileItem) {
-        if item.isDirectory {
-            // 切换展开/折叠状态
-            if expandedPaths.contains(item.path) {
-                expandedPaths.remove(item.path)
-            } else {
-                expandedPaths.insert(item.path)
-            }
-        } else {
-            selectedFilePath = item.path
-            appState.openFile(at: item.path)
-
-            // 读取文件内容并在 Monaco Editor 中打开
-            do {
-                let content = try fileSystemService.readFile(at: item.path)
-                // 通知 EditorState 打开文件（通过 AppState 传递）
-                appState.selectedFilePath = item.path
-            } catch {
-                appState.showError("无法打开文件: \(error.localizedDescription)")
-            }
         }
     }
 
@@ -120,6 +88,111 @@ struct FileExplorerView: View {
         } catch {
             appState.showError("搜索失败: \(error.localizedDescription)")
         }
+    }
+}
+
+// MARK: - File Tree Node (Recursive — Bug 1 fix)
+
+/// 递归文件树节点 — 使用 DisclosureGroup 实现目录的展开/折叠
+///
+/// Bug 1 fix: 替代 OutlineGroup，解决深层目录 children=nil 无法展开的问题。
+/// 每个目录节点独立管理自己的展开状态和子节点懒加载：
+/// - 点击目录时 DisclosureGroup 自动切换展开/折叠
+/// - 首次展开时从磁盘读取子项（懒加载），避免一次性加载整棵树
+/// - 子目录同样使用 FileTreeNode 递归渲染，支持无限层级展开
+struct FileTreeNode: View {
+    let item: FileItem
+    @Binding var selectedFilePath: String?
+    let appState: AppState
+    let fileSystemService: FileSystemService
+
+    /// 子节点列表（展开时懒加载）
+    @State private var children: [FileItem] = []
+    /// 是否已加载过子节点（避免重复加载）
+    @State private var hasLoadedChildren: Bool = false
+    /// 是否正在加载子节点
+    @State private var isLoadingChildren: Bool = false
+    /// 当前展开状态（DisclosureGroup 绑定）
+    @State private var isExpanded: Bool = false
+
+    var body: some View {
+        if item.isDirectory {
+            directoryNode
+        } else {
+            fileNode
+        }
+    }
+
+    // MARK: - Directory Node
+
+    private var directoryNode: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            if isLoadingChildren {
+                ProgressView()
+                    .scaleEffect(0.7)
+                    .padding(.leading, 8)
+            } else if hasLoadedChildren {
+                if children.isEmpty {
+                    Text("(空)")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .padding(.leading, 8)
+                } else {
+                    ForEach(children) { child in
+                        FileTreeNode(
+                            item: child,
+                            selectedFilePath: $selectedFilePath,
+                            appState: appState,
+                            fileSystemService: fileSystemService
+                        )
+                    }
+                }
+            }
+        } label: {
+            FileItemRow(
+                item: item,
+                isSelected: false,
+                onTap: {}
+            )
+        }
+        .contextMenu { FileItemContextMenu(item: item, appState: appState) }
+        .onChange(of: isExpanded) { expanded in
+            if expanded && !hasLoadedChildren {
+                loadChildren()
+            }
+        }
+    }
+
+    // MARK: - File Node
+
+    private var fileNode: some View {
+        FileItemRow(
+            item: item,
+            isSelected: selectedFilePath == item.path,
+            onTap: { openFile() }
+        )
+        .contextMenu { FileItemContextMenu(item: item, appState: appState) }
+    }
+
+    // MARK: - Actions
+
+    /// 打开文件 — 通知 AppState 并读取内容
+    private func openFile() {
+        selectedFilePath = item.path
+        appState.openFile(at: item.path)
+        appState.selectedFilePath = item.path
+    }
+
+    /// 懒加载目录子项 — 首次展开时从磁盘读取
+    private func loadChildren() {
+        isLoadingChildren = true
+        do {
+            children = try fileSystemService.listDirectory(at: item.path)
+            hasLoadedChildren = true
+        } catch {
+            appState.showError("无法加载目录: \(error.localizedDescription)")
+        }
+        isLoadingChildren = false
     }
 }
 

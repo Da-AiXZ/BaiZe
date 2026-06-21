@@ -65,15 +65,21 @@ struct EditorTabItem: View {
                     .frame(width: 6, height: 6)
             }
 
-            // 关闭按钮（仅激活 Tab 显示）
-            if isActive {
-                Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
+            // Bug 2 fix: 关闭按钮始终显示（不限 isActive），增大触摸区域
+            // 用 zIndex + contentShape 分离关闭按钮和 Tab 点击区域，避免手势冲突
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .frame(width: 20, height: 20)  // 20x20 图标区域
+                    .background(
+                        Circle()
+                            .fill(Color.secondary.opacity(isActive ? 0.15 : 0.0))
+                    )
             }
+            .buttonStyle(.plain)
+            .contentShape(Circle())  // 限制点击区域为圆形，避免误触
+            .frame(width: 24, height: 24)  // 24x24 触摸目标
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)

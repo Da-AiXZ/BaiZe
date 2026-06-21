@@ -158,6 +158,7 @@ struct BaizeApp: App {
 
     /// 检测可用的工作目录
     /// 优先尝试 TrollStore no-sandbox 路径，失败则使用 App 沙箱 Documents 目录
+    /// Bug 3 fix: 同时确保终端历史目录存在；Bug 5 fix: 确保所有内部子目录存在
     private static func resolveWorkingDirectory() -> String {
         let fm = FileManager.default
         let trollStorePath = BaizePath.projectRoot
@@ -167,7 +168,21 @@ struct BaizeApp: App {
             try fm.ensureDirectoryExists(atPath: trollStorePath)
             try fm.ensureDirectoryExists(atPath: BaizePath.internalData)
             try fm.ensureDirectoryExists(atPath: BaizePath.conversations)
+            // Bug 3 fix: 确保终端历史目录存在
+            try fm.ensureDirectoryExists(atPath: BaizePath.terminalHistory)
+            // Bug 5 fix: 确保用量数据目录存在
+            try fm.ensureDirectoryExists(atPath: BaizePath.usageData)
             baizeLogger.info("Using TrollStore no-sandbox path: \(trollStorePath)")
+
+            // Bug 3 fix: 恢复上次打开的项目路径
+            // 如果 UserDefaults 中保存了上次的项目路径且该目录仍存在，则使用它
+            // 否则使用默认的 projectRoot
+            if let lastPath = UserDefaults.standard.string(forKey: BaizeGit.lastProjectPathUDKey),
+               !lastPath.isEmpty,
+               fm.fileExists(atPath: lastPath) {
+                baizeLogger.info("Restoring last project path: \(lastPath)")
+                return lastPath
+            }
             return trollStorePath
         } catch {
             baizeLogger.warning("TrollStore path not accessible: \(trollStorePath) — \(error.localizedDescription)")
@@ -178,10 +193,14 @@ struct BaizeApp: App {
         let sandboxRoot = (docsDir as NSString).appendingPathComponent("Baize")
         let sandboxInternal = (sandboxRoot as NSString).appendingPathComponent(".baize")
         let sandboxConv = (sandboxInternal as NSString).appendingPathComponent("conversations")
+        let sandboxTermHistory = (sandboxInternal as NSString).appendingPathComponent("terminal_history")
+        let sandboxUsage = (sandboxInternal as NSString).appendingPathComponent("usage")
 
         try? fm.ensureDirectoryExists(atPath: sandboxRoot)
         try? fm.ensureDirectoryExists(atPath: sandboxInternal)
         try? fm.ensureDirectoryExists(atPath: sandboxConv)
+        try? fm.ensureDirectoryExists(atPath: sandboxTermHistory)
+        try? fm.ensureDirectoryExists(atPath: sandboxUsage)
 
         baizeLogger.info("Using sandbox fallback path: \(sandboxRoot)")
         return sandboxRoot + "/"

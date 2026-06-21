@@ -569,4 +569,8 @@ enum BaizeGit {
 
     /// 默认远程名称
     static let defaultRemoteName = "origin"
+
+    /// Bug 3 fix: 上次打开的项目路径的 UserDefaults 存储键名
+    /// 用于 App 重启后恢复上次的项目路径，确保终端历史等按项目隔离的数据能正确加载
+    static let lastProjectPathUDKey = "com.baize.last-project-path"
 }

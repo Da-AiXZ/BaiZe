@@ -281,9 +281,19 @@ struct SessionListView: View {
                     projectPath: projectPath,
                     contentMode: contentMode
                 )
+                // Bug 6 fix: 验证导出文件确实存在后再弹出 ShareSheet
+                // 避免文件写入失败但没抛异常时 ShareSheet 弹出黑屏
+                let fileExists = await MainActor.run {
+                    FileManager.default.fileExists(atPath: url.path)
+                }
                 await MainActor.run {
-                    self.exportedFileURL = url
-                    self.showShareSheet = true
+                    if fileExists {
+                        self.exportedFileURL = url
+                        self.showShareSheet = true
+                    } else {
+                        self.exportError = "导出文件不存在，写入可能失败"
+                        self.showExportError = true
+                    }
                 }
             } catch {
                 await MainActor.run {

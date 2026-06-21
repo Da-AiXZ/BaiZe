@@ -92,6 +92,10 @@ private struct AssistantMessageBubble: View {
     /// 折叠阈值：超过 2000 字符或 50 行的消息触发折叠（验收标准 #3）
     private let collapseCharThreshold: Int = 2000
     private let collapseLineThreshold: Int = 50
+    /// Bug 6 fix: 折叠后预览的最大字符数（确保折叠后内容不会太长）
+    private let collapsedMaxChars: Int = 800
+    /// Bug 6 fix: 折叠后预览的最大行数
+    private let collapsedMaxLines: Int = 20
     /// 分段渲染阈值：超过 5000 字符的消息按段落分割渲染
     private let segmentCharThreshold: Int = 5000
 
@@ -101,11 +105,43 @@ private struct AssistantMessageBubble: View {
             || content.components(separatedBy: "\n").count > collapseLineThreshold
     }
 
-    /// 折叠时显示的内容（前 50 行）
+    /// Bug 6 fix: 折叠时显示的内容
+    /// 同时限制行数和字符数，在段落边界（\n\n）截断，确保折叠后 ≤ 800 字左右
     private var collapsedContent: String {
         let lines = content.components(separatedBy: "\n")
-        let previewLines = Array(lines.prefix(collapseLineThreshold))
-        return previewLines.joined(separator: "\n")
+
+        // 先按行数截断到 collapsedMaxLines 行
+        var previewLines = Array(lines.prefix(collapsedMaxLines))
+        var preview = previewLines.joined(separator: "\n")
+
+        // 如果超过字符限制，按段落边界截断
+        if preview.count > collapsedMaxChars {
+            // 尝试在段落边界（\n\n）截断
+            let paragraphs = preview.components(separatedBy: "\n\n")
+            var truncated = ""
+            for paragraph in paragraphs {
+                let candidate = truncated.isEmpty ? paragraph : truncated + "\n\n" + paragraph
+                if candidate.count <= collapsedMaxChars {
+                    truncated = candidate
+                } else {
+                    break
+                }
+            }
+            // 如果连第一个段落都超限，按字符硬截断
+            if truncated.isEmpty {
+                let endIndex = preview.index(preview.startIndex, offsetBy: collapsedMaxChars, limitedBy: preview.endIndex) ?? preview.endIndex
+                truncated = String(preview[preview.startIndex..<endIndex])
+            }
+            preview = truncated
+            previewLines = preview.components(separatedBy: "\n")
+        }
+
+        // 添加省略提示（如果原始内容比预览长）
+        if content.count > preview.count || lines.count > previewLines.count {
+            preview += "\n\n…（已折叠，点击展开查看完整内容）"
+        }
+
+        return preview
     }
 
     /// 当前应显示的内容（折叠时截断，展开时完整）

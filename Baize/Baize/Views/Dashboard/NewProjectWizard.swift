@@ -192,10 +192,12 @@ struct NewProjectWizard: View {
     }
 
     /// 创建空项目
-    /// 1. 创建目录  2. 生成 BAIZE.md  3. git init
+    /// 1. 确保父目录存在  2. 创建目录  3. 生成 BAIZE.md  4. git init
     private func createEmptyProject(path: String, name: String) async throws {
         await updateStatus("正在创建项目目录...")
         let fm = FileManager.default
+        // Bug 5 fix: 确保父目录（BaizePath.projectRoot）存在，否则在不存在父目录下创建子目录会失败
+        try fm.ensureDirectoryExists(atPath: BaizePath.projectRoot)
         try fm.ensureDirectoryExists(atPath: path)
 
         await updateStatus("正在生成 BAIZE.md...")
@@ -212,6 +214,8 @@ struct NewProjectWizard: View {
     private func createTemplateProject(path: String, name: String, template: ProjectTemplate) async throws {
         await updateStatus("正在创建项目目录...")
         let fm = FileManager.default
+        // Bug 5 fix: 确保父目录存在
+        try fm.ensureDirectoryExists(atPath: BaizePath.projectRoot)
         try fm.ensureDirectoryExists(atPath: path)
 
         await updateStatus("正在复制模板文件...")

@@ -681,6 +681,77 @@ actor GitService {
             )
         }
 
+        // Bug 4 fix: 推送前检查是否有已暂存但未提交的更改
+        // 用户常见误操作：stage 后直接 push，跳过了 commit 步骤
+        // 此时 push 会推送旧的 HEAD commit，远程看不到新改动
+        do {
+            let headTree = try getHeadTree(repo: repo)
+            defer { git_tree_free(headTree) }
+
+            var index: OpaquePointer? = nil
+            try checkGit(git_repository_index(&index, repo), operation: "git_repository_index")
+            defer { git_index_free(index) }
+
+            var stagedDiff: OpaquePointer? = nil
+            let diffCode = git_diff_tree_to_index(&stagedDiff, repo, headTree, index, nil)
+            if diffCode == 0, let d = stagedDiff {
+                let stagedCount = git_diff_num_deltas(d)
+                git_diff_free(d)
+                if stagedCount > 0 {
+                    throw GitError.pushFailed(
+                        "检测到 \(stagedCount) 个已暂存但未提交的更改。\n\n"
+                        + "请先提交更改后再推送：\n"
+                        + "1. 输入提交消息\n"
+                        + "2. 点击「提交」按钮\n"
+                        + "3. 提交成功后再点 ↑ 推送\n\n"
+                        + "（push 只推送已 commit 的更改，暂存区的更改不会被推送）"
+                    )
+                }
+            }
+        } catch GitError.emptyRepository {
+            // 空仓库已被 headCommitExists 检查拦截，不会到达此处
+        }
+
+        // Bug 4 fix: 检查本地 HEAD 是否与远程跟踪分支一致（没有新提交可推送）
+        // 如果一致，说明用户没有新 commit，push 是 no-op
+        let remoteTrackingRefName = "refs/remotes/\(BaizeGit.defaultRemoteName)/\(branchName)"
+        var remoteRef: OpaquePointer? = nil
+        let refLookupCode = git_reference_lookup(&remoteRef, repo, remoteTrackingRefName)
+        if refLookupCode == 0, let rr = remoteRef {
+            defer { git_reference_free(rr) }
+
+            // 获取远程跟踪分支指向的 commit OID
+            if let remoteOidPtr = git_reference_target(rr) {
+
+                // 获取本地 HEAD commit OID
+                var headRef2: OpaquePointer? = nil
+                let headCode2 = git_repository_head(&headRef2, repo)
+                if headCode2 == 0, let hr2 = headRef2 {
+                    defer { git_reference_free(hr2) }
+                    var headObj2: OpaquePointer? = nil
+                    let peelCode2 = git_reference_peel(&headObj2, hr2, GIT_OBJECT_COMMIT)
+                    if peelCode2 == 0, let ho2 = headObj2 {
+                        defer { git_object_free(ho2) }
+                        // 比较两个 OID — 如果相等，说明没有新提交可推送
+                        if let localOidPtr = git_object_id(ho2),
+                           git_oid_equal(remoteOidPtr, localOidPtr) != 0 {
+                            throw GitError.pushFailed(
+                                "本地与远程已同步，没有需要推送的新提交。\n\n"
+                                + "请先提交更改后再推送：\n"
+                                + "1. 暂存文件改动\n"
+                                + "2. 输入提交消息并提交\n"
+                                + "3. 提交成功后再推送\n\n"
+                                + "（当前本地 HEAD 与远程跟踪分支指向同一个 commit）"
+                            )
+                        }
+                    }
+                }
+            }
+        } else {
+            if let r = remoteRef { git_reference_free(r) }
+            // 远程跟踪分支不存在 — 首次推送，继续执行
+        }
+
         var pushOpts = git_push_options()
         git_push_init_options(&pushOpts, numericCast(GIT_PUSH_OPTIONS_VERSION))
 
