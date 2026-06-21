@@ -248,7 +248,7 @@ struct SessionListView: View {
                 .padding(.vertical, 24)
             } else {
                     ForEach(searchResults) { result in
-                        SearchResultRow(
+                        SessionSearchResultRow(
                             result: result,
                             searchQuery: searchText
                         )
@@ -345,7 +345,7 @@ struct SessionRow: View {
 // MARK: - Search Result Row (T05: #15)
 
 /// 搜索结果行 — 会话标题 + 匹配片段（关键词高亮）+ 匹配消息数
-struct SearchResultRow: View {
+struct SessionSearchResultRow: View {
     let result: SessionSearchResult
     /// 当前搜索关键词（用于高亮匹配文本）
     let searchQuery: String

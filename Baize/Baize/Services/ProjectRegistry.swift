@@ -122,8 +122,8 @@ actor ProjectRegistry {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             projects = try decoder.decode([ProjectEntry].self, from: data)
-            agentLogger.info("ProjectRegistry: loaded \(projects.count) projects")
-            return projects
+            agentLogger.info("ProjectRegistry: loaded \(self.projects.count) projects")
+            return self.projects
         } catch {
             agentLogger.error("ProjectRegistry: failed to load registry: \(error.localizedDescription)")
             projects = []

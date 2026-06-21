@@ -315,7 +315,7 @@ class AppState: ObservableObject {
             return
         }
 
-        baizeLogger.info("switchProject: switching from '\(currentProjectPath)' to '\(projectPath)'")
+        baizeLogger.info("switchProject: switching from '\(self.currentProjectPath)' to '\(projectPath)'")
 
         // Step 2: 检查编辑器未保存改动 → 自动保存
         if let editor = editorState, editor.hasUnsavedChanges {

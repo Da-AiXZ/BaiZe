@@ -1122,7 +1122,9 @@ actor GitService {
 
         // rebase 循环：next + commit
         while true {
-            var operation: OpaquePointer? = nil
+            // git_rebase_next 的 out 参数类型是 UnsafeMutablePointer<UnsafeMutablePointer<git_rebase_operation>?>
+            // （git_rebase_operation 是 C struct，非 OpaquePointer）
+            var operation: UnsafeMutablePointer<git_rebase_operation>? = nil
             let nextCode = git_rebase_next(&operation, rebase)
 
             if nextCode == GIT_ITEROVER.rawValue {
