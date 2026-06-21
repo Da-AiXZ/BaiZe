@@ -158,7 +158,7 @@ struct FileTreeNode: View {
         .contextMenu { FileItemContextMenu(item: item, appState: appState) }
         .onChange(of: isExpanded) { expanded in
             if expanded && !hasLoadedChildren {
-                loadChildren()
+                Task { @MainActor in loadChildren() }
             }
         }
     }
@@ -169,7 +169,7 @@ struct FileTreeNode: View {
         FileItemRow(
             item: item,
             isSelected: selectedFilePath == item.path,
-            onTap: { openFile() }
+            onTap: { Task { @MainActor in openFile() } }
         )
         .contextMenu { FileItemContextMenu(item: item, appState: appState) }
     }
@@ -177,8 +177,6 @@ struct FileTreeNode: View {
     // MARK: - Actions
 
     /// 打开文件 — 通知 AppState 并读取内容
-    /// Swift 6 严格模式：appState 是 @MainActor 隔离的，需在 MainActor 上执行
-    @MainActor
     private func openFile() {
         selectedFilePath = item.path
         appState.openFile(at: item.path)
@@ -186,8 +184,6 @@ struct FileTreeNode: View {
     }
 
     /// 懒加载目录子项 — 首次展开时从磁盘读取
-    /// Swift 6 严格模式：appState.showError 是 @MainActor 隔离的，需在 MainActor 上执行
-    @MainActor
     private func loadChildren() {
         isLoadingChildren = true
         do {
