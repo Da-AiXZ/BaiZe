@@ -89,7 +89,8 @@ struct ChatView: View {
                 text: $inputText,
                 isRunning: appState.isAgentRunning,
                 onSend: { sendMessage($0) },
-                onStop: { stopAgent() }
+                onStop: { stopAgent() },
+                appState: appState
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -114,6 +115,51 @@ struct ChatView: View {
                 projectPath: appState.currentProjectPath,
                 conversationStore: appState.conversationStore
             )
+        }
+        // R1: PlanMode 审批弹窗
+        .sheet(isPresented: $appState.showPlanApprovalSheet) {
+            if let plan = appState.pendingPlanForApproval {
+                PlanApprovalView(
+                    plan: plan,
+                    onApprove: {
+                        appState.showPlanApprovalSheet = false
+                        Task {
+                            if let planMode = appState.planModeState {
+                                await planMode.approve()
+                            }
+                        }
+                    },
+                    onReject: { reason in
+                        appState.showPlanApprovalSheet = false
+                        Task {
+                            if let planMode = appState.planModeState {
+                                await planMode.reject(reason: reason)
+                            }
+                        }
+                    }
+                )
+            }
+        }
+        // R1: 结构化提问弹窗
+        .sheet(isPresented: $appState.showAskUserQuestionSheet) {
+            if let questions = appState.pendingQuestions {
+                AskUserQuestionView(
+                    questions: questions,
+                    onSubmit: { answers in
+                        appState.showAskUserQuestionSheet = false
+                        appState.pendingQuestions = nil
+                        // 将用户回答作为系统消息注入对话
+                        let answerText = questions.enumerated().map { (index, q) in
+                            "Q: \(q.question)\nA: \(answers[index])"
+                        }.joined(separator: "\n\n")
+                        displayMessages.append(DisplayMessage(
+                            role: .user,
+                            content: answerText,
+                            timestamp: Date()
+                        ))
+                    }
+                )
+            }
         }
     }
 
@@ -224,6 +270,14 @@ struct ChatView: View {
                 conversationStore: conversationStore,
                 fileSystemService: fileSystemService,
                 runtimeExecutor: runtimeExecutor,
+                skillRegistry: appState.skillRegistry,
+                memoryStore: appState.memoryStore,
+                commandRegistry: appState.commandRegistry,
+                planModeState: appState.planModeState,
+                webSearchProvider: appState.webSearchProvider,
+                taskList: appState.taskList,
+                teamCoordinator: appState.teamCoordinator,
+                mcpManager: appState.mcpManager,
                 session: session
             )
             self.agentLoop = loop
@@ -424,6 +478,109 @@ struct ChatView: View {
             // Agent 完成后焦点保持 .chat，用户手动切回 .code
             // P1-1: 对话完成后刷新会话列表（新消息已保存到磁盘）
             Task { await loadSessionList() }
+
+        // R1/R2 新增事件处理
+        case .todoUpdated(let items):
+            // TodoWrite 工具输出 — 更新 AppState 中的 todoItems 供 TaskListView 显示
+            appState.todoItems = items
+            displayMessages.append(DisplayMessage(
+                role: .system,
+                content: "📋 任务清单已更新（\(items.count) 项）",
+                timestamp: Date()
+            ))
+
+        case .planModeEntered:
+            appState.isPlanModeActive = true
+            displayMessages.append(DisplayMessage(
+                role: .system,
+                content: "🔍 已进入计划模式（只读操作）",
+                timestamp: Date()
+            ))
+
+        case .planApprovalRequested(let plan):
+            appState.pendingPlanForApproval = plan
+            appState.showPlanApprovalSheet = true
+
+        case .planApproved:
+            appState.isPlanModeActive = false
+            appState.showPlanApprovalSheet = false
+            appState.pendingPlanForApproval = nil
+            displayMessages.append(DisplayMessage(
+                role: .system,
+                content: "✅ 计划已批准，开始执行",
+                timestamp: Date()
+            ))
+
+        case .planRejected(let reason):
+            appState.isPlanModeActive = false
+            appState.showPlanApprovalSheet = false
+            appState.pendingPlanForApproval = nil
+            displayMessages.append(DisplayMessage(
+                role: .system,
+                content: "❌ 计划被拒绝: \(reason)",
+                timestamp: Date()
+            ))
+
+        case .askUserQuestion(let questions):
+            appState.pendingQuestions = questions
+            appState.showAskUserQuestionSheet = true
+
+        case .skillTriggered(let skillName):
+            displayMessages.append(DisplayMessage(
+                role: .system,
+                content: "⚡ 技能触发: \(skillName)",
+                timestamp: Date()
+            ))
+
+        case .memoryInjected(let count):
+            displayMessages.append(DisplayMessage(
+                role: .system,
+                content: "🧠 注入 \(count) 条相关记忆",
+                timestamp: Date()
+            ))
+
+        // R2 新增事件（T04 Sub-agent 相关，T03 阶段做基本显示）
+        case .taskCreated(let task):
+            displayMessages.append(DisplayMessage(
+                role: .system,
+                content: "📝 任务创建: \(task.subject)",
+                timestamp: Date()
+            ))
+
+        case .taskUpdated(let task):
+            displayMessages.append(DisplayMessage(
+                role: .system,
+                content: "📝 任务更新: \(task.subject) → \(task.status)",
+                timestamp: Date()
+            ))
+
+        case .agentSpawned(let name, let task):
+            displayMessages.append(DisplayMessage(
+                role: .system,
+                content: "🤖 子 agent 启动: \(name) — \(task)",
+                timestamp: Date()
+            ))
+
+        case .agentCompleted(let name, let result):
+            displayMessages.append(DisplayMessage(
+                role: .system,
+                content: "🤖 子 agent 完成: \(name) — \(result)",
+                timestamp: Date()
+            ))
+
+        case .mcpToolCall(let serverId, let toolName):
+            displayMessages.append(DisplayMessage(
+                role: .system,
+                content: "🔌 MCP 调用: \(serverId)/\(toolName)",
+                timestamp: Date()
+            ))
+
+        case .messageReceived(let from, let content):
+            displayMessages.append(DisplayMessage(
+                role: .system,
+                content: "📨 收到消息 from \(from): \(content)",
+                timestamp: Date()
+            ))
         }
     }
 
@@ -528,6 +685,14 @@ struct ChatView: View {
             conversationStore: conversationStore,
             fileSystemService: fileSystemService,
             runtimeExecutor: runtimeExecutor,
+            skillRegistry: appState.skillRegistry,
+            memoryStore: appState.memoryStore,
+            commandRegistry: appState.commandRegistry,
+            planModeState: appState.planModeState,
+            webSearchProvider: appState.webSearchProvider,
+            taskList: appState.taskList,
+            teamCoordinator: appState.teamCoordinator,
+            mcpManager: appState.mcpManager,
             session: restored
         )
         let window = resolveContextWindow()
@@ -596,6 +761,14 @@ struct ChatView: View {
                 conversationStore: conversationStore,
                 fileSystemService: fileSystemService,
                 runtimeExecutor: runtimeExecutor,
+                skillRegistry: appState.skillRegistry,
+                memoryStore: appState.memoryStore,
+                commandRegistry: appState.commandRegistry,
+                planModeState: appState.planModeState,
+                webSearchProvider: appState.webSearchProvider,
+                taskList: appState.taskList,
+                teamCoordinator: appState.teamCoordinator,
+                mcpManager: appState.mcpManager,
                 session: session
             )
             await loop.updateContextWindow(resolveContextWindow())

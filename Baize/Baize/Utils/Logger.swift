@@ -25,3 +25,18 @@ let runtimeLogger = Logger(subsystem: "com.baize.app", category: "Runtime")
 
 /// UI — 视图层相关日志
 let uiLogger = Logger(subsystem: "com.baize.app", category: "UI")
+
+/// Skills — 技能系统相关日志（R1 新增）
+let skillLogger = Logger(subsystem: "com.baize.app", category: "Skills")
+
+/// Memory — 记忆系统相关日志（R1 新增）
+let memoryLogger = Logger(subsystem: "com.baize.app", category: "Memory")
+
+/// Commands — Slash 命令相关日志（R1 新增）
+let commandLogger = Logger(subsystem: "com.baize.app", category: "Commands")
+
+/// PlanMode — 计划模式相关日志（R1 新增）
+let planModeLogger = Logger(subsystem: "com.baize.app", category: "PlanMode")
+
+/// WebSearch — 网络搜索相关日志（R1 新增）
+let webSearchLogger = Logger(subsystem: "com.baize.app", category: "WebSearch")

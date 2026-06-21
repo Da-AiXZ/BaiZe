@@ -41,6 +41,22 @@ actor ToolRegistry {
         let execCmd = ExecuteCommandTool(runtimeExecutor: rt);  tools[execCmd.name] = execCmd
         let runNode = RunNodeTool(runtimeExecutor: rt);         tools[runNode.name] = runNode
         let runPython = RunPythonTool(runtimeExecutor: rt);     tools[runPython.name] = runPython
+        // R1 新增工具 (7 个) — 无需注入依赖，通过 ToolExecutionContext 访问
+        let todoWrite = TodoWriteTool();                       tools[todoWrite.name] = todoWrite
+        let askUser = AskUserQuestionTool();                   tools[askUser.name] = askUser
+        let webFetch = WebFetchTool();                         tools[webFetch.name] = webFetch
+        let webSearch = WebSearchTool();                       tools[webSearch.name] = webSearch
+        let enterPlan = EnterPlanModeTool();                   tools[enterPlan.name] = enterPlan
+        let exitPlan = ExitPlanModeTool();                     tools[exitPlan.name] = exitPlan
+        let skill = SkillTool();                               tools[skill.name] = skill
+        // R2 新增工具 (7 个) — Sub-agent + MCP
+        let agent = AgentTool();                               tools[agent.name] = agent
+        let taskCreate = TaskCreateTool();                     tools[taskCreate.name] = taskCreate
+        let taskUpdate = TaskUpdateTool();                     tools[taskUpdate.name] = taskUpdate
+        let taskListTool = TaskListTool();                     tools[taskListTool.name] = taskListTool
+        let taskGet = TaskGetTool();                           tools[taskGet.name] = taskGet
+        let sendMessage = SendMessageTool();                   tools[sendMessage.name] = sendMessage
+        let mcpTool = MCPTool();                               tools[mcpTool.name] = mcpTool
         return tools
     }
 
@@ -102,6 +118,34 @@ actor ToolRegistry {
     /// 检查工具是否已注册
     func hasTool(name: String) -> Bool {
         tools[name] != nil
+    }
+
+    // MARK: - R1 扩展：工具查询
+
+    /// 获取工具实例 — 供 PermissionEngine 动态查询工具属性
+    /// R1 新增：PermissionEngine.findTool() 通过此方法查询 Tool 实例，
+    /// 替代之前的硬编码 ToolInfo 列表
+    /// - Parameter name: 工具名称
+    /// - Returns: Tool 实例（如果已注册）
+    func getTool(name: String) -> Tool? {
+        tools[name]
+    }
+
+    /// 按分类获取工具列表 — 供 AgentLoop 动态过滤可用工具
+    /// R1 新增：支持按 ToolCategory 查询工具（如只查 .planning 类工具）
+    /// - Parameter category: 工具分类
+    /// - Returns: 该分类下所有已注册工具
+    func getToolsByCategory(_ category: ToolCategory) -> [Tool] {
+        tools.values.filter { $0.category == category }
+    }
+
+    /// 获取所有可用工具（通过 isAvailable 过滤）
+    /// R1 新增：某些工具可能依赖特定运行时或服务（如 WebSearchTool 需 webSearchProvider）
+    /// AgentLoop 构建工具定义列表时调用此方法，只向 LLM 发送可用工具
+    /// - Parameter context: 工具执行上下文（用于检查服务依赖）
+    /// - Returns: 所有已注册且可用的工具
+    func getAvailableTools(context: ToolExecutionContext) -> [Tool] {
+        tools.values.filter { $0.isAvailable(context: context) }
     }
 
 }

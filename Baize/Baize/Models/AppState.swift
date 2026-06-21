@@ -187,6 +187,52 @@ class AppState: ObservableObject {
     /// 由 EditorContainerView 在初始化时注入
     var editorState: EditorState?
 
+    // MARK: - R1/R2 新增服务引用（T02/T03/T04 补全实现后注入）
+
+    /// Skills 注册表（actor）— T02 补全实现后注入
+    var skillRegistry: SkillRegistry?
+
+    /// Memory 存储（actor）— T02 补全实现后注入
+    var memoryStore: MemoryStore?
+
+    /// Slash 命令注册表（actor）— T02 补全实现后注入
+    var commandRegistry: CommandRegistry?
+
+    /// PlanMode 状态机（actor）— T02 补全实现后注入
+    var planModeState: PlanModeState?
+
+    /// 网络搜索 Provider（protocol）— T02 补全实现后注入
+    var webSearchProvider: WebSearchProvider?
+
+    /// 共享任务列表（actor）— T04 补全实现后注入
+    var taskList: TaskList?
+
+    /// 团队协调器（actor）— T04 补全实现后注入
+    var teamCoordinator: TeamCoordinator?
+
+    /// MCP 连接管理器（actor）— T04 补全实现后注入
+    var mcpManager: MCPManager?
+
+    // MARK: - R1 UI State（PlanMode/AskUserQuestion/Todo 等 UI 交互状态）
+
+    /// TodoWrite 工具维护的任务清单（供 TaskListView 显示）
+    @Published var todoItems: [TodoItem] = []
+
+    /// PlanMode 是否激活（UI 显示"计划模式"标识）
+    @Published var isPlanModeActive: Bool = false
+
+    /// 待审批的计划文本
+    @Published var pendingPlanForApproval: String? = nil
+
+    /// 是否显示 PlanMode 审批弹窗
+    @Published var showPlanApprovalSheet: Bool = false
+
+    /// 待回答的结构化问题列表
+    @Published var pendingQuestions: [UserQuestion]? = nil
+
+    /// 是否显示结构化提问弹窗
+    @Published var showAskUserQuestionSheet: Bool = false
+
     // MARK: - Error State
 
     /// 最近错误消息（用于全局 Alert）

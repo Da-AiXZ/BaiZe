@@ -11,8 +11,14 @@ struct ChatInputView: View {
     let onSend: (String) -> Void
     /// Bug 3 fix: 停止按钮回调 — Agent 运行时点击停止生成
     let onStop: () -> Void
+    /// R1: AppState 引用（用于命令/技能检测）
+    var appState: AppState? = nil
     @State private var editorHeight: CGFloat = 40
     @State private var isFocused: Bool = false
+    /// R1: 命令补全建议
+    @State private var commandSuggestion: String? = nil
+    /// R1: 技能触发提示
+    @State private var skillSuggestion: String? = nil
 
     /// 最大输入高度（超过此高度后滚动）
     private let maxEditorHeight: CGFloat = 120
@@ -55,6 +61,51 @@ struct ChatInputView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Color.baizeInputBackground)
+        // R1: 命令/技能检测 — 输入变化时检测
+        .onChange(of: text) { newValue in
+            detectCommandOrSkill(newValue)
+        }
+        // R1: 命令补全建议
+        .overlay(alignment: .top) {
+            if let suggestion = commandSuggestion {
+                HStack(spacing: 6) {
+                    Image(systemName: "terminal.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(.baizeAccent)
+                    Text("命令: \(suggestion)")
+                        .font(.system(size: 12))
+                        .foregroundColor(.baizeAccent)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.baizeAccent.opacity(0.1))
+                .cornerRadius(8)
+                .padding(.horizontal, 12)
+                .offset(y: -32)
+                .transition(.opacity)
+            }
+        }
+        .overlay(alignment: .top) {
+            if let suggestion = skillSuggestion {
+                HStack(spacing: 6) {
+                    Image(systemName: "wand.and.stars")
+                        .font(.system(size: 11))
+                        .foregroundColor(.baizeWarning)
+                    Text("检测到技能: \(suggestion)")
+                        .font(.system(size: 12))
+                        .foregroundColor(.baizeWarning)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.baizeWarning.opacity(0.1))
+                .cornerRadius(8)
+                .padding(.horizontal, 12)
+                .offset(y: -32)
+                .transition(.opacity)
+            }
+        }
         // Bug 5 fix: Agent 运行状态变化时管理键盘焦点
         .onChange(of: isRunning) { running in
             if running {
@@ -68,6 +119,44 @@ struct ChatInputView: View {
                         #selector(UIResponder.resignFirstResponder),
                         to: nil, from: nil, for: nil
                     )
+                }
+            }
+        }
+    }
+
+    // MARK: - R1: Command/Skill Detection
+
+    /// 检测输入是否为 slash 命令或匹配技能触发词
+    private func detectCommandOrSkill(_ input: String) {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // 清空建议
+        commandSuggestion = nil
+        skillSuggestion = nil
+
+        guard !trimmed.isEmpty, let state = appState else { return }
+
+        // 1. 检测 slash 命令
+        if trimmed.hasPrefix("/") {
+            Task {
+                if let registry = state.commandRegistry {
+                    if let (command, _) = await registry.parse(input: trimmed) {
+                        await MainActor.run {
+                            commandSuggestion = command.name
+                        }
+                    }
+                }
+            }
+            return
+        }
+
+        // 2. 检测技能触发词
+        Task {
+            if let registry = state.skillRegistry {
+                if let skill = await registry.matchSkill(input: trimmed) {
+                    await MainActor.run {
+                        skillSuggestion = skill.name
+                    }
                 }
             }
         }

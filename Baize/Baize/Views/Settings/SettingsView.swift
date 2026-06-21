@@ -60,6 +60,36 @@ struct SettingsView: View {
                 )
             }
 
+            // R1: 搜索引擎设置
+            NavigationLink(value: SettingsSection.searchEngine) {
+                SettingsRow(
+                    icon: "magnifyingglass",
+                    iconColor: Color.baizeAccent,
+                    title: "搜索引擎",
+                    subtitle: searchEngineSubtitle
+                )
+            }
+
+            // R1: 记忆管理
+            NavigationLink(value: SettingsSection.memory) {
+                SettingsRow(
+                    icon: "brain.head.profile",
+                    iconColor: Color.baizeSuccess,
+                    title: "记忆管理",
+                    subtitle: "自动提取 \(MemoryExtractor.isAutoExtractionEnabled() ? "已开启" : "已关闭")"
+                )
+            }
+
+            // R1: 技能管理
+            NavigationLink(value: SettingsSection.skills) {
+                SettingsRow(
+                    icon: "wand.and.stars",
+                    iconColor: Color.baizeWarning,
+                    title: "技能管理",
+                    subtitle: "已安装技能"
+                )
+            }
+
             // 关于白泽
             NavigationLink(value: SettingsSection.about) {
                 SettingsRow(
@@ -82,6 +112,12 @@ struct SettingsView: View {
                 StorageSettingsView(appState: appState)
             case .gitConfig:
                 GitSettingsView(appState: appState)
+            case .searchEngine:
+                SearchEngineSettingsView(appState: appState)
+            case .memory:
+                MemorySettingsView(appState: appState)
+            case .skills:
+                SkillsManagerView(appState: appState)
             case .about:
                 AboutView()
             }
@@ -97,6 +133,15 @@ struct SettingsView: View {
         if keychain.loadOpenRouterKey() != nil { configured.append("OpenRouter") }
         let keyStatus = configured.isEmpty ? "未配置 Key" : "Key: " + configured.joined(separator: ", ")
         return "\(appState.activeProvider.displayName) / \(appState.activeModel)  |  \(keyStatus)"
+    }
+
+    /// 搜索引擎状态描述
+    private var searchEngineSubtitle: String {
+        let keychain = KeychainService()
+        if keychain.load(key: WebSearchFactory.tavilyKeyKeychainKey) != nil { return "Tavily" }
+        if keychain.load(key: WebSearchFactory.bingKeyKeychainKey) != nil { return "Bing" }
+        if keychain.load(key: WebSearchFactory.googleKeyKeychainKey) != nil { return "Google" }
+        return "DuckDuckGo（免 Key）"
     }
 
     /// 运行时状态描述
@@ -134,7 +179,13 @@ enum SettingsSection: Hashable, Identifiable {
     case permission
     case storage
     case gitConfig
+    case searchEngine  // R1: 搜索引擎设置
+    case memory        // R1: 记忆管理
+    case skills        // R1: 技能管理
     case about
+
+    var id: Self { self }
+}
 
     var id: String { "\(self)" }
 

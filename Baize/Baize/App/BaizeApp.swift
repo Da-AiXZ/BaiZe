@@ -80,7 +80,9 @@ struct BaizeApp: App {
         let projectCtx = ProjectContext(rootPath: workingRoot, fileSystemService: fsService)
         let api = APIGateway(keychainService: keychain)
         // P0-2: ContextManager 注入 apiGateway，用于调 LLM 生成上下文摘要
-        let contextMgr = ContextManager(projectContext: projectCtx, apiGateway: api)
+        // R1: ContextManager 注入 memoryStore，用于在 buildSystemPrompt 时注入相关记忆
+        let memoryStore = MemoryStore()
+        let contextMgr = ContextManager(projectContext: projectCtx, apiGateway: api, memoryStore: memoryStore)
         let conversation = ConversationStore()
         let registry = ToolRegistry(fileSystemService: fsService, runtimeExecutor: runtime, nodeEngine: nodeEngine, pythonEngine: pythonEngine)
 
@@ -139,12 +141,39 @@ struct BaizeApp: App {
             state.projectRegistry = projectRegistry
             state.usageTracker = usageTracker
 
+            // R1/R2 新增服务实例化（T02/T04 真实实现）
+            let skillReg = SkillRegistry()        // T02 完整实现
+            let memStore = memoryStore            // 复用已创建的 MemoryStore 实例（与 ContextManager 共享）
+            let cmdRegistry = CommandRegistry()   // T02 完整实现
+            let planMode = PlanModeState()        // T02 完整实现
+            let taskListActor = TaskList()         // T04 完整实现
+            let teamCoord = TeamCoordinator(taskList: taskListActor)  // T04 完整实现
+            let mcpMgr = MCPManager()              // T04 完整实现
+
+            // R1: 加载内置技能和用户技能
+            await skillReg.loadBundledSkills()
+            await skillReg.loadUserSkills()
+
+            // R1: 创建 WebSearch Provider（降级策略：有 API key 用 Tavily/Bing/Google，无 key 用 DuckDuckGo）
+            let webSearch = WebSearchFactory.createBestAvailable(keychainService: keychain)
+
+            state.skillRegistry = skillReg
+            state.memoryStore = memStore
+            state.commandRegistry = cmdRegistry
+            state.planModeState = planMode
+            state.taskList = taskListActor
+            state.teamCoordinator = teamCoord
+            state.mcpManager = mcpMgr
+            state.webSearchProvider = webSearch
+
             // Phase 2C: 恢复上次 Provider/Model 选择
             state.restoreProviderSelection()
             state.restoreCustomConfig()
             Task {
                 // T04: 注入 UsageTracker 到 APIGateway（非侵入式拦截 usage 记录用量）
                 await api.setUsageTracker(usageTracker)
+                // R1 扩展：注入 ToolRegistry 到 PermissionEngine（动态查询工具属性 + needsPermission）
+                permission.setToolRegistry(registry)
                 do {
                     try await api.setActiveProvider(providerId: state.activeProvider.providerId, model: state.activeModel)
                 } catch {

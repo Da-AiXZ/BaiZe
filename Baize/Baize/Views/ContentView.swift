@@ -8,74 +8,57 @@ struct ContentView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .detailOnly
     @State private var showNewProjectWizard = false
     @State private var projectList: [ProjectEntry] = []
+    @State private var showWorkbench: Bool = false
+
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
 
     var body: some View {
-        TabView(selection: $appState.selectedTab) {
-            // Tab 1: 工作区 — 两栏 NavigationSplitView
+        // R3 重构：横屏用 HSplitView（聊天 + 工作台），竖屏用 TabView + 抽屉
+        if horizontalSizeClass == .regular {
+            // 横屏：NavigationSplitView（文件浏览器 + HSplitView(工作区 + 工作台)）
             NavigationSplitView(columnVisibility: $columnVisibility) {
-                // 左栏：文件浏览器（sidebar, 可滑出）
                 FileExplorerView(appState: appState)
                     .navigationTitle("项目文件")
             } detail: {
-                // 右栏：工作区面板（编辑器 + 对话面板，焦点驱动宽度）
-                // Bug B fix: FocusModeBar 使用 safeAreaInset 固定在顶部，确保 iOS 上可见
-                WorkspacePane(appState: appState)
+                R3WorkspacePane(appState: appState, showWorkbench: $showWorkbench)
                     .safeAreaInset(edge: .top, spacing: 0) {
-                        // T03: 项目切换菜单（左侧）+ 焦点模式切换（右侧）+ Agent 状态
-                        HStack(spacing: 8) {
-                            // T03: 项目切换下拉菜单
-                            ProjectSwitcherMenu(
-                                appState: appState,
-                                projectList: projectList,
-                                onNewProject: { showNewProjectWizard = true },
-                                onSwitchProject: { path in
-                                    Task { await appState.switchProject(to: path) }
-                                },
-                                onRefreshList: { Task { await refreshProjectList() } }
-                            )
-
-                            Spacer()
-
-                            FocusModeBar(focusMode: $appState.focusMode, isAgentRunning: appState.isAgentRunning)
-                            AgentStatusIndicator(isRunning: appState.isAgentRunning)
-                                .padding(.trailing, 4)
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color(.systemBackground).opacity(0.95))
+                        topBar
                     }
             }
             .navigationSplitViewStyle(.balanced)
-            .tabItem { Label(AppTab.workspace.title, systemImage: AppTab.workspace.systemImage) }
-            .tag(AppTab.workspace)
-
-            // Tab 2: Git — 独立 NavigationStack
-            NavigationStack {
-                if let gitVM = appState.gitViewModel {
-                    GitStatusView(viewModel: gitVM)
-                } else {
-                    Text("Git 服务未初始化")
-                        .foregroundColor(.secondary)
+        } else {
+            // 竖屏：保留 TabView 布局 + 工作台作为独立 Tab
+            TabView(selection: $appState.selectedTab) {
+                NavigationStack {
+                    WorkspacePane(appState: appState)
+                        .safeAreaInset(edge: .top, spacing: 0) {
+                            topBar
+                        }
                 }
-            }
-            .tabItem { Label(AppTab.git.title, systemImage: AppTab.git.systemImage) }
-            .tag(AppTab.git)
+                .tabItem { Label(AppTab.workspace.title, systemImage: AppTab.workspace.systemImage) }
+                .tag(AppTab.workspace)
 
-            // Tab 3: 首页 — 独立 NavigationStack
-            NavigationStack {
-                DashboardView()
-            }
-            .tabItem { Label(AppTab.dashboard.title, systemImage: AppTab.dashboard.systemImage) }
-            .tag(AppTab.dashboard)
+                NavigationStack {
+                    WorkbenchSidebar(appState: appState)
+                        .navigationTitle("工作台")
+                }
+                .tabItem { Label("工作台", systemImage: "sidebar.right") }
+                .tag(AppTab.git)
 
-            // Tab 4: 设置 — 独立 NavigationStack（子页面用 NavigationLink 推入，不逃逸）
-            NavigationStack {
-                SettingsView(appState: appState)
+                NavigationStack {
+                    DashboardView()
+                }
+                .tabItem { Label(AppTab.dashboard.title, systemImage: AppTab.dashboard.systemImage) }
+                .tag(AppTab.dashboard)
+
+                NavigationStack {
+                    SettingsView(appState: appState)
+                }
+                .tabItem { Label(AppTab.settings.title, systemImage: AppTab.settings.systemImage) }
+                .tag(AppTab.settings)
             }
-            .tabItem { Label(AppTab.settings.title, systemImage: AppTab.settings.systemImage) }
-            .tag(AppTab.settings)
+            .tint(Color.baizeAccent)
         }
-        .tint(Color.baizeAccent)
         // Agent 运行时自动切换焦点到对话面板
         // Bug 5 fix: 使用 withAnimation 包裹，替代原 WorkspacePane 上的 .animation 修饰符
         // （.animation 已移除以避免动画传导到 ChatView 内部长内容全量重绘）
@@ -103,6 +86,50 @@ struct ContentView: View {
         .onChange(of: appState.currentProjectPath) { _ in
             Task { await refreshProjectList() }
         }
+    }
+
+    // MARK: - R3 Top Bar
+
+    /// 顶部工具栏 — 项目切换 + 焦点模式 + 工作台开关 + Agent 状态
+    private var topBar: some View {
+        HStack(spacing: 8) {
+            ProjectSwitcherMenu(
+                appState: appState,
+                projectList: projectList,
+                onNewProject: { showNewProjectWizard = true },
+                onSwitchProject: { path in
+                    Task { await appState.switchProject(to: path) }
+                },
+                onRefreshList: { Task { await refreshProjectList() } }
+            )
+
+            Spacer()
+
+            FocusModeBar(focusMode: $appState.focusMode, isAgentRunning: appState.isAgentRunning)
+
+            // R3: 工作台开关按钮（仅横屏显示）
+            if horizontalSizeClass == .regular {
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        showWorkbench.toggle()
+                    }
+                }) {
+                    Image(systemName: showWorkbench ? "sidebar.right" : "sidebar.right")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(showWorkbench ? .baizeAccent : .secondary)
+                        .padding(6)
+                        .background(showWorkbench ? Color.baizeAccent.opacity(0.1) : Color.clear)
+                        .cornerRadius(6)
+                }
+                .buttonStyle(.plain)
+            }
+
+            AgentStatusIndicator(isRunning: appState.isAgentRunning)
+                .padding(.trailing, 4)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color(.systemBackground).opacity(0.95))
     }
 
     // MARK: - T03: Project List Refresh
@@ -157,6 +184,33 @@ private struct WorkspacePane: View {
         // 原因：该 .animation 作用于整个 WorkspacePane，导致 focusMode 切换时 ChatView 内部
         // ChatMessageList（长内容 ScrollView）也参与宽度动画重绘 → 18 帧全量重布局 → 卡顿。
         // 动画范围隔离改在 ChatMessageList 内部用 .transaction 实现（见 ChatView.swift）。
+    }
+}
+
+// MARK: - R3 Workspace Pane (横屏: 聊天 + 工作台 HSplitView)
+
+/// R3 横屏工作区面板 — 编辑器/对话 + 工作台侧栏
+@MainActor
+private struct R3WorkspacePane: View {
+    @ObservedObject var appState: AppState
+    @Binding var showWorkbench: Bool
+
+    var body: some View {
+        GeometryReader { geo in
+            HStack(spacing: 0) {
+                // 左侧：工作区（编辑器 + 对话 + 终端）
+                WorkspacePane(appState: appState)
+                    .frame(width: showWorkbench ? geo.size.width - 360 : geo.size.width)
+
+                // 右侧：工作台侧栏
+                if showWorkbench {
+                    Divider()
+                        .background(Color.baizeBorder)
+                    WorkbenchSidebar(appState: appState)
+                        .frame(width: 360)
+                }
+            }
+        }
     }
 }
 

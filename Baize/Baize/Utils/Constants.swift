@@ -42,6 +42,32 @@ enum BaizePath {
 
     /// 项目导出目录名（相对项目根目录）
     static let exportsDirName = "exports"
+
+    // MARK: - R1 新增：Memory & Skills 路径
+
+    /// Memory 存储根目录 — 跨项目持久化记忆
+    static let memoryDir = "/var/mobile/Documents/Baize/memory"
+
+    /// 用户级记忆目录 — 跨所有项目的用户偏好/决策记忆
+    static let userMemoryDir = memoryDir + "/user"
+
+    /// 项目级记忆目录 — 按项目路径隔离的项目记忆
+    static let projectMemoryDir = memoryDir + "/project"
+
+    /// 团队级记忆目录 — 多 agent 共享记忆
+    static let teamMemoryDir = memoryDir + "/team"
+
+    /// Skills 存储根目录
+    static let skillsDir = "/var/mobile/Documents/Baize/skills"
+
+    /// 用户级技能目录 — 用户安装的技能
+    static let userSkillsDir = skillsDir + "/user"
+
+    /// 项目级技能目录 — 项目特定的技能
+    static let projectSkillsDir = skillsDir + "/project"
+
+    /// App Bundle 内置技能目录 — 预装技能
+    static let bundledSkillsDir = "skills"
 }
 
 // MARK: - API Configuration
@@ -95,6 +121,22 @@ enum BaizeAPI {
 
     /// 网络错误自动重试次数
     static let maxRetries = 1
+
+    // MARK: - R1 新增：搜索引擎端点
+
+    /// Tavily Search API 端点（AI 优化搜索，需 API key）
+    static let tavilyEndpoint = "https://api.tavily.com/search"
+
+    /// Bing Search API 端点（微软搜索，需 API key）
+    static let bingEndpoint = "https://api.bing.microsoft.com/v7.0/search"
+
+    /// Google Custom Search API 端点（需 API key + CX ID）
+    static let googleEndpoint = "https://www.googleapis.com/customsearch/v1"
+
+    // MARK: - R5 新增：嵌入 API 端点
+
+    /// OpenAI Embeddings API 端点（远程向量嵌入，Memory 阶段3 用）
+    static let openaiEmbeddingEndpoint = "https://api.openai.com/v1/embeddings"
 }
 
 // MARK: - Model Definitions
@@ -350,6 +392,14 @@ enum BaizeToken {
 
     /// 非 CJK 字符 token 估算系数（每 UTF-8 byte 约 0.25 token，与原逻辑一致）
     static let nonCjkByteRatio = 0.25
+
+    // MARK: - R1 新增：Memory 相关常量
+
+    /// 新会话注入记忆条数上限 — buildSystemPrompt 时注入的最多记忆条数
+    static let memoryInjectionLimit = 5
+
+    /// 记忆提取间隔 — 每 N 轮对话自动提取一次记忆
+    static let memoryExtractionInterval = 5
 }
 
 // MARK: - Summary Configuration

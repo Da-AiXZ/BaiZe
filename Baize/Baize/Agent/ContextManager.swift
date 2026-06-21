@@ -23,20 +23,27 @@ struct ContextManager {
     /// API 网关 — 用于调 LLM 生成上下文摘要
     private let apiGateway: APIGateway
 
+    /// R1 新增：Memory 存储 — 用于在 buildSystemPrompt 时注入相关记忆
+    /// 通过 init 注入，可为 nil（T01 占位阶段无记忆功能）
+    private let memoryStore: MemoryStore?
+
     // MARK: - Initialization
 
     /// 创建上下文管理器
     /// - Parameters:
     ///   - projectContext: 项目上下文（BAIZE.md 等）
     ///   - apiGateway: API 网关（用于摘要 LLM 调用）
+    ///   - memoryStore: 记忆存储（R1 新增，可选 — nil 时不注入记忆）
     ///   - tokenBudget: Token 预算上限，默认为可用历史 token 数
     init(
         projectContext: ProjectContext,
         apiGateway: APIGateway,
+        memoryStore: MemoryStore? = nil,
         tokenBudget: Int = BaizeToken.availableHistoryTokens
     ) {
         self.projectContext = projectContext
         self.apiGateway = apiGateway
+        self.memoryStore = memoryStore
         self.tokenBudget = tokenBudget
     }
 
@@ -45,16 +52,19 @@ struct ContextManager {
     /// 构建完整的 LLM 请求上下文（P0: 改为 async）
     ///
     /// 流程：
-    /// 1. 构建系统提示
+    /// 1. 构建系统提示（R1 新增：注入相关记忆）
     /// 2. 判断是否需要压缩（shouldCompact）
     /// 3. 若需要压缩：调 compact（async，含 LLM 摘要生成）
     /// 4. 构建最终消息列表（system prompt + 压缩后的历史）
     ///
-    /// - Parameter messages: 当前对话消息列表
-    /// - Returns: PromptContext（包含构建好的消息列表 + 压缩元信息）
-    func buildContext(messages: [Message], contextWindow: Int = BaizeToken.maxContextTokens) async -> PromptContext {
-        // 1. 构建系统提示
-        let systemPrompt = buildSystemPrompt()
+    /// - Parameters:
+    ///   - messages: 当前对话消息列表
+    ///   - contextWindow: 当前模型的上下文窗口大小
+    ///   - userQuery: 用户当前输入（R1 新增 — 用于记忆检索匹配，可选）
+    /// - Returns: PromptContext（包含构建好的消息列表 + 压缩元信息 + 注入记忆数）
+    func buildContext(messages: [Message], contextWindow: Int = BaizeToken.maxContextTokens, userQuery: String? = nil) async -> PromptContext {
+        // 1. 构建系统提示（R1: 注入相关记忆）
+        let (systemPrompt, injectedMemoryCount) = await buildSystemPrompt(userQuery: userQuery)
 
         // 2. 判断是否需要压缩
         var processedMessages = messages
@@ -94,7 +104,8 @@ struct ContextManager {
             summaryText: summaryText,
             compactionError: compactionError,
             compactedCount: compactedCount,
-            retainedCount: retainedCount
+            retainedCount: retainedCount,
+            injectedMemoryCount: injectedMemoryCount
         )
     }
 
@@ -375,7 +386,10 @@ struct ContextManager {
     // MARK: - Private Methods
 
     /// 构建系统提示 — 定义 Agent 的角色和行为规范
-    private func buildSystemPrompt() -> String {
+    /// R1 新增：注入相关记忆（从 MemoryStore 检索）
+    /// - Parameter userQuery: 用户当前输入（用于记忆检索匹配，可选）
+    /// - Returns: (系统提示文本, 注入记忆条数)
+    private func buildSystemPrompt(userQuery: String?) async -> (String, Int) {
         var prompt = """
         你是白泽（Baize），一个运行在 iOS iPad 上的本地编程智能体。
 
@@ -399,9 +413,26 @@ struct ContextManager {
             prompt += "\n项目配置 (BAIZE.md):\n" + baizeExtension
         }
 
+        // R1 新增：注入相关记忆
+        var injectedMemoryCount = 0
+        if let store = memoryStore, let query = userQuery, !query.isEmpty {
+            let memories = await store.findRelevantMemories(
+                query: query,
+                limit: BaizeToken.memoryInjectionLimit
+            )
+
+            if !memories.isEmpty {
+                injectedMemoryCount = memories.count
+                let memoryText = memories.map { memory in
+                    "- [\(memory.type.rawValue)] \(memory.content)"
+                }.joined(separator: "\n")
+                prompt += "\n\n相关记忆:\n" + memoryText
+            }
+        }
+
         prompt += "\n\n请基于以上信息，为用户提供编程帮助。"
 
-        return prompt
+        return (prompt, injectedMemoryCount)
     }
 }
 
@@ -464,6 +495,9 @@ struct PromptContext {
     /// 保留的近期消息条数
     let retainedCount: Int
 
+    /// R1 新增：注入的记忆条数（用于发射 .memoryInjected(count:) 事件）
+    let injectedMemoryCount: Int
+
     /// 创建 PromptContext
     init(
         systemPrompt: String,
@@ -474,7 +508,8 @@ struct PromptContext {
         summaryText: String? = nil,
         compactionError: String? = nil,
         compactedCount: Int = 0,
-        retainedCount: Int = 0
+        retainedCount: Int = 0,
+        injectedMemoryCount: Int = 0
     ) {
         self.systemPrompt = systemPrompt
         self.messages = messages
@@ -485,5 +520,6 @@ struct PromptContext {
         self.compactionError = compactionError
         self.compactedCount = compactedCount
         self.retainedCount = retainedCount
+        self.injectedMemoryCount = injectedMemoryCount
     }
 }

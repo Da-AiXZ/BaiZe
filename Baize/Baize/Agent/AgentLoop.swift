@@ -19,6 +19,18 @@ actor AgentLoop {
     private let fileSystemService: FileSystemService
     private let runtimeExecutor: RuntimeExecutor
 
+    /// R1 新增：新工具所需的服务（可选，现有调用点零改动）
+    private let skillRegistry: SkillRegistry?
+    private let memoryStore: MemoryStore?
+    private let commandRegistry: CommandRegistry?
+    private let planModeState: PlanModeState?
+    private let webSearchProvider: WebSearchProvider?
+
+    /// R2 新增：Sub-agent + MCP 服务（可选，现有调用点零改动）
+    private let taskList: TaskList?
+    private let teamCoordinator: TeamCoordinator?
+    private let mcpManager: MCPManager?
+
     // MARK: - State
 
     /// 当前对话会话
@@ -46,6 +58,14 @@ actor AgentLoop {
         conversationStore: ConversationStore,
         fileSystemService: FileSystemService,
         runtimeExecutor: RuntimeExecutor,
+        skillRegistry: SkillRegistry? = nil,
+        memoryStore: MemoryStore? = nil,
+        commandRegistry: CommandRegistry? = nil,
+        planModeState: PlanModeState? = nil,
+        webSearchProvider: WebSearchProvider? = nil,
+        taskList: TaskList? = nil,
+        teamCoordinator: TeamCoordinator? = nil,
+        mcpManager: MCPManager? = nil,
         session: ConversationSession = ConversationSession()
     ) {
         self.apiGateway = apiGateway
@@ -55,6 +75,14 @@ actor AgentLoop {
         self.conversationStore = conversationStore
         self.fileSystemService = fileSystemService
         self.runtimeExecutor = runtimeExecutor
+        self.skillRegistry = skillRegistry
+        self.memoryStore = memoryStore
+        self.commandRegistry = commandRegistry
+        self.planModeState = planModeState
+        self.webSearchProvider = webSearchProvider
+        self.taskList = taskList
+        self.teamCoordinator = teamCoordinator
+        self.mcpManager = mcpManager
         self.session = session
     }
 
@@ -87,7 +115,7 @@ actor AgentLoop {
                     session.messages.append(.user(userMessage))
 
                     // 2. 进入 Agent 循环
-                    try await agentLoop(continuation: continuation)
+                    try await agentLoop(continuation: continuation, userQuery: userMessage)
 
                     // 3. 循环结束，保存对话
                     session.updatedAt = Date()
@@ -98,6 +126,12 @@ actor AgentLoop {
                         estimatedTokens: session.messages.estimatedTokens,
                         contextWindow: self.contextWindow
                     ))
+
+                    // R1: 会话结束后自动提取记忆（异步，不阻塞 .completed 事件）
+                    // 使用 detached task 确保记忆提取不阻塞 UI 完成
+                    Task.detached { [weak self] in
+                        await self?.extractMemories()
+                    }
 
                     // 4. 发送完成事件
                     continuation.yield(.completed)
@@ -148,7 +182,7 @@ actor AgentLoop {
     // MARK: - Core Loop
 
     /// Agent 核心循环：LLM 推理 → 工具调用 → 执行 → 结果注入 → 继续或结束
-    private func agentLoop(continuation: AsyncThrowingStream<AgentEvent, Error>.Continuation) async throws {
+    private func agentLoop(continuation: AsyncThrowingStream<AgentEvent, Error>.Continuation, userQuery: String? = nil) async throws {
         // 安全限制：最大循环次数防止无限循环
         let maxIterations = 50
         let maxConsecutiveFailures = 3
@@ -170,7 +204,12 @@ actor AgentLoop {
             }
 
             // P0-2: buildContext 改为 async（compact 需调 LLM 生成摘要）
-            let promptContext = await contextManager.buildContext(messages: session.messages, contextWindow: contextWindow)
+            let promptContext = await contextManager.buildContext(messages: session.messages, contextWindow: contextWindow, userQuery: userQuery)
+
+            // R1 新增：发射记忆注入事件（如果注入了记忆）
+            if promptContext.injectedMemoryCount > 0 {
+                continuation.yield(.memoryInjected(count: promptContext.injectedMemoryCount))
+            }
 
             // P0-2: 压缩后写回 session.messages，防止下轮迭代重复压缩（关键！）
             if let compacted = promptContext.compactedHistory {
@@ -293,11 +332,22 @@ actor AgentLoop {
 
                     // 权限检查
                     // W22 fix: 使用注入的共享服务，而非创建新实例
+                    // R1: 注入新工具所需的服务
                     let executionContext = ToolExecutionContext(
                         projectPath: session.projectPath,
                         fileSystemService: fileSystemService,
                         runtimeExecutor: runtimeExecutor,
-                        permissionEngine: permissionEngine
+                        permissionEngine: permissionEngine,
+                        apiGateway: apiGateway,
+                        memoryStore: memoryStore,
+                        skillRegistry: skillRegistry,
+                        taskList: taskList,
+                        planModeState: planModeState,
+                        webSearchProvider: webSearchProvider,
+                        commandRegistry: commandRegistry,
+                        teamCoordinator: teamCoordinator,
+                        mcpManager: mcpManager,
+                        toolRegistry: toolRegistry
                     )
 
                     // W4 fix: PermissionEngine 改为 actor，evaluate 需要 await
@@ -308,6 +358,19 @@ actor AgentLoop {
 
                     switch decision.effect {
                     case .allow:
+                        // R1: PlanMode 拦截写操作 — 计划模式下禁止非只读工具
+                        if let planMode = planModeState {
+                            let isInPlan = await planMode.isInPlanMode()
+                            if isInPlan && !isToolReadOnly(name: name) {
+                                let deniedResult = ToolResult.denied(reason: "计划模式下禁止写操作: \(name)")
+                                continuation.yield(.denied(toolCall, "计划模式下禁止写操作"))
+                                session.messages.append(.toolResult(id: id, content: deniedResult.toToolResultContent()))
+                                consecutiveFailures += 1
+                                userDeniedTool = true
+                                break
+                            }
+                        }
+
                         // 执行工具
                         continuation.yield(.toolExecuting(toolCall))
 
@@ -332,6 +395,9 @@ actor AgentLoop {
                         }
 
                         continuation.yield(.toolResult(toolCall, result))
+
+                        // R1: 特殊工具事件发射
+                        emitSpecialToolEvents(name: name, result: result, continuation: continuation)
 
                         // 将结果注入对话历史（P2-1: 分层截断）
                         // Bug 1 fix: tool_result 必须在所有代码路径都注入，防止 API 400
@@ -383,6 +449,8 @@ actor AgentLoop {
                             }
 
                             continuation.yield(.toolResult(toolCall, result))
+                            // R1: 特殊工具事件发射
+                            emitSpecialToolEvents(name: name, result: result, continuation: continuation)
                             // P2-1: 分层截断后注入对话历史
                             // Bug 1 fix: tool_result 必须在所有代码路径都注入，防止 API 400
                             let rawContent = result.toToolResultContent()
@@ -485,5 +553,164 @@ actor AgentLoop {
             pendingContinuation = nil
             cont.resume(returning: false)
         }
+    }
+
+    // MARK: - R1 Helper: Special Tool Events
+
+    /// 特殊工具事件发射 — TodoWrite/AskUserQuestion/EnterPlanMode/ExitPlanMode 工具执行后发射对应 UI 事件
+    private func emitSpecialToolEvents(
+        name: String,
+        result: ToolResult,
+        continuation: AsyncThrowingStream<AgentEvent, Error>.Continuation
+    ) {
+        switch name {
+        case "todo_write":
+            // TodoWrite — 从 metadata 解析 todoCount
+            let count = Int(result.metadata["todoCount"] ?? "0") ?? 0
+            if count > 0 {
+                // 构建简化的 TodoItem 数组（从 output 解析）
+                let items = parseTodoItemsFromOutput(result.output)
+                continuation.yield(.todoUpdated(items))
+            }
+
+        case "enter_plan_mode":
+            continuation.yield(.planModeEntered)
+
+        case "exit_plan_mode":
+            let approved = result.metadata["approved"] == "true"
+            if approved {
+                continuation.yield(.planApproved)
+            } else {
+                continuation.yield(.planRejected(reason: "用户拒绝了计划"))
+            }
+
+        case "ask_user_question":
+            // 从 metadata 解析 questions JSON
+            if let questionsJSON = result.metadata["questions"],
+               let data = questionsJSON.data(using: .utf8),
+               let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                var questions: [UserQuestion] = []
+                for item in array {
+                    let header = item["header"] as? String ?? ""
+                    let question = item["question"] as? String ?? ""
+                    let options = item["options"] as? [String]
+                    questions.append(UserQuestion(header: header, question: question, options: options))
+                }
+                if !questions.isEmpty {
+                    continuation.yield(.askUserQuestion(questions: questions))
+                }
+            }
+
+        // R2: Sub-agent + Task + MCP 事件
+        case "agent":
+            if let agentName = result.metadata["agentName"] {
+                continuation.yield(.agentSpawned(name: agentName, task: result.metadata["subagentType"] ?? "general-purpose"))
+                continuation.yield(.agentCompleted(name: agentName, result: result.output))
+            }
+
+        case "task_create":
+            if let taskIdString = result.metadata["taskId"],
+               let subject = result.metadata["taskSubject"],
+               let taskId = UUID(uuidString: taskIdString) {
+                let task = TaskItem(id: taskId, subject: subject, description: "")
+                continuation.yield(.taskCreated(task))
+            }
+
+        case "task_update":
+            if let taskIdString = result.metadata["taskId"],
+               let taskId = UUID(uuidString: taskIdString) {
+                let status = result.metadata["taskStatus"] ?? "pending"
+                let task = TaskItem(id: taskId, subject: "", description: "", status: TaskStatus(rawValue: status) ?? .pending)
+                continuation.yield(.taskUpdated(task))
+            }
+
+        case "mcp_tool_call":
+            if let serverId = result.metadata["serverId"],
+               let mcpToolName = result.metadata["mcpToolName"] {
+                continuation.yield(.mcpToolCall(serverId: serverId, toolName: mcpToolName))
+            }
+
+        case "send_message":
+            if let recipient = result.metadata["recipient"],
+               let summary = result.metadata["summary"] {
+                continuation.yield(.messageReceived(from: "main", content: summary))
+            }
+
+        default:
+            break
+        }
+    }
+
+    /// 从 TodoWriteTool 输出文本解析 TodoItem 数组（简化解析）
+    private func parseTodoItemsFromOutput(_ output: String) -> [TodoItem] {
+        var items: [TodoItem] = []
+        let lines = output.split(separator: "\n", omittingEmptySubsequences: true)
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("✅") || trimmed.hasPrefix("🔄") || trimmed.hasPrefix("⬜") {
+                let content = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                let status: String
+                if trimmed.hasPrefix("✅") { status = "completed" }
+                else if trimmed.hasPrefix("🔄") { status = "in_progress" }
+                else { status = "pending" }
+                items.append(TodoItem(id: UUID().uuidString, content: content, status: status))
+            }
+        }
+        return items
+    }
+
+    // MARK: - R1 Helper: PlanMode Tool Read-Only Check
+
+    /// 检查工具是否为只读（用于 PlanMode 拦截）
+    /// 只读工具列表：read_file, list_directory, search_files, search_content, web_search, web_fetch,
+    /// todo_write, ask_user_question, enter_plan_mode, exit_plan_mode
+    private func isToolReadOnly(name: String) -> Bool {
+        let readOnlyTools: Set<String> = [
+            "read_file", "list_directory", "search_files", "search_content",
+            "web_search", "web_fetch", "todo_write", "ask_user_question",
+            "enter_plan_mode", "exit_plan_mode", "skill"
+        ]
+        return readOnlyTools.contains(name)
+    }
+
+    // MARK: - R1: Skill Matching
+
+    /// 检查用户输入是否匹配已安装技能的触发词
+    /// - Parameter userMessage: 用户输入文本
+    /// - Returns: 匹配的技能名称（如果有）
+    func matchSkill(input: String) async -> String? {
+        guard let registry = skillRegistry else { return nil }
+        if let skill = await registry.matchSkill(input: input) {
+            return skill.name
+        }
+        return nil
+    }
+
+    // MARK: - R1: Command Parsing
+
+    /// 检查用户输入是否为 slash 命令
+    /// - Parameter userMessage: 用户输入文本
+    /// - Returns: (命令名, 参数数组) 如果匹配
+    func parseCommand(input: String) async -> (name: String, args: [String])? {
+        guard let registry = commandRegistry else { return nil }
+        guard let (command, args) = await registry.parse(input: input) else { return nil }
+        return (command.name, args)
+    }
+
+    // MARK: - R1: Memory Extraction
+
+    /// 会话结束后自动提取记忆（异步，不阻塞 .completed）
+    func extractMemories() async {
+        guard let store = memoryStore, let registry = skillRegistry else {
+            // 即使没有 skillRegistry，也可以提取记忆
+            guard let store = memoryStore else { return }
+            let extractor = MemoryExtractor()
+            await extractor.extractAndStore(session: session, apiGateway: apiGateway, memoryStore: store)
+            return
+        }
+        // 使用 skillRegistry 只是确保它存在（无实际用途，避免编译警告）
+        _ = registry
+        let extractor = MemoryExtractor()
+        await extractor.extractAndStore(session: session, apiGateway: apiGateway, memoryStore: store)
     }
 }
