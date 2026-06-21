@@ -151,8 +151,11 @@ struct CustomOpenAIProvider: LLMProvider {
 
     /// 从 Keychain 获取自定义 Provider API Key
     private func getAPIKey() -> String? {
-        let key = keychainService.load(key: BaizeAPI.customProviderKeyKeychainKey)
-        return (key != nil && !key!.isEmpty) ? key : nil
+        guard let key = keychainService.load(key: BaizeAPI.customProviderKeyKeychainKey),
+              !key.isEmpty else {
+            return nil
+        }
+        return key
     }
 
     /// 从 UserDefaults 读取自定义端点 URL

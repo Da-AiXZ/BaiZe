@@ -5,6 +5,7 @@ import SwiftUI
 /// 通过 TrollStore 安装，拥有 no-sandbox + platform-application 特权
 @main
 struct BaizeApp: App {
+    // 默认值会被 init() 中的 StateObject(wrappedValue:) 覆盖，保留仅为满足 @StateObject 的属性声明要求
     @StateObject private var appState = AppState()
 
     // MARK: - Dependency Injection (T05)
@@ -225,7 +226,7 @@ struct BaizeApp: App {
         }
 
         // Fallback: 使用 App 沙箱 Documents 目录
-        let docsDir = fm.urls(for: .documentDirectory, in: .userDomainMask).first!.path
+        let docsDir = fm.urls(for: .documentDirectory, in: .userDomainMask).first?.path ?? NSTemporaryDirectory()
         let sandboxRoot = (docsDir as NSString).appendingPathComponent("Baize")
         let sandboxInternal = (sandboxRoot as NSString).appendingPathComponent(".baize")
         let sandboxConv = (sandboxInternal as NSString).appendingPathComponent("conversations")

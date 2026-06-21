@@ -480,7 +480,7 @@ class AppState: ObservableObject {
             try fm.ensureDirectoryExists(atPath: BaizePath.usageData)
         } catch {
             // Fallback: use the app's Documents directory (sandboxed but always works)
-            let docsDir = fm.urls(for: .documentDirectory, in: .userDomainMask).first!.path
+            let docsDir = fm.urls(for: .documentDirectory, in: .userDomainMask).first?.path ?? NSTemporaryDirectory()
             let fallbackRoot = (docsDir as NSString).appendingPathComponent("Baize")
             let fallbackInternal = (fallbackRoot as NSString).appendingPathComponent(".baize")
             let fallbackConv = (fallbackInternal as NSString).appendingPathComponent("conversations")

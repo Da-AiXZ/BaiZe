@@ -60,12 +60,14 @@ final class NodeRuntimeEngine: @unchecked Sendable {
             return
         }
 
-        // 构建 node argv: ["node", "/path/to/bootstrap.js", "--port=48213"]
+        // 构建 node argv — 传 V8 JIT 禁用标志，配合 entitlements 中 JIT 受限策略，
+        // 否则 V8 初始化时会尝试分配可执行内存导致 EXC_BAD_ACCESS 崩溃
         let enginePort = self.port
         let arguments: [String] = [
             "node",
             bootstrapPath,
-            "--port=\(enginePort)"
+            "--port=\(enginePort)",
+            "--jitless"
         ]
 
         // 在 2MB 栈空间的后台线程启动 Node.js

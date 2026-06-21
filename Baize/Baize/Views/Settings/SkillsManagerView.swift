@@ -6,7 +6,11 @@ struct SkillsManagerView: View {
     @ObservedObject var appState: AppState
 
     @State private var skills: [Skill] = []
+    /// Bug #7 fix: 禁用状态持久化到 UserDefaults，视图关闭后不丢失
     @State private var disabledSkills: Set<String> = []
+
+    /// Bug #7 fix: UserDefaults key for persisting disabled skills
+    private static let disabledSkillsUDKey = "com.baize.disabled-skills"
 
     var body: some View {
         Group {
@@ -42,7 +46,10 @@ struct SkillsManagerView: View {
                 }
             }
         }
-        .onAppear { loadSkills() }
+        .onAppear {
+            loadDisabledSkills()
+            loadSkills()
+        }
     }
 
     /// 技能行
@@ -70,6 +77,8 @@ struct SkillsManagerView: View {
                         } else {
                             disabledSkills.insert(skill.name)
                         }
+                        // Bug #7 fix: 同步持久化到 UserDefaults
+                        persistDisabledSkills()
                     }
                 ))
                 .labelsHidden()
@@ -103,6 +112,17 @@ struct SkillsManagerView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    /// Bug #7 fix: 从 UserDefaults 加载禁用技能列表
+    private func loadDisabledSkills() {
+        let array = UserDefaults.standard.stringArray(forKey: Self.disabledSkillsUDKey) ?? []
+        disabledSkills = Set(array)
+    }
+
+    /// Bug #7 fix: 持久化禁用技能列表到 UserDefaults
+    private func persistDisabledSkills() {
+        UserDefaults.standard.set(Array(disabledSkills), forKey: Self.disabledSkillsUDKey)
     }
 
     /// 加载技能列表

@@ -290,15 +290,7 @@ actor AgentLoop {
                 }
             }
 
-            // 4. 构建完整的 ToolCall 对象（将累积的 arguments 更新到已有的 ToolCall 上）
-            // 使用 toolCallNames 字典获取正确的工具名称
-            var completedToolCalls: [ToolCall] = []
-            for (id, arguments) in currentToolCallArguments {
-                let name = toolCallNames[id] ?? "unknown"
-                completedToolCalls.append(ToolCall(id: id, name: name, arguments: arguments))
-            }
-
-            // 5. 处理 LLM 响应 — 修复 C1/C2：assistant 文本和 tool_calls 合并为单条消息
+            // 4. 处理 LLM 响应 — 修复 C1/C2：assistant 文本和 tool_calls 合并为单条消息
             if !currentToolCallArguments.isEmpty {
                 // 有 tool_calls：构建 assistantWithToolCalls 消息
                 let completedCalls: [ToolCall] = currentToolCallArguments.map { (id, arguments) in
@@ -312,7 +304,7 @@ actor AgentLoop {
                 session.messages.append(.assistant(accumulatedText))
             }
 
-            // 6. 如果有 tool_calls，执行它们
+            // 5. 如果有 tool_calls，执行它们
             if !currentToolCallArguments.isEmpty {
                 // Bug 3 fix: 用户拒绝权限时中断 Agent 循环
                 var userDeniedTool = false
@@ -504,7 +496,7 @@ actor AgentLoop {
                 continue
             }
 
-            // 7. 无 tool_calls — LLM 只返回了文本，循环结束
+            // 6. 无 tool_calls — LLM 只返回了文本，循环结束
             agentLogger.info("No tool calls, Agent Loop ending after \(iterationCount) iterations")
             break
         }
@@ -700,17 +692,15 @@ actor AgentLoop {
     // MARK: - R1: Memory Extraction
 
     /// 会话结束后自动提取记忆（异步，不阻塞 .completed）
+    /// Bug #4 fix: 移除冗余的双层 guard，skillRegistry 在此方法中未被使用
     func extractMemories() async {
-        guard let store = memoryStore, let registry = skillRegistry else {
-            // 即使没有 skillRegistry，也可以提取记忆
-            guard let store = memoryStore else { return }
-            let extractor = MemoryExtractor()
-            await extractor.extractAndStore(session: session, apiGateway: apiGateway, memoryStore: store)
-            return
-        }
-        // 使用 skillRegistry 只是确保它存在（无实际用途，避免编译警告）
-        _ = registry
+        guard let store = memoryStore else { return }
         let extractor = MemoryExtractor()
-        await extractor.extractAndStore(session: session, apiGateway: apiGateway, memoryStore: store)
+        await extractor.extractAndStore(
+            session: session,
+            apiGateway: apiGateway,
+            memoryStore: store,
+            scope: .user
+        )
     }
 }

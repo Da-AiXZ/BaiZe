@@ -125,8 +125,9 @@ struct SettingsView: View {
     }
 
     /// AI 模型配置状态描述（Provider/Model + Key 配置情况）
+    /// Bug #14 fix: 复用 appState.keychainService 避免每次访问都创建新实例
     private var aiModelSubtitle: String {
-        let keychain = KeychainService()
+        let keychain = appState.keychainService ?? KeychainService()
         var configured: [String] = []
         if keychain.loadOpenAIKey() != nil { configured.append("OpenAI") }
         if keychain.loadAnthropicKey() != nil { configured.append("Anthropic") }

@@ -286,7 +286,7 @@ struct ChatView: View {
             await loop.updateContextWindow(resolveContextWindow())
         }
 
-        let eventStream = try await loop.run(userMessage: userMessage)
+        let eventStream = await loop.run(userMessage: userMessage)
 
         do {
             for try await event in eventStream {

@@ -104,17 +104,30 @@ struct SearchEngineSettingsView: View {
     }
 
     /// 保存设置到 Keychain
+    /// Bug #11 fix: key 为空时删除旧值，防止清空 key 后旧值仍留在 Keychain
     private func saveSettings() {
-        if !tavilyKey.isEmpty {
+        // Tavily key
+        if tavilyKey.isEmpty {
+            try? keychain.delete(key: WebSearchFactory.tavilyKeyKeychainKey)
+        } else {
             try? keychain.save(key: WebSearchFactory.tavilyKeyKeychainKey, value: tavilyKey)
         }
-        if !bingKey.isEmpty {
+        // Bing key
+        if bingKey.isEmpty {
+            try? keychain.delete(key: WebSearchFactory.bingKeyKeychainKey)
+        } else {
             try? keychain.save(key: WebSearchFactory.bingKeyKeychainKey, value: bingKey)
         }
-        if !googleKey.isEmpty {
+        // Google key
+        if googleKey.isEmpty {
+            try? keychain.delete(key: WebSearchFactory.googleKeyKeychainKey)
+        } else {
             try? keychain.save(key: WebSearchFactory.googleKeyKeychainKey, value: googleKey)
         }
-        if !googleCXId.isEmpty {
+        // Google CX ID
+        if googleCXId.isEmpty {
+            UserDefaults.standard.removeObject(forKey: "com.baize.google-cx-id")
+        } else {
             UserDefaults.standard.set(googleCXId, forKey: "com.baize.google-cx-id")
         }
 

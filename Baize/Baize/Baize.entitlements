@@ -37,12 +37,11 @@
     <key>com.apple.security.files.downloads.read-write</key>
     <true/>
 
-    <!-- Disable JIT restriction assertion (Node.js --jitless handles this) -->
+    <!-- JIT 受限（no-jit=false 表示 JIT 被禁用），Node.js 必须用 --jitless 模式（见 NodeRuntimeEngine.swift） -->
     <key>com.apple.private.security.no-jit</key>
     <false/>
 
-    <!-- Process execution: posix_spawn requires signed binaries in App Bundle -->
-    <!-- TrollStore platform-application entitlement enables posix_spawn -->
+    <!-- 禁止可执行内存（V8 JIT 编译需要，但 --jitless 模式不需要） -->
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <false/>
 </dict>

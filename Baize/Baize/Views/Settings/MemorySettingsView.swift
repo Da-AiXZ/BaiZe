@@ -64,15 +64,23 @@ struct MemorySettingsView: View {
     }
 
     /// 清除所有记忆
+    /// Bug #12 fix: 清理所有 scope（user/project/team），而非仅 user scope
     private func clearMemories() {
-        guard let store = appState.memoryStore else { return }
+        guard appState.memoryStore != nil else { return }
         Task {
-            // 清除 user scope 的记忆文件
-            // MemoryStore 目前没有 clearAll 方法，这里只是重新计数
-            // 实际清除需要手动删除 JSONL 文件
-            let userDir = BaizePath.userMemoryDir
-            let filePath = (userDir as NSString).appendingPathComponent("memories.jsonl")
-            try? FileManager.default.removeItem(atPath: filePath)
+            let fm = FileManager.default
+            // 清除所有 scope 的记忆文件
+            let memoryDirs: [(scope: String, dir: String)] = [
+                ("user", BaizePath.userMemoryDir),
+                ("project", BaizePath.projectMemoryDir),
+                ("team", BaizePath.teamMemoryDir)
+            ]
+            for (_, dir) in memoryDirs {
+                let filePath = (dir as NSString).appendingPathComponent("memories.jsonl")
+                if fm.fileExists(atPath: filePath) {
+                    try? fm.removeItem(atPath: filePath)
+                }
+            }
             await MainActor.run {
                 self.memoryCount = 0
             }
