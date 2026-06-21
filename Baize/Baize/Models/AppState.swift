@@ -128,6 +128,8 @@ class AppState: ObservableObject {
     }() {
         didSet {
             UserDefaults.standard.set(customContextWindow, forKey: BaizeAPI.customContextWindowUDKey)
+            // 配置变更后触发节流备份到 config.json
+            Task { await ConfigBackupService.shared.scheduleBackup() }
         }
     }
 
@@ -274,6 +276,9 @@ class AppState: ObservableObject {
     private func persistProviderSelection() {
         UserDefaults.standard.set(activeProvider.rawValue, forKey: "com.baize.active-provider")
         UserDefaults.standard.set(activeModel, forKey: "com.baize.active-model")
+
+        // 配置变更后触发节流备份到 config.json（TrollStore 重装保命）
+        Task { await ConfigBackupService.shared.scheduleBackup() }
     }
 
     /// 从 UserDefaults 恢复 Provider/Model 选择
@@ -291,6 +296,9 @@ class AppState: ObservableObject {
     func persistCustomConfig() {
         UserDefaults.standard.set(customEndpoint, forKey: BaizeAPI.customEndpointUDKey)
         UserDefaults.standard.set(customModel, forKey: BaizeAPI.customModelUDKey)
+
+        // 配置变更后触发节流备份到 config.json
+        Task { await ConfigBackupService.shared.scheduleBackup() }
     }
 
     /// 从 UserDefaults 恢复自定义端点和模型名

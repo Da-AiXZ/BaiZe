@@ -114,6 +114,13 @@ struct BaizeApp: App {
 
         // W22 fix: 将所有服务实例注入 AppState，供 ChatView 等视图共享
         _appState = StateObject(wrappedValue: {
+            // 配置备份恢复 — 从 config.json 恢复配置到 UserDefaults + Keychain
+            // 必须在 AppState() 创建之前执行：
+            // 1. TrollStore 重装后 UserDefaults/Keychain 被清空，需先从容器外的 config.json 恢复
+            // 2. AppState 的 @Published 属性（如 customContextWindow）在 init 时从 UserDefaults 读取
+            //    必须在 init 之前恢复 UserDefaults，否则读到的是默认值
+            ConfigBackupService.restoreSync()
+
             let state = AppState()
             state.keychainService = keychain
             state.apiGateway = api
@@ -166,7 +173,7 @@ struct BaizeApp: App {
             state.mcpManager = mcpMgr
             state.webSearchProvider = webSearch
 
-            // Phase 2C: 恢复上次 Provider/Model 选择
+            // Phase 2C: 恢复上次 Provider/Model 选择（此时 UserDefaults 已被 restoreSync 填充）
             state.restoreProviderSelection()
             state.restoreCustomConfig()
 

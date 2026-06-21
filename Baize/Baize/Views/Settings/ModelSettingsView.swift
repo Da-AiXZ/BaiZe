@@ -338,6 +338,8 @@ struct UnifiedAIConfigView: View {
             case .custom: try keychain.saveCustomKey(apiKeyInput)
             }
             keyStatus = .saved
+            // 配置变更后触发节流备份到 config.json
+            Task { await ConfigBackupService.shared.scheduleBackup() }
         } catch {
             baizeLogger.error("Failed to save API key: \(error.localizedDescription)")
             saveErrorMessage = error.localizedDescription

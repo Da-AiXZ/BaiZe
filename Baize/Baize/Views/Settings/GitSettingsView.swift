@@ -245,6 +245,9 @@ struct GitSettingsView: View {
         // 更新 ViewModel 状态
         appState.gitViewModel?.hasGitToken = !token.isEmpty
 
+        // 配置变更后触发节流备份到 config.json
+        Task { await ConfigBackupService.shared.scheduleBackup() }
+
         saveSuccess = true
         // 3 秒后隐藏成功提示
         Task {
@@ -274,5 +277,8 @@ struct GitSettingsView: View {
         saveSuccess = false
 
         appState.gitViewModel?.hasGitToken = false
+
+        // 配置变更后触发节流备份到 config.json
+        Task { await ConfigBackupService.shared.scheduleBackup() }
     }
 }

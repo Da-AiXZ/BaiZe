@@ -90,6 +90,16 @@ struct SettingsView: View {
                 )
             }
 
+            // 配置备份 — TrollStore 重装后自动恢复设置
+            NavigationLink(value: SettingsSection.configBackup) {
+                SettingsRow(
+                    icon: "externaldrive.badge.timemachine",
+                    iconColor: Color.baizeAccent,
+                    title: "配置备份",
+                    subtitle: "重装后自动恢复设置"
+                )
+            }
+
             // 关于白泽
             NavigationLink(value: SettingsSection.about) {
                 SettingsRow(
@@ -118,6 +128,8 @@ struct SettingsView: View {
                 MemorySettingsView(appState: appState)
             case .skills:
                 SkillsManagerView(appState: appState)
+            case .configBackup:
+                ConfigBackupSettingsView()
             case .about:
                 AboutView()
             }
@@ -183,6 +195,7 @@ enum SettingsSection: Hashable, Identifiable {
     case searchEngine  // R1: 搜索引擎设置
     case memory        // R1: 记忆管理
     case skills        // R1: 技能管理
+    case configBackup  // 配置备份/恢复
     case about
 
     var id: Self { self }
@@ -196,6 +209,7 @@ enum SettingsSection: Hashable, Identifiable {
         case .searchEngine: return "搜索引擎"
         case .memory: return "记忆管理"
         case .skills: return "技能管理"
+        case .configBackup: return "配置备份"
         case .about: return "关于白泽"
         }
     }
@@ -552,6 +566,132 @@ private struct InfoRow: View {
             Text(value)
                 .font(.system(size: 14))
                 .foregroundColor(.secondary)
+        }
+    }
+}
+
+// MARK: - Config Backup Settings View
+
+/// 配置备份/恢复设置页 — 手动备份、手动恢复、显示上次备份时间
+///
+/// 正常情况下配置变更会自动触发节流备份，用户无需手动操作。
+/// 此页面提供手动入口作为兜底：
+/// - "立即备份配置" — 手动触发完整备份
+/// - "从备份恢复配置" — 手动从 config.json 恢复（恢复后需重启 App 生效）
+struct ConfigBackupSettingsView: View {
+    /// 上次备份时间（从 config.json 读取）
+    @State private var lastBackupTime: Date?
+
+    /// 备份中状态
+    @State private var isBackingUp = false
+
+    /// 恢复完成提示
+    @State private var showRestoreAlert = false
+
+    /// 操作结果消息
+    @State private var resultMessage = ""
+
+    var body: some View {
+        Form {
+            // 备份信息 Section
+            Section(
+                header: Text("备份状态"),
+                footer: Text("备份文件位于 App 容器外（/var/mobile/Documents/Baize/.baize/config.json），TrollStore 重装白泽后设置可自动恢复。")
+            ) {
+                if let time = lastBackupTime {
+                    HStack {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(Color.baizeSuccess)
+                        Text("上次备份时间")
+                        Spacer()
+                        Text(time, style: .date)
+                            .foregroundColor(.secondary)
+                        Text(time, style: .time)
+                            .foregroundColor(.secondary)
+                    }
+                } else {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(Color.baizeWarning)
+                        Text("尚未备份")
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                // 显示备份文件路径
+                Text(BaizePath.globalConfig)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.secondary)
+            }
+
+            // 手动操作 Section
+            Section(header: Text("手动操作")) {
+                // 立即备份
+                Button(action: {
+                    Task {
+                        isBackingUp = true
+                        await ConfigBackupService.shared.backupNow()
+                        lastBackupTime = await ConfigBackupService.shared.getLastBackupTime()
+                        isBackingUp = false
+                    }
+                }) {
+                    HStack {
+                        if isBackingUp {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                        } else {
+                            Image(systemName: "tray.and.arrow.down.fill")
+                        }
+                        Text(isBackingUp ? "备份中..." : "立即备份配置")
+                    }
+                    .foregroundColor(Color.baizeAccent)
+                }
+                .disabled(isBackingUp)
+
+                // 从备份恢复
+                Button(action: {
+                    // restoreSync 是同步方法，直接调用
+                    ConfigBackupService.restoreSync()
+                    resultMessage = "配置已从备份恢复。请重启 App 使所有设置生效。"
+                    showRestoreAlert = true
+                }) {
+                    HStack {
+                        Image(systemName: "tray.and.arrow.up.fill")
+                        Text("从备份恢复配置")
+                    }
+                    .foregroundColor(Color.baizeSuccess)
+                }
+            }
+
+            // 说明 Section
+            Section(header: Text("工作原理")) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("1. 配置变更时自动备份（5 秒节流，避免频繁写文件）")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                    Text("2. App 启动时自动从 config.json 恢复（在加载设置之前）")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                    Text("3. 备份内容包括：AI Provider/Model、自定义端点、API Keys、Git 配置")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                    Text("4. API Keys 以明文存储，TrollStore 环境下可接受（设备本地、用户自有）")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .navigationTitle("配置备份")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            Task {
+                lastBackupTime = await ConfigBackupService.shared.getLastBackupTime()
+            }
+        }
+        .alert("恢复完成", isPresented: $showRestoreAlert) {
+            Button("确定", role: .cancel) { }
+        } message: {
+            Text(resultMessage)
         }
     }
 }

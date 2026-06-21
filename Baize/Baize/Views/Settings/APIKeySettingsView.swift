@@ -134,6 +134,8 @@ struct APIKeySettingsView: View {
         do {
             try keychainService.saveOpenAIKey(openAIKey)
             openAIStatus = .configured
+            // 配置变更后触发节流备份到 config.json
+            Task { await ConfigBackupService.shared.scheduleBackup() }
         } catch {
             // Error handling
         }
@@ -144,6 +146,8 @@ struct APIKeySettingsView: View {
             try keychainService.delete(key: BaizeAPI.openAIKeyKeychainKey)
             openAIKey = ""
             openAIStatus = .missing
+            // 配置变更后触发节流备份到 config.json
+            Task { await ConfigBackupService.shared.scheduleBackup() }
         } catch {
             // Error handling
         }
@@ -169,6 +173,8 @@ struct APIKeySettingsView: View {
         do {
             try keychainService.saveAnthropicKey(anthropicKey)
             anthropicStatus = .configured
+            // 配置变更后触发节流备份到 config.json
+            Task { await ConfigBackupService.shared.scheduleBackup() }
         } catch {
             // Error handling
         }
@@ -179,6 +185,8 @@ struct APIKeySettingsView: View {
             try keychainService.delete(key: BaizeAPI.anthropicKeyKeychainKey)
             anthropicKey = ""
             anthropicStatus = .missing
+            // 配置变更后触发节流备份到 config.json
+            Task { await ConfigBackupService.shared.scheduleBackup() }
         } catch {
             // Error handling
         }
@@ -203,6 +211,8 @@ struct APIKeySettingsView: View {
         do {
             try keychainService.saveOpenRouterKey(openRouterKey)
             openRouterStatus = .configured
+            // 配置变更后触发节流备份到 config.json
+            Task { await ConfigBackupService.shared.scheduleBackup() }
         } catch {
             // Error handling
         }
@@ -213,6 +223,8 @@ struct APIKeySettingsView: View {
             try keychainService.delete(key: BaizeAPI.openRouterKeyKeychainKey)
             openRouterKey = ""
             openRouterStatus = .missing
+            // 配置变更后触发节流备份到 config.json
+            Task { await ConfigBackupService.shared.scheduleBackup() }
         } catch {
             // Error handling
         }
