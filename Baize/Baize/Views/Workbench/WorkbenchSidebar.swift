@@ -54,7 +54,7 @@ struct WorkbenchSidebar: View {
         _ section: WorkbenchSection,
         title: String,
         icon: String,
-        @escaping @ViewBuilder content: () -> Content
+        content: @escaping @ViewBuilder () -> Content
     ) -> some View {
         DisclosureGroup(
             isExpanded: Binding(
