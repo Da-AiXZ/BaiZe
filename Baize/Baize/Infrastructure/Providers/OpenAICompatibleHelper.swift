@@ -33,6 +33,8 @@ enum OpenAICompatibleHelper {
     ///   - messages: 已格式化的消息数组（OpenAI 格式）
     ///   - tools: 已格式化的工具定义数组（OpenAI 格式），可选
     ///   - model: 模型名称
+    ///   - extraBody: 额外 body 字段（如 DeepSeek V4 的 thinking 参数）
+    ///   - includeUsage: T04 是否请求流式 usage（仅 OpenAI/OpenRouter 传 true，CustomOpenAI 不传 — 部分兼容 API 如 DeepSeek 可能不支持）
     /// - Returns: 构建好的 URLRequest
     static func buildRequest(
         endpoint: String,
@@ -41,7 +43,8 @@ enum OpenAICompatibleHelper {
         messages: [[String: Any]],
         tools: [[String: Any]]?,
         model: String,
-        extraBody: [String: Any]? = nil
+        extraBody: [String: Any]? = nil,
+        includeUsage: Bool = false
     ) throws -> URLRequest {
         guard let url = URL(string: endpoint) else {
             throw ProviderError.apiError("Invalid endpoint URL: \(endpoint)")
@@ -68,6 +71,11 @@ enum OpenAICompatibleHelper {
         // 添加 tools 定义（如果有）
         if let tools = tools, !tools.isEmpty {
             body["tools"] = tools
+        }
+
+        // T04: 请求流式 usage（OpenAI/OpenRouter 支持，CustomOpenAI 不传 — DeepSeek 等可能不支持）
+        if includeUsage {
+            body["stream_options"] = ["include_usage": true]
         }
 
         // 合并 extraBody 字段（如 DeepSeek V4 的 thinking 参数）
@@ -140,13 +148,22 @@ enum OpenAICompatibleHelper {
                 return [.done(finishReason: "error: \(message)")]
             }
 
-            guard let choices = json["choices"] as? [[String: Any]],
-                  let firstChoice = choices.first else {
-                apiLogger.debug("SSE JSON: no choices array found, data: \(data.prefix(200))")
-                return []
+            var chunks: [LLMChunk] = []
+
+            // T04: 解析 usage 字段（OpenAI 在 [DONE] 前的最后一个 chunk 返回，此时 choices 可能为空数组）
+            // 格式：{"usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}}
+            if let usage = json["usage"] as? [String: Any] {
+                let promptTokens = usage["prompt_tokens"] as? Int ?? 0
+                let completionTokens = usage["completion_tokens"] as? Int ?? 0
+                chunks.append(.usage(LLMUsage(promptTokens: promptTokens, completionTokens: completionTokens)))
             }
 
-            var chunks: [LLMChunk] = []
+            guard let choices = json["choices"] as? [[String: Any]],
+                  let firstChoice = choices.first else {
+                // choices 为空（可能只有 usage）— 返回已收集的 chunks
+                return chunks
+            }
+
             let delta = firstChoice["delta"] as? [String: Any] ?? [:]
 
             // 1. 处理 reasoning_content delta（DeepSeek V4 thinking mode 的思维链内容）

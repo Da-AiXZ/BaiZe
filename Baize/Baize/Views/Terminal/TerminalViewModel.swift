@@ -18,9 +18,16 @@ final class TerminalViewModel: ObservableObject {
     @Published var outputLines: [TerminalLine] = []
 
     /// 当前工作目录（cd 命令更新此值，其他命令传给 RuntimeExecutor）
-    @Published var currentWorkingDir: String = BaizePath.projectRoot
+    /// T04: didSet 触发重新加载对应项目的命令历史（项目切换时）
+    @Published var currentWorkingDir: String = BaizePath.projectRoot {
+        didSet {
+            // T04: 工作目录变化（通常是项目切换）→ 重新加载该项目的历史命令
+            guard oldValue != currentWorkingDir else { return }
+            Task { await reloadHistory() }
+        }
+    }
 
-    /// 命令历史（会话内，P0 不持久化）
+    /// 命令历史（T04: 跨会话持久化到 TerminalHistoryStore，按项目隔离）
     @Published var commandHistory: [String] = []
 
     /// 是否正在执行命令
@@ -34,6 +41,9 @@ final class TerminalViewModel: ObservableObject {
     /// 共享的 RuntimeExecutor 实例（从 AppState 获取，线程安全）
     /// RuntimeExecutor 是 @unchecked Sendable class，内部通过 DispatchQueue 保证线程安全
     private let runtimeExecutor: RuntimeExecutor
+
+    /// T04: 终端历史持久化（actor，按项目隔离，跨会话保留命令历史）
+    private let terminalHistoryStore: TerminalHistoryStore?
 
     // MARK: - Private State
 
@@ -53,9 +63,24 @@ final class TerminalViewModel: ObservableObject {
     /// - Parameters:
     ///   - runtimeExecutor: 共享的 RuntimeExecutor 实例
     ///   - initialWorkingDir: 初始工作目录（默认 BaizePath.projectRoot）
-    init(runtimeExecutor: RuntimeExecutor, initialWorkingDir: String = BaizePath.projectRoot) {
+    ///   - terminalHistoryStore: T04 终端历史持久化（可选，nil 时退化为会话内不持久化）
+    init(
+        runtimeExecutor: RuntimeExecutor,
+        initialWorkingDir: String = BaizePath.projectRoot,
+        terminalHistoryStore: TerminalHistoryStore? = nil
+    ) {
         self.runtimeExecutor = runtimeExecutor
         self.currentWorkingDir = initialWorkingDir
+        self.terminalHistoryStore = terminalHistoryStore
+
+        // T04: 首次加载该项目的命令历史（跨会话持久化）
+        // 注意：currentWorkingDir 的 didSet 在 init 期间不触发（Swift 行为），需手动加载
+        if let store = terminalHistoryStore {
+            Task { @MainActor in
+                let history = await store.load(projectPath: initialWorkingDir)
+                self.commandHistory = history
+            }
+        }
     }
 
     // MARK: - Command Execution (用户手动)
@@ -285,8 +310,24 @@ final class TerminalViewModel: ObservableObject {
     // MARK: - Private Helpers
 
     /// 添加命令到历史并重置导航索引
+    /// T04: 同时异步持久化到 TerminalHistoryStore（按项目隔离，跨会话保留）
     private func addToHistory(_ command: String) {
         commandHistory.append(command)
+        historyIndex = nil
+
+        // T04: 异步持久化（TerminalHistoryStore 内部处理连续去重 + 上限 1000 + 排除 clear/cls）
+        if let store = terminalHistoryStore {
+            let projectPath = currentWorkingDir
+            Task { await store.append(command: command, projectPath: projectPath) }
+        }
+    }
+
+    /// T04: 重新加载当前工作目录对应项目的命令历史
+    /// 由 currentWorkingDir didSet 触发（项目切换时）
+    private func reloadHistory() async {
+        guard let store = terminalHistoryStore else { return }
+        let history = await store.load(projectPath: currentWorkingDir)
+        commandHistory = history
         historyIndex = nil
     }
 

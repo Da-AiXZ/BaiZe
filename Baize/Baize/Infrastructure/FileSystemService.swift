@@ -29,6 +29,15 @@ class FileSystemService: @unchecked Sendable {
         try? ensureRootDirectory()
     }
 
+    /// T03: 更新项目根目录 — 切换项目时调用
+    /// 与 setRootPath 功能一致，提供语义更清晰的方法名
+    /// - Parameter path: 新的项目根目录绝对路径
+    func updateRootPath(_ path: String) {
+        rootPath = path
+        try? ensureRootDirectory()
+        baizeLogger.info("FileSystemService: rootPath updated to \(path)")
+    }
+
     // MARK: - Read Operations
 
     /// 读取文件内容

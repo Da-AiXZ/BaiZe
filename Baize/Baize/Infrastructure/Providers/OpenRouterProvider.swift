@@ -58,14 +58,15 @@ struct OpenRouterProvider: LLMProvider {
                     let openAIMessages = messages.toOpenAIMergedFormat()
                     let openAITools = tools.isEmpty ? nil : tools.map { $0.toOpenAIFormat() }
 
-                    // 3. 构建 URLRequest（使用 OpenRouter 端点 + 额外请求头）
+                    // 3. 构建 URLRequest（使用 OpenRouter 端点 + 额外请求头；T04: includeUsage=true 请求流式 usage）
                     let urlRequest = try OpenAICompatibleHelper.buildRequest(
                         endpoint: BaizeAPI.openRouterEndpoint,
                         apiKey: apiKey,
                         additionalHeaders: self.additionalHeaders,
                         messages: openAIMessages,
                         tools: openAITools,
-                        model: model
+                        model: model,
+                        includeUsage: true
                     )
 
                     // 4. 通过 SSEStream 解析流式响应

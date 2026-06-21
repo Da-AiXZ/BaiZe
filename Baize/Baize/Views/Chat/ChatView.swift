@@ -98,6 +98,10 @@ struct ChatView: View {
         .onAppear {
             Task { await loadSessionList() }
         }
+        // T03: 项目切换时重新加载会话列表（按新 projectPath 过滤）
+        .onChange(of: appState.currentProjectPath) { _ in
+            Task { await loadSessionList() }
+        }
         // P1-1: 会话列表 Sheet
         .sheet(isPresented: $showSessionList) {
             SessionListView(
@@ -106,7 +110,9 @@ struct ChatView: View {
                 onSelect: { session in
                     Task { await restoreSession(session) }
                 },
-                onNewSession: { startNewSession() }
+                onNewSession: { startNewSession() },
+                projectPath: appState.currentProjectPath,
+                conversationStore: appState.conversationStore
             )
         }
     }
@@ -484,10 +490,14 @@ struct ChatView: View {
     // MARK: - Session Persistence (P1-1)
 
     /// 加载已保存的会话列表
+    /// T03: 按 appState.currentProjectPath 过滤，只显示当前项目的会话
     private func loadSessionList() async {
         guard let store = appState.conversationStore else { return }
-        let sessions = await store.listSessions()
-        await MainActor.run { self.savedSessions = sessions }
+        let allSessions = await store.listSessions()
+        // T03: 按 projectPath 过滤
+        let projectPath = appState.currentProjectPath
+        let filtered = allSessions.filter { $0.projectPath == projectPath }
+        await MainActor.run { self.savedSessions = filtered }
     }
 
     /// 恢复历史会话 — 创建新 AgentLoop 加载恢复的 session

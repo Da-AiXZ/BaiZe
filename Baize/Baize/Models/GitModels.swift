@@ -34,6 +34,20 @@ enum GitError: LocalizedError {
     case emptyRepository
     /// 通用操作失败
     case operationFailed(String)
+    /// 合并冲突（冲突文件列表）
+    case mergeConflict([String])
+    /// Rebase 冲突（冲突文件列表）
+    case rebaseConflict([String])
+    /// Clone 操作失败
+    case cloneFailed(String)
+    /// 目录已存在（clone 时目标目录非空）
+    case directoryExists(String)
+    /// 贮藏列表为空
+    case stashEmpty
+    /// 标签已存在
+    case tagExists(String)
+    /// 不能删除当前所在分支
+    case cannotDeleteCurrentBranch
 
     var errorDescription: String? {
         switch self {
@@ -65,6 +79,20 @@ enum GitError: LocalizedError {
             return "仓库为空（无任何提交）"
         case .operationFailed(let reason):
             return "操作失败: \(reason)"
+        case .mergeConflict(let files):
+            return "合并冲突，涉及 \(files.count) 个文件: \(files.joined(separator: ", "))"
+        case .rebaseConflict(let files):
+            return "Rebase 冲突，涉及 \(files.count) 个文件: \(files.joined(separator: ", "))"
+        case .cloneFailed(let reason):
+            return "Clone 失败: \(reason)"
+        case .directoryExists(let path):
+            return "目录已存在: \(path)"
+        case .stashEmpty:
+            return "贮藏列表为空"
+        case .tagExists(let name):
+            return "标签已存在: \(name)"
+        case .cannotDeleteCurrentBranch:
+            return "不能删除当前所在分支，请先切换到其他分支"
         }
     }
 }
@@ -287,6 +315,8 @@ enum GitSubTab: String, CaseIterable, Hashable {
     case history
     /// 分支（branch）
     case branches
+    /// 贮藏（stash）
+    case stash
 
     /// 子 Tab 标题
     var title: String {
@@ -294,6 +324,7 @@ enum GitSubTab: String, CaseIterable, Hashable {
         case .changes: return "改动"
         case .history: return "历史"
         case .branches: return "分支"
+        case .stash: return "贮藏"
         }
     }
 
@@ -303,6 +334,80 @@ enum GitSubTab: String, CaseIterable, Hashable {
         case .changes: return "doc.text"
         case .history: return "clock.arrow.circlepath"
         case .branches: return "arrow.triangle.branch"
+        case .stash: return "tray.fill"
+        }
+    }
+}
+
+// MARK: - Git Stash
+
+/// Git 贮藏条目
+struct GitStashEntry: Identifiable {
+    let id = UUID()
+    /// 贮藏索引（stash@{0}, stash@{1}, ...）
+    let index: Int
+    /// 贮藏消息
+    let message: String
+    /// 贮藏时间
+    let date: Date
+}
+
+// MARK: - Git Tag
+
+/// Git 标签
+struct GitTag: Identifiable {
+    let id = UUID()
+    /// 标签名
+    let name: String
+    /// 标签 OID（SHA-1）
+    let oid: String
+    /// 标签创建时间
+    let date: Date
+    /// 标签消息（附注标签有值，轻量标签为 nil）
+    let message: String?
+    /// 是否为附注标签
+    let isAnnotated: Bool
+}
+
+// MARK: - Git Fetch Result
+
+/// Git Fetch 操作结果
+struct GitFetchResult {
+    /// 更新的分支数
+    let updatedBranches: Int
+    /// 接收的字节数
+    let receivedBytes: Int
+}
+
+// MARK: - Git Merge Result
+
+/// Git Merge 操作结果
+struct GitMergeResult {
+    /// 是否成功（无冲突）
+    let success: Bool
+    /// 冲突文件列表（成功时为空）
+    let conflictFiles: [String]
+    /// 是否为快进合并
+    let isFastForward: Bool
+}
+
+// MARK: - Git Reset Mode
+
+/// Git Reset 模式
+enum GitResetMode: String, CaseIterable {
+    /// soft：仅移动 HEAD，暂存区和工作区不变
+    case soft
+    /// mixed：移动 HEAD + 重置暂存区，工作区不变（默认模式）
+    case mixed
+    /// hard：移动 HEAD + 重置暂存区 + 重置工作区（危险）
+    case hard
+
+    /// 显示名称
+    var displayName: String {
+        switch self {
+        case .soft: return "Soft（保留暂存区）"
+        case .mixed: return "Mixed（重置暂存区）"
+        case .hard: return "Hard（重置所有改动）"
         }
     }
 }

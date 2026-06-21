@@ -30,6 +30,18 @@ enum BaizePath {
 
     /// App Bundle 内 Monaco Editor 资源目录
     static let monacoResources = "monaco-editor"
+
+    /// 项目注册表文件路径（持久化项目列表）
+    static let projectsRegistry = internalData + "projects.json"
+
+    /// 用量数据目录（按日存储 {yyyy-MM-dd}.json）
+    static let usageData = internalData + "usage/"
+
+    /// 终端历史目录（按项目路径隔离存储）
+    static let terminalHistory = internalData + "terminal_history/"
+
+    /// 项目导出目录名（相对项目根目录）
+    static let exportsDirName = "exports"
 }
 
 // MARK: - API Configuration

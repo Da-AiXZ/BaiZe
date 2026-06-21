@@ -6,6 +6,8 @@ import SwiftUI
 struct ContentView: View {
     @ObservedObject var appState: AppState
     @State private var columnVisibility: NavigationSplitViewVisibility = .detailOnly
+    @State private var showNewProjectWizard = false
+    @State private var projectList: [ProjectEntry] = []
 
     var body: some View {
         TabView(selection: $appState.selectedTab) {
@@ -19,9 +21,21 @@ struct ContentView: View {
                 // Bug B fix: FocusModeBar 使用 safeAreaInset 固定在顶部，确保 iOS 上可见
                 WorkspacePane(appState: appState)
                     .safeAreaInset(edge: .top, spacing: 0) {
-                        // 焦点模式切换控件 + Agent 状态指示器 — 固定在顶部右侧
+                        // T03: 项目切换菜单（左侧）+ 焦点模式切换（右侧）+ Agent 状态
                         HStack(spacing: 8) {
+                            // T03: 项目切换下拉菜单
+                            ProjectSwitcherMenu(
+                                appState: appState,
+                                projectList: projectList,
+                                onNewProject: { showNewProjectWizard = true },
+                                onSwitchProject: { path in
+                                    Task { await appState.switchProject(to: path) }
+                                },
+                                onRefreshList: { Task { await refreshProjectList() } }
+                            )
+
                             Spacer()
+
                             FocusModeBar(focusMode: $appState.focusMode, isAgentRunning: appState.isAgentRunning)
                             AgentStatusIndicator(isRunning: appState.isAgentRunning)
                                 .padding(.trailing, 4)
@@ -78,6 +92,26 @@ struct ContentView: View {
         } message: {
             Text(appState.errorMessage ?? "未知错误")
         }
+        // T03: 新建项目向导 Sheet
+        .sheet(isPresented: $showNewProjectWizard) {
+            NewProjectWizard(appState: appState)
+        }
+        // T03: 启动时加载项目列表 + 项目路径变化时刷新
+        .task {
+            await refreshProjectList()
+        }
+        .onChange(of: appState.currentProjectPath) { _ in
+            Task { await refreshProjectList() }
+        }
+    }
+
+    // MARK: - T03: Project List Refresh
+
+    /// 从 ProjectRegistry 加载项目列表到本地 @State
+    private func refreshProjectList() async {
+        guard let registry = appState.projectRegistry else { return }
+        let list = await registry.list()
+        await MainActor.run { self.projectList = list }
     }
 }
 
@@ -195,6 +229,73 @@ struct AgentStatusIndicator: View {
                 isPulsing = running
             }
             .help(isRunning ? "Agent 正在运行" : "Agent 待命")
+    }
+}
+
+// MARK: - T03: Project Switcher Menu
+
+/// 项目切换下拉菜单 — 显示当前项目名 + 所有项目列表 + 新建项目入口
+/// 放置在 FocusModeBar 左侧，通过 HStack 排列确保不互相遮挡
+private struct ProjectSwitcherMenu: View {
+    @ObservedObject var appState: AppState
+    let projectList: [ProjectEntry]
+    let onNewProject: () -> Void
+    let onSwitchProject: (String) -> Void
+    let onRefreshList: () -> Void
+
+    /// 当前项目名（从路径提取最后一级目录名）
+    private var currentProjectName: String {
+        let path = appState.currentProjectPath
+        let name = (path as NSString).lastPathComponent
+        return name.isEmpty ? "Baize" : name
+    }
+
+    var body: some View {
+        Menu {
+            // 项目列表
+            Section("项目") {
+                ForEach(projectList) { entry in
+                    Button(action: {
+                        onSwitchProject(entry.path)
+                    }) {
+                        HStack {
+                            Image(systemName: entry.icon)
+                            Text(entry.name)
+                            if entry.path == appState.currentProjectPath {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 新建项目
+            Section {
+                Button(action: onNewProject) {
+                    Label("新建项目", systemImage: "plus.circle")
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 12))
+                    .foregroundColor(.baizeAccent)
+                Text(currentProjectName)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Color(.systemBackground).opacity(0.8))
+            .cornerRadius(8)
+        }
+        .onAppear {
+            onRefreshList()
+        }
     }
 }
 

@@ -92,6 +92,35 @@ final class GitDiffCollector {
     }
 }
 
+// MARK: - GitStashCollector
+
+/// Stash 收集器 — 通过 git_stash_foreach 回调收集 stash 条目
+/// 使用 class（引用类型）以便通过 payload 指针在 C 回调中访问
+final class GitStashCollector {
+    var entries: [GitStashEntry] = []
+    let repo: OpaquePointer
+
+    init(repo: OpaquePointer) {
+        self.repo = repo
+    }
+}
+
+// MARK: - GitCloneProgressPayload
+
+/// Clone 进度载荷 — 传递给 libgit2 fetch 回调的 username + token + 进度状态
+/// 使用 class（引用类型）以便通过 Unmanaged 传递 opaque pointer
+final class GitCloneProgressPayload {
+    let username: String
+    let token: String
+    var progress: Double = 0
+    var statusText: String = ""
+
+    init(username: String, token: String) {
+        self.username = username
+        self.token = token
+    }
+}
+
 // MARK: - GitService
 
 /// Git 核心服务 — actor 封装 libgit2 C API
@@ -837,5 +866,935 @@ actor GitService {
         try checkGit(createCode, operation: "git_branch_create")
         git_reference_free(newBranch)
         try await checkoutBranch(name)
+    }
+
+    // MARK: - Fetch (T02 #1)
+
+    /// 从远程仓库拉取更新（不修改工作区）
+    /// 使用 git_remote_fetch + credentialsCallback
+    func fetch() async throws -> GitFetchResult {
+        guard let token = keychainService.loadGitToken(), !token.isEmpty else {
+            throw GitError.credentialsMissing
+        }
+        let username = UserDefaults.standard.string(forKey: BaizeGit.usernameUDKey) ?? "git"
+
+        let repo = try openRepository()
+        defer { git_repository_free(repo) }
+
+        // 查找或自动创建远程仓库
+        var remote: OpaquePointer? = nil
+        let lookupCode = git_remote_lookup(&remote, repo, BaizeGit.defaultRemoteName)
+        if lookupCode != 0 {
+            if let savedURL = UserDefaults.standard.string(forKey: BaizeGit.remoteURLUDKey), !savedURL.isEmpty {
+                if let r = remote { git_remote_free(r); remote = nil }
+                let createCode = savedURL.withCString { urlPtr in
+                    BaizeGit.defaultRemoteName.withCString { namePtr in
+                        git_remote_create(&remote, repo, namePtr, urlPtr)
+                    }
+                }
+                try checkGit(createCode, operation: "git_remote_create (fetch auto)")
+            } else {
+                throw GitError.operationFailed("尚未配置远程仓库，请在设置 → Git 配置中添加远程地址")
+            }
+        }
+        defer { if let r = remote { git_remote_free(r) } }
+
+        // 配置回调（复用 credentialsCallback）
+        let payload = GitCredentialsPayload(username: username, token: token)
+        let payloadPointer = Unmanaged.passRetained(payload).toOpaque()
+        defer { Unmanaged<GitCredentialsPayload>.fromOpaque(payloadPointer).release() }
+
+        var callbacks = git_remote_callbacks()
+        git_remote_init_callbacks(&callbacks, numericCast(GIT_REMOTE_CALLBACKS_VERSION))
+        callbacks.credentials = credentialsCallback
+        callbacks.payload = payloadPointer
+
+        // 配置 fetch 选项
+        var fetchOpts = git_fetch_options()
+        git_fetch_init_options(&fetchOpts, numericCast(GIT_FETCH_OPTIONS_VERSION))
+        fetchOpts.callbacks = callbacks
+
+        // 执行 fetch — refspec: +refs/heads/*:refs/remotes/origin/*
+        let refspec = "+refs/heads/*:refs/remotes/\(BaizeGit.defaultRemoteName)/*"
+        let cRefspec = strdup(refspec)
+        defer { free(cRefspec) }
+        var refspecPtrs: [UnsafeMutablePointer<CChar>?] = [cRefspec]
+        var refs = git_strarray(strings: &refspecPtrs, count: 1)
+
+        try checkGit(
+            git_remote_fetch(remote, &refs, &fetchOpts, nil),
+            operation: "git_remote_fetch"
+        )
+
+        // 获取统计信息
+        let stats = git_remote_stats(remote)
+        let receivedBytes: Int
+        if let s = stats {
+            receivedBytes = Int(s.pointee.received_bytes)
+        } else {
+            receivedBytes = 0
+        }
+
+        return GitFetchResult(updatedBranches: 1, receivedBytes: receivedBytes)
+    }
+
+    // MARK: - Pull (T02 #1)
+
+    /// 拉取并合并远程更新到当前分支（fetch + merge）
+    /// fast-forward 优先；冲突时返回冲突文件列表
+    func pull() async throws -> GitMergeResult {
+        // 先执行 fetch
+        _ = try await fetch()
+
+        let repo = try openRepository()
+        defer { git_repository_free(repo) }
+
+        let branchName = try getCurrentBranchName(repo: repo)
+        let remoteTrackingRefName = "refs/remotes/\(BaizeGit.defaultRemoteName)/\(branchName)"
+
+        // 查找远程跟踪分支引用
+        var remoteRef: OpaquePointer? = nil
+        let refLookupCode = git_reference_lookup(&remoteRef, repo, remoteTrackingRefName)
+        if refLookupCode != 0 {
+            throw GitError.operationFailed("远程跟踪分支不存在: \(remoteTrackingRefName)")
+        }
+        defer { git_reference_free(remoteRef) }
+
+        // 从引用创建 annotated commit
+        var annotated: OpaquePointer? = nil
+        try checkGit(
+            git_annotated_commit_from_ref(&annotated, repo, remoteRef),
+            operation: "git_annotated_commit_from_ref"
+        )
+        defer { git_annotated_commit_free(annotated) }
+
+        // 检查是否已经是最新的（HEAD == 远程跟踪分支）
+        var headCommit = try getHeadCommitHandle(repo: repo)
+        defer { git_commit_free(headCommit) }
+        let headOid = git_commit_id(headCommit)
+        let remoteOid = git_annotated_commit_id(annotated)
+
+        let isUpToDate = headOid != nil && remoteOid != nil &&
+            git_oid_equal(headOid, remoteOid) != 0
+        if isUpToDate {
+            return GitMergeResult(success: true, conflictFiles: [], isFastForward: true)
+        }
+
+        // 执行 merge
+        var mergeOpts = git_merge_options()
+        git_merge_options_init(&mergeOpts, numericCast(GIT_MERGE_OPTIONS_VERSION))
+
+        var checkoutOpts = git_checkout_options()
+        git_checkout_init_options(&checkoutOpts, numericCast(GIT_CHECKOUT_OPTIONS_VERSION))
+        checkoutOpts.checkout_strategy = numericCast(GIT_CHECKOUT_SAFE.rawValue)
+
+        var theirHeads: [OpaquePointer?] = [annotated]
+        let mergeCode = git_merge(repo, &theirHeads, 1, &mergeOpts, &checkoutOpts)
+
+        if mergeCode < 0 {
+            let conflicts = try checkMergeConflicts(repo: repo)
+            if !conflicts.isEmpty {
+                return GitMergeResult(success: false, conflictFiles: conflicts, isFastForward: false)
+            }
+            try checkGit(mergeCode, operation: "git_merge")
+        }
+
+        // 检查冲突
+        let conflicts = try checkMergeConflicts(repo: repo)
+        if !conflicts.isEmpty {
+            return GitMergeResult(success: false, conflictFiles: conflicts, isFastForward: false)
+        }
+
+        // 检查是否为 fast-forward（repository state 应为 NONE）
+        let state = git_repository_state(repo)
+        let isFF = state == 0 // GIT_REPOSITORY_STATE_NONE
+
+        return GitMergeResult(success: true, conflictFiles: [], isFastForward: isFF)
+    }
+
+    // MARK: - Merge (T02 #2)
+
+    /// 将指定分支合并到当前分支
+    /// 冲突时返回冲突文件列表
+    func merge(branch: String) async throws -> GitMergeResult {
+        let repo = try openRepository()
+        defer { git_repository_free(repo) }
+
+        // 合并前检查工作区是否干净
+        let currentStatus = try await status()
+        if currentStatus.hasChanges {
+            throw GitError.dirtyWorkingTree
+        }
+
+        // 查找要合并的分支
+        var branchRef: OpaquePointer? = nil
+        try checkGit(
+            git_branch_lookup(&branchRef, repo, branch, GIT_BRANCH_LOCAL),
+            operation: "git_branch_lookup"
+        )
+        defer { git_reference_free(branchRef) }
+
+        // 从分支引用创建 annotated commit
+        var annotated: OpaquePointer? = nil
+        try checkGit(
+            git_annotated_commit_from_ref(&annotated, repo, branchRef),
+            operation: "git_annotated_commit_from_ref"
+        )
+        defer { git_annotated_commit_free(annotated) }
+
+        // 执行 merge
+        var mergeOpts = git_merge_options()
+        git_merge_options_init(&mergeOpts, numericCast(GIT_MERGE_OPTIONS_VERSION))
+
+        var checkoutOpts = git_checkout_options()
+        git_checkout_init_options(&checkoutOpts, numericCast(GIT_CHECKOUT_OPTIONS_VERSION))
+        checkoutOpts.checkout_strategy = numericCast(GIT_CHECKOUT_SAFE.rawValue)
+
+        var theirHeads: [OpaquePointer?] = [annotated]
+        let mergeCode = git_merge(repo, &theirHeads, 1, &mergeOpts, &checkoutOpts)
+
+        if mergeCode < 0 {
+            let conflicts = try checkMergeConflicts(repo: repo)
+            if !conflicts.isEmpty {
+                return GitMergeResult(success: false, conflictFiles: conflicts, isFastForward: false)
+            }
+            try checkGit(mergeCode, operation: "git_merge")
+        }
+
+        // 检查冲突
+        let conflicts = try checkMergeConflicts(repo: repo)
+        if !conflicts.isEmpty {
+            return GitMergeResult(success: false, conflictFiles: conflicts, isFastForward: false)
+        }
+
+        // 检查是否为 fast-forward
+        let state = git_repository_state(repo)
+        let isFF = state == 0 // GIT_REPOSITORY_STATE_NONE
+
+        return GitMergeResult(success: true, conflictFiles: [], isFastForward: isFF)
+    }
+
+    // MARK: - Rebase (T02 #3)
+
+    /// 将当前分支 rebase 到指定分支的最新 commit 上
+    /// 冲突时中止 rebase 并返回冲突文件列表
+    func rebase(branch: String) async throws {
+        let repo = try openRepository()
+        defer { git_repository_free(repo) }
+
+        // rebase 前检查工作区是否干净
+        let currentStatus = try await status()
+        if currentStatus.hasChanges {
+            throw GitError.dirtyWorkingTree
+        }
+
+        // 查找目标分支（upstream）
+        var branchRef: OpaquePointer? = nil
+        try checkGit(
+            git_branch_lookup(&branchRef, repo, branch, GIT_BRANCH_LOCAL),
+            operation: "git_branch_lookup (rebase upstream)"
+        )
+        defer { git_reference_free(branchRef) }
+
+        // 从分支引用创建 annotated commit（upstream）
+        var upstreamAnnotated: OpaquePointer? = nil
+        try checkGit(
+            git_annotated_commit_from_ref(&upstreamAnnotated, repo, branchRef),
+            operation: "git_annotated_commit_from_ref (upstream)"
+        )
+        defer { git_annotated_commit_free(upstreamAnnotated) }
+
+        // 初始化 rebase（branch=nil 使用 HEAD，upstream=目标分支）
+        var rebaseOpts = git_rebase_options()
+        git_rebase_options_init(&rebaseOpts, numericCast(GIT_REBASE_OPTIONS_VERSION))
+
+        var rebase: OpaquePointer? = nil
+        try checkGit(
+            git_rebase_init(&rebase, repo, nil, upstreamAnnotated, nil, &rebaseOpts),
+            operation: "git_rebase_init"
+        )
+
+        // 不使用 defer { git_rebase_free(rebase) } — 因为 abort 会释放对象
+        // 手动管理生命周期
+
+        var hadConflict = false
+        var conflictFiles: [String] = []
+
+        // rebase 循环：next + commit
+        while true {
+            var operation: OpaquePointer? = nil
+            let nextCode = git_rebase_next(&operation, rebase)
+
+            if nextCode == GIT_ITEROVER.rawValue {
+                // 所有 commit 已重放完毕
+                break
+            }
+
+            if nextCode < 0 {
+                // 错误 — 中止 rebase
+                hadConflict = true
+                conflictFiles = try checkMergeConflicts(repo: repo)
+                git_rebase_abort(rebase)
+                if conflictFiles.isEmpty {
+                    try checkGit(nextCode, operation: "git_rebase_next")
+                }
+                break
+            }
+
+            // 提交重放的 commit
+            var commitOid = git_oid()
+            let commitCode = git_rebase_commit(&commitOid, rebase, nil, nil, nil, nil)
+
+            if commitCode == GIT_EAPPLIED.rawValue {
+                // 已经应用过 — 跳过
+                continue
+            }
+
+            if commitCode < 0 {
+                // 冲突 — 中止 rebase
+                hadConflict = true
+                conflictFiles = try checkMergeConflicts(repo: repo)
+                git_rebase_abort(rebase)
+                if conflictFiles.isEmpty {
+                    try checkGit(commitCode, operation: "git_rebase_commit")
+                }
+                break
+            }
+        }
+
+        if hadConflict {
+            throw GitError.rebaseConflict(conflictFiles)
+        }
+
+        // 成功完成 — finish + free
+        let finishCode = git_rebase_finish(rebase, nil)
+        git_rebase_free(rebase)
+        try checkGit(finishCode, operation: "git_rebase_finish")
+    }
+
+    /// 中止正在进行的 rebase
+    func rebaseAbort() async throws {
+        let repo = try openRepository()
+        defer { git_repository_free(repo) }
+
+        var rebaseOpts = git_rebase_options()
+        git_rebase_options_init(&rebaseOpts, numericCast(GIT_REBASE_OPTIONS_VERSION))
+
+        var rebase: OpaquePointer? = nil
+        let openCode = git_rebase_open(&rebase, repo, &rebaseOpts)
+        if openCode != 0 {
+            // 没有正在进行的 rebase — 静默返回
+            return
+        }
+
+        // git_rebase_abort 会释放 rebase 对象，不要再调用 git_rebase_free
+        try checkGit(git_rebase_abort(rebase), operation: "git_rebase_abort")
+    }
+
+    // MARK: - Stash (T02 #4)
+
+    /// 贮藏当前工作区和暂存区改动
+    func stashPush(message: String) async throws {
+        let repo = try openRepository()
+        defer { git_repository_free(repo) }
+
+        // 检查工作区是否有改动
+        let currentStatus = try await status()
+        if !currentStatus.hasChanges {
+            throw GitError.operationFailed("没有可暂存的改动")
+        }
+
+        // 创建签名
+        var sig: UnsafeMutablePointer<git_signature>? = nil
+        let authorName = UserDefaults.standard.string(forKey: BaizeGit.usernameUDKey) ?? BaizeGit.defaultCommitAuthor
+        let authorEmail = BaizeGit.defaultCommitEmail
+        let sigCode = authorName.withCString { namePtr in
+            authorEmail.withCString { emailPtr in
+                git_signature_now(&sig, namePtr, emailPtr)
+            }
+        }
+        try checkGit(sigCode, operation: "git_signature_now")
+        defer { git_signature_free(sig) }
+        guard let signature = sig else {
+            throw GitError.operationFailed("Signature creation returned nil")
+        }
+
+        // 执行 stash save
+        var stashOid = git_oid()
+        let stashCode = message.withCString { msgPtr in
+            git_stash_save(&stashOid, repo, signature, msgPtr, 0)
+        }
+        try checkGit(stashCode, operation: "git_stash_save")
+    }
+
+    /// 列出所有贮藏条目
+    func stashList() async throws -> [GitStashEntry] {
+        let repo = try openRepository()
+        defer { git_repository_free(repo) }
+
+        let collector = GitStashCollector(repo: repo)
+        let payload = Unmanaged.passUnretained(collector).toOpaque()
+
+        let stashCallback: git_stash_cb = { index, message, stashId, payload in
+            guard let payload = payload else { return 0 }
+            let collector = Unmanaged<GitStashCollector>.fromOpaque(payload).takeUnretainedValue()
+            let msg = message.map { String(cString: $0) } ?? ""
+
+            // 从 stash commit 获取时间
+            var date = Date()
+            if let stashId = stashId {
+                var commit: OpaquePointer? = nil
+                if git_commit_lookup(&commit, collector.repo, stashId) == 0, let ch = commit {
+                    let author = git_commit_author(ch)
+                    if let a = author {
+                        date = Date(timeIntervalSince1970: TimeInterval(a.pointee.when.time))
+                    }
+                    git_commit_free(ch)
+                }
+            }
+
+            collector.entries.append(GitStashEntry(
+                index: Int(index),
+                message: msg,
+                date: date
+            ))
+            return 0
+        }
+
+        try checkGit(
+            git_stash_foreach(repo, stashCallback, payload),
+            operation: "git_stash_foreach"
+        )
+
+        return collector.entries
+    }
+
+    /// 恢复并删除指定索引的贮藏
+    /// 冲突时保留 stash 不删除
+    func stashPop(index: Int) async throws {
+        let repo = try openRepository()
+        defer { git_repository_free(repo) }
+
+        var applyOpts = git_stash_apply_options()
+        git_stash_apply_init_options(&applyOpts, numericCast(GIT_STASH_APPLY_OPTIONS_VERSION))
+
+        let popCode = git_stash_pop(repo, numericCast(index), &applyOpts)
+        if popCode < 0 {
+            // 检查是否为冲突
+            let conflicts = try checkMergeConflicts(repo: repo)
+            if !conflicts.isEmpty {
+                throw GitError.mergeConflict(conflicts)
+            }
+            try checkGit(popCode, operation: "git_stash_pop")
+        }
+    }
+
+    /// 删除指定索引的贮藏（不恢复）
+    func stashDrop(index: Int) async throws {
+        let repo = try openRepository()
+        defer { git_repository_free(repo) }
+
+        try checkGit(
+            git_stash_drop(repo, numericCast(index)),
+            operation: "git_stash_drop"
+        )
+    }
+
+    // MARK: - Reset (T02 #5)
+
+    /// 重置到指定 commit（soft / mixed / hard）
+    func reset(to oid: String, mode: GitResetMode) async throws {
+        let repo = try openRepository()
+        defer { git_repository_free(repo) }
+
+        // 解析 OID 字符串
+        var targetOid = git_oid()
+        try checkGit(
+            oid.withCString { git_oid_fromstr(&targetOid, $0) },
+            operation: "git_oid_fromstr"
+        )
+
+        // 查找目标 commit
+        var target: OpaquePointer? = nil
+        try checkGit(
+            git_object_lookup(&target, repo, &targetOid, GIT_OBJECT_COMMIT),
+            operation: "git_object_lookup"
+        )
+        defer { git_object_free(target) }
+        guard let targetObj = target else {
+            throw GitError.operationFailed("Reset target commit not found: \(oid)")
+        }
+
+        // 配置 checkout 选项（hard 模式需要 FORCE）
+        var checkoutOpts = git_checkout_options()
+        git_checkout_init_options(&checkoutOpts, numericCast(GIT_CHECKOUT_OPTIONS_VERSION))
+        if mode == .hard {
+            checkoutOpts.checkout_strategy = numericCast(GIT_CHECKOUT_FORCE.rawValue)
+        } else {
+            checkoutOpts.checkout_strategy = numericCast(GIT_CHECKOUT_SAFE.rawValue)
+        }
+
+        // 映射 reset 模式
+        let resetType: git_reset_t
+        switch mode {
+        case .soft: resetType = GIT_RESET_SOFT
+        case .mixed: resetType = GIT_RESET_MIXED
+        case .hard: resetType = GIT_RESET_HARD
+        }
+
+        try checkGit(
+            git_reset(repo, targetObj, resetType, &checkoutOpts),
+            operation: "git_reset (\(mode.rawValue))"
+        )
+    }
+
+    // MARK: - Tag (T02 #6)
+
+    /// 创建标签（附注标签或轻量标签）
+    /// - Parameters:
+    ///   - name: 标签名
+    ///   - message: 标签消息（nil 时创建轻量标签）
+    ///   - targetOid: 目标 commit OID（nil 时在 HEAD 创建）
+    func createTag(name: String, message: String?, targetOid: String?) async throws {
+        let repo = try openRepository()
+        defer { git_repository_free(repo) }
+
+        // 解析目标 OID
+        var oid = git_oid()
+        if let targetOid = targetOid, !targetOid.isEmpty {
+            try checkGit(
+                targetOid.withCString { git_oid_fromstr(&oid, $0) },
+                operation: "git_oid_fromstr (tag target)"
+            )
+        } else {
+            // 使用 HEAD
+            let headCommit = try getHeadCommitHandle(repo: repo)
+            defer { git_commit_free(headCommit) }
+            let headOid = git_commit_id(headCommit)
+            guard let ho = headOid else {
+                throw GitError.emptyRepository
+            }
+            oid = ho.pointee
+        }
+
+        // 查找目标对象
+        var target: OpaquePointer? = nil
+        try checkGit(
+            git_object_lookup(&target, repo, &oid, GIT_OBJECT_COMMIT),
+            operation: "git_object_lookup (tag target)"
+        )
+        defer { git_object_free(target) }
+        guard let targetObj = target else {
+            throw GitError.operationFailed("Tag target commit not found")
+        }
+
+        var tagOid = git_oid()
+
+        if let message = message, !message.isEmpty {
+            // 创建附注标签
+            var sig: UnsafeMutablePointer<git_signature>? = nil
+            let authorName = UserDefaults.standard.string(forKey: BaizeGit.usernameUDKey) ?? BaizeGit.defaultCommitAuthor
+            let authorEmail = BaizeGit.defaultCommitEmail
+            let sigCode = authorName.withCString { namePtr in
+                authorEmail.withCString { emailPtr in
+                    git_signature_now(&sig, namePtr, emailPtr)
+                }
+            }
+            try checkGit(sigCode, operation: "git_signature_now (tag)")
+            defer { git_signature_free(sig) }
+            guard let signature = sig else {
+                throw GitError.operationFailed("Tag signature creation returned nil")
+            }
+
+            let createCode = name.withCString { namePtr in
+                message.withCString { msgPtr in
+                    git_tag_create(&tagOid, repo, namePtr, targetObj, signature, msgPtr, 0)
+                }
+            }
+            if createCode == -4 { // GIT_EEXISTS
+                throw GitError.tagExists(name)
+            }
+            try checkGit(createCode, operation: "git_tag_create")
+        } else {
+            // 创建轻量标签
+            let createCode = name.withCString { namePtr in
+                git_tag_create_lightweight(&tagOid, repo, namePtr, targetObj, 0)
+            }
+            if createCode == -4 { // GIT_EEXISTS
+                throw GitError.tagExists(name)
+            }
+            try checkGit(createCode, operation: "git_tag_create_lightweight")
+        }
+    }
+
+    /// 列出所有标签
+    func listTags() async throws -> [GitTag] {
+        let repo = try openRepository()
+        defer { git_repository_free(repo) }
+
+        // 获取标签名列表
+        var tagNames = git_strarray()
+        try checkGit(git_tag_list(&tagNames, repo), operation: "git_tag_list")
+        defer { git_strarray_free(&tagNames) }
+
+        var tags: [GitTag] = []
+        let count = Int(tagNames.count)
+
+        for i in 0..<count {
+            guard let namePtr = tagNames.strings?[i] else { continue }
+            let name = String(cString: namePtr)
+
+            // 通过引用名查找 OID
+            var tagOid = git_oid()
+            let refName = "refs/tags/\(name)"
+            let lookupCode = refName.withCString { git_reference_name_to_id(&tagOid, repo, $0) }
+            guard lookupCode == 0 else { continue }
+
+            let oidHex = withUnsafePointer(to: &tagOid) { ptr -> String in
+                guard let hex = git_oid_tostr_s(ptr) else { return "" }
+                return String(cString: hex)
+            }
+
+            // 尝试查找为附注标签
+            var tag: OpaquePointer? = nil
+            if git_tag_lookup(&tag, repo, &tagOid) == 0, let tagHandle = tag {
+                defer { git_tag_free(tagHandle) }
+
+                let tagger = git_tag_tagger(tagHandle)
+                let tagDate: Date
+                if let t = tagger {
+                    tagDate = Date(timeIntervalSince1970: TimeInterval(t.pointee.when.time))
+                } else {
+                    tagDate = Date()
+                }
+
+                let message = git_tag_message(tagHandle).map { String(cString: $0) }
+
+                tags.append(GitTag(
+                    name: name,
+                    oid: oidHex,
+                    date: tagDate,
+                    message: message,
+                    isAnnotated: true
+                ))
+            } else {
+                // 轻量标签 — OID 指向 commit
+                var commit: OpaquePointer? = nil
+                var tagDate = Date()
+                if git_commit_lookup(&commit, repo, &tagOid) == 0, let ch = commit {
+                    let author = git_commit_author(ch)
+                    if let a = author {
+                        tagDate = Date(timeIntervalSince1970: TimeInterval(a.pointee.when.time))
+                    }
+                    git_commit_free(ch)
+                }
+
+                tags.append(GitTag(
+                    name: name,
+                    oid: oidHex,
+                    date: tagDate,
+                    message: nil,
+                    isAnnotated: false
+                ))
+            }
+        }
+
+        return tags.sorted { $0.name < $1.name }
+    }
+
+    /// 删除指定标签
+    func deleteTag(name: String) async throws {
+        let repo = try openRepository()
+        defer { git_repository_free(repo) }
+
+        try checkGit(
+            name.withCString { git_tag_delete(repo, $0) },
+            operation: "git_tag_delete"
+        )
+    }
+
+    // MARK: - Clone (T02 #7)
+
+    /// 克隆远程仓库到指定路径
+    /// - Parameters:
+    ///   - remoteURL: 远程仓库 URL（HTTPS 或 SSH）
+    ///   - toPath: 本地目标路径
+    ///   - progressHandler: 可选进度回调（0.0–1.0 + 状态文本）
+    func clone(remoteURL: String, toPath: String,
+               progressHandler: ((Double, String) -> Void)?) async throws {
+        guard let token = keychainService.loadGitToken(), !token.isEmpty else {
+            throw GitError.credentialsMissing
+        }
+        let username = UserDefaults.standard.string(forKey: BaizeGit.usernameUDKey) ?? "git"
+
+        // 检查目标目录是否已存在且非空
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: toPath) {
+            let contents = (try? fileManager.contentsOfDirectory(atPath: toPath)) ?? []
+            if !contents.isEmpty {
+                throw GitError.directoryExists(toPath)
+            }
+        } else {
+            // 创建目标目录
+            try fileManager.createDirectory(atPath: toPath, withIntermediateDirectories: true)
+        }
+
+        // 通知开始
+        progressHandler?(0.0, "正在克隆 \(remoteURL)...")
+
+        // 配置 clone 选项
+        var cloneOpts = git_clone_options()
+        git_clone_options_init(&cloneOpts, numericCast(GIT_CLONE_OPTIONS_VERSION))
+
+        // 配置回调（复用 credentialsCallback）
+        let payload = GitCloneProgressPayload(username: username, token: token)
+        let payloadPointer = Unmanaged.passRetained(payload).toOpaque()
+        defer { Unmanaged<GitCloneProgressPayload>.fromOpaque(payloadPointer).release() }
+
+        var callbacks = git_remote_callbacks()
+        git_remote_init_callbacks(&callbacks, numericCast(GIT_REMOTE_CALLBACKS_VERSION))
+        callbacks.credentials = credentialsCallback
+        callbacks.payload = payloadPointer
+
+        cloneOpts.fetch_opts.callbacks = callbacks
+
+        // 执行 clone
+        var clonedRepo: OpaquePointer? = nil
+        let cloneCode = remoteURL.withCString { urlPtr in
+            toPath.withCString { pathPtr in
+                git_clone(&clonedRepo, urlPtr, pathPtr, &cloneOpts)
+            }
+        }
+
+        if cloneCode < 0 {
+            let errMsg: String
+            if let errPtr = git_error_last() {
+                errMsg = errPtr.pointee.message.map { String(cString: $0) } ?? "Unknown error"
+            } else {
+                errMsg = "Unknown error"
+            }
+            throw GitError.cloneFailed(errMsg)
+        }
+
+        // 释放 clone 返回的 repository 对象
+        if let repo = clonedRepo {
+            git_repository_free(repo)
+        }
+
+        // 通知完成
+        progressHandler?(1.0, "克隆完成")
+    }
+
+    // MARK: - Branch Delete / Rename (T02 #8)
+
+    /// 删除本地分支（不能删除当前分支）
+    func deleteBranch(name: String) async throws {
+        let repo = try openRepository()
+        defer { git_repository_free(repo) }
+
+        // 检查是否为当前分支
+        let currentName = try getCurrentBranchName(repo: repo)
+        if name == currentName {
+            throw GitError.cannotDeleteCurrentBranch
+        }
+
+        // 查找分支
+        var branchRef: OpaquePointer? = nil
+        let lookupCode = git_branch_lookup(&branchRef, repo, name, GIT_BRANCH_LOCAL)
+        if lookupCode == GIT_ENOTFOUND.rawValue {
+            throw GitError.branchNotFound(name)
+        }
+        try checkGit(lookupCode, operation: "git_branch_lookup (delete)")
+        defer { git_reference_free(branchRef) }
+
+        // 删除分支
+        try checkGit(
+            git_branch_delete(branchRef),
+            operation: "git_branch_delete"
+        )
+    }
+
+    /// 重命名分支
+    func renameBranch(oldName: String, newName: String) async throws {
+        let repo = try openRepository()
+        defer { git_repository_free(repo) }
+
+        // 查找分支
+        var branchRef: OpaquePointer? = nil
+        let lookupCode = git_branch_lookup(&branchRef, repo, oldName, GIT_BRANCH_LOCAL)
+        if lookupCode == GIT_ENOTFOUND.rawValue {
+            throw GitError.branchNotFound(oldName)
+        }
+        try checkGit(lookupCode, operation: "git_branch_lookup (rename)")
+
+        // 重命名
+        var newRef: OpaquePointer? = nil
+        let moveCode = newName.withCString { newNamePtr in
+            git_branch_move(&newRef, branchRef, newNamePtr, 0)
+        }
+        git_reference_free(branchRef)
+        if let nr = newRef { git_reference_free(nr) }
+
+        if moveCode == -4 { // GIT_EEXISTS
+            throw GitError.operationFailed("分支名已存在: \(newName)")
+        }
+        try checkGit(moveCode, operation: "git_branch_move")
+    }
+
+    // MARK: - Remote Branches (T02 #9)
+
+    /// 列出远程分支（先执行 fetch 确保最新）
+    func listRemoteBranches() async throws -> [GitBranch] {
+        // 先 fetch 确保远程分支列表是最新的
+        _ = try await fetch()
+
+        let repo = try openRepository()
+        defer { git_repository_free(repo) }
+
+        var branches: [GitBranch] = []
+        var iter: OpaquePointer? = nil
+        try checkGit(
+            git_branch_iterator_new(&iter, repo, GIT_BRANCH_REMOTE),
+            operation: "git_branch_iterator_new (remote)"
+        )
+        defer { git_branch_iterator_free(iter) }
+
+        var ref: OpaquePointer? = nil
+        var bt = git_branch_t(GIT_BRANCH_REMOTE.rawValue)
+        while git_branch_next(&ref, &bt, iter) == 0 {
+            defer { git_reference_free(ref) }
+            if let shorthand = git_reference_shorthand(ref) {
+                let name = String(cString: shorthand)
+                branches.append(GitBranch(name: name, isCurrent: false, isRemote: true))
+            }
+        }
+        return branches
+    }
+
+    /// 检出远程分支（创建本地跟踪分支并切换）
+    func checkoutRemoteBranch(name: String) async throws {
+        let repo = try openRepository()
+        defer { git_repository_free(repo) }
+
+        // 检查工作区是否干净
+        let currentStatus = try await status()
+        if currentStatus.hasChanges {
+            throw GitError.dirtyWorkingTree
+        }
+
+        // 处理远程分支名 — 可能带 origin/ 前缀
+        let remoteName: String
+        let localName: String
+        if name.hasPrefix("\(BaizeGit.defaultRemoteName)/") {
+            remoteName = name
+            localName = String(name.dropFirst(BaizeGit.defaultRemoteName.count + 1))
+        } else {
+            remoteName = "\(BaizeGit.defaultRemoteName)/\(name)"
+            localName = name
+        }
+
+        // 检查本地同名分支是否已存在
+        var localRef: OpaquePointer? = nil
+        let localLookupCode = git_branch_lookup(&localRef, repo, localName, GIT_BRANCH_LOCAL)
+        if localLookupCode == 0 {
+            git_reference_free(localRef)
+            throw GitError.operationFailed("本地分支 '\(localName)' 已存在")
+        }
+        if let r = localRef { git_reference_free(r) }
+
+        // 查找远程分支
+        var remoteRef: OpaquePointer? = nil
+        let remoteLookupCode = git_branch_lookup(&remoteRef, repo, remoteName, GIT_BRANCH_REMOTE)
+        if remoteLookupCode == GIT_ENOTFOUND.rawValue {
+            throw GitError.branchNotFound(remoteName)
+        }
+        try checkGit(remoteLookupCode, operation: "git_branch_lookup (remote checkout)")
+        defer { git_reference_free(remoteRef) }
+
+        // 获取远程分支指向的 commit
+        var peeledObj: OpaquePointer? = nil
+        try checkGit(
+            git_reference_peel(&peeledObj, remoteRef, GIT_OBJECT_COMMIT),
+            operation: "git_reference_peel (remote branch)"
+        )
+        defer { git_object_free(peeledObj) }
+        guard let obj = peeledObj else {
+            throw GitError.branchNotFound(remoteName)
+        }
+        let oidPtr = git_object_id(obj)
+
+        var targetCommit: OpaquePointer? = nil
+        try checkGit(
+            git_commit_lookup(&targetCommit, repo, oidPtr),
+            operation: "git_commit_lookup (remote branch target)"
+        )
+        defer { git_commit_free(targetCommit) }
+        guard let commitHandle = targetCommit else {
+            throw GitError.branchNotFound(remoteName)
+        }
+
+        // 创建本地分支
+        var newBranch: OpaquePointer? = nil
+        try checkGit(
+            localName.withCString { namePtr in
+                git_branch_create(&newBranch, repo, namePtr, commitHandle, 0)
+            },
+            operation: "git_branch_create (from remote)"
+        )
+
+        // 设置 upstream 跟踪远程分支
+        let upstreamName = "\(BaizeGit.defaultRemoteName)/\(localName)"
+        let upstreamCode = upstreamName.withCString { upstreamPtr in
+            git_branch_set_upstream(newBranch, upstreamPtr)
+        }
+        git_reference_free(newBranch)
+        try checkGit(upstreamCode, operation: "git_branch_set_upstream")
+
+        // 切换到新创建的本地分支
+        try await checkoutBranch(localName)
+    }
+
+    // MARK: - Conflict Detection Helper
+
+    /// 检查 merge/rebase 冲突并返回冲突文件列表
+    /// 返回空数组表示无冲突
+    private func checkMergeConflicts(repo: OpaquePointer) throws -> [String] {
+        var index: OpaquePointer? = nil
+        try checkGit(git_repository_index(&index, repo), operation: "git_repository_index")
+        defer { git_index_free(index) }
+
+        // 检查是否有冲突
+        if git_index_has_conflicts(index) == 0 {
+            return []
+        }
+
+        // 枚举冲突文件
+        var conflictIter: OpaquePointer? = nil
+        try checkGit(
+            git_index_conflict_iterator_new(&conflictIter, index),
+            operation: "git_index_conflict_iterator_new"
+        )
+        defer { git_index_conflict_iterator_free(conflictIter) }
+
+        var conflictFiles: [String] = []
+        var ancestor: UnsafePointer<git_index_entry>? = nil
+        var ours: UnsafePointer<git_index_entry>? = nil
+        var theirs: UnsafePointer<git_index_entry>? = nil
+
+        while git_index_conflict_next(&ancestor, &ours, &theirs, conflictIter) == 0 {
+            if let path = ours?.pointee.path {
+                let filePath = String(cString: path)
+                if !conflictFiles.contains(filePath) {
+                    conflictFiles.append(filePath)
+                }
+            } else if let path = theirs?.pointee.path {
+                let filePath = String(cString: path)
+                if !conflictFiles.contains(filePath) {
+                    conflictFiles.append(filePath)
+                }
+            }
+        }
+
+        return conflictFiles
     }
 }

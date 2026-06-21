@@ -97,6 +97,19 @@ class RuntimeExecutor: @unchecked Sendable {
         )
     }
 
+    // MARK: - T03: Project Root Update
+
+    /// T03: 更新 ios_setMiniRoot — 切换项目时重新设置进程级根目录
+    /// ios_setMiniRoot 是进程级操作，限制 ios_system 的可访问根目录
+    /// 必须在串行队列上执行以避免竞态
+    /// - Parameter path: 新的项目根目录绝对路径
+    func updateProjectRoot(_ path: String) {
+        Self.executeQueue.sync {
+            let result = ios_setMiniRoot(path)
+            runtimeLogger.info("ios_system: miniRoot updated to \(path) (result=\(result))")
+        }
+    }
+
     // MARK: - Shell Command Execution (ios_system)
 
     /// 执行 Shell 命令 — 使用 ios_system 库的 ios_popen
@@ -151,9 +164,21 @@ class RuntimeExecutor: @unchecked Sendable {
         // 拦截 git 命令，避免 ios_popen 60 秒超时。
         if cmdName == "git" {
             runtimeLogger.info("Git command intercepted — use GitService instead of ios_popen")
+
+            // git clone 专项拦截 — 引导用户通过 Dashboard 新建项目流程操作
+            let lowerCmd = command.lowercased()
+            if lowerCmd.contains("clone") {
+                return ExecutionResult(
+                    stdout: "",
+                    stderr: "⚠️ Git clone 请通过 Dashboard → 新建项目 → 从 Git clone 创建 进行操作。",
+                    exitCode: 1,
+                    isError: true
+                )
+            }
+
             return ExecutionResult(
                 stdout: "",
-                stderr: "⚠️ 'git' 命令在 iOS 沙箱中不可用。\n白泽使用 GitService (libgit2) 提供 Git 操作支持。\n\n可用操作：status, log, stage, commit, push, pull, branch, diff, checkout",
+                stderr: "⚠️ 'git' 命令在 iOS 沙箱中不可用。\n白泽使用 Git Tab (libgit2) 提供完整 Git 操作支持。\n\n可用操作：status, log, diff, stage, commit, push, pull, fetch, merge, rebase, stash, reset, tag, branch, checkout\n\n请切换到 Git Tab 进行操作。",
                 exitCode: 1,
                 isError: true
             )

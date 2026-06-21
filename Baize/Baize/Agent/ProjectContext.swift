@@ -23,10 +23,12 @@ class ProjectContext {
     // MARK: - Properties
 
     /// 项目根目录路径
-    private let rootPath: String
+    /// T03: 从 let 改为 var，支持切换项目时更新
+    private var rootPath: String
 
     /// 文件系统服务
-    private let fileSystemService: FileSystemService
+    /// T03: 从 let 改为 var，支持切换项目时重建
+    private var fileSystemService: FileSystemService
 
     /// 解析后的 BAIZE.md 配置
     private(set) var config: BaizeConfig?
@@ -45,6 +47,22 @@ class ProjectContext {
     }
 
     // MARK: - Public API
+
+    /// T03: 更新项目根目录 — 切换项目时调用
+    /// 更新 rootPath + 重建 fileSystemService + 重新加载 BAIZE.md
+    /// - Parameter path: 新的项目根目录绝对路径
+    func updateRootPath(_ path: String) async {
+        rootPath = path
+        // 重建 FileSystemService 以确保内部状态与新根路径一致
+        fileSystemService = FileSystemService(rootPath: path)
+        agentLogger.info("ProjectContext: rootPath updated to \(path)")
+        // 重新加载 BAIZE.md
+        do {
+            try await load()
+        } catch {
+            agentLogger.error("ProjectContext: failed to reload BAIZE.md after rootPath update: \(error.localizedDescription)")
+        }
+    }
 
     /// 加载项目上下文 — 读取 BAIZE.md 并解析
     /// 修复 C4：class 中无需 mutating 关键字，变更在引用上持久化

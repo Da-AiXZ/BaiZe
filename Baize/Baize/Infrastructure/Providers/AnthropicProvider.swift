@@ -271,6 +271,14 @@ struct AnthropicProvider: LLMProvider {
                 context.stopReason = stopReason
                 apiLogger.debug("Anthropic SSE: message_delta stop_reason=\(stopReason)")
             }
+            // T04: 解析 usage 字段（Anthropic 在 message_delta 事件返回 token 用量）
+            // 格式：{"usage": {"input_tokens": 10, "output_tokens": 20}}
+            // 注意：input_tokens 是本次请求的完整输入（含 system+messages），output_tokens 是累积输出
+            if let usage = json["usage"] as? [String: Any] {
+                let promptTokens = usage["input_tokens"] as? Int ?? 0
+                let completionTokens = usage["output_tokens"] as? Int ?? 0
+                chunks.append(.usage(LLMUsage(promptTokens: promptTokens, completionTokens: completionTokens)))
+            }
 
         case "message_stop":
             // 消息结束

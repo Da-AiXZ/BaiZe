@@ -224,4 +224,107 @@ actor ConversationStore {
     private func sessionFilePath(for id: UUID) -> String {
         (storeDirectory as NSString).appendingPathComponent("\(id.uuidString).json")
     }
+
+    // MARK: - Session Search (T05: #15 会话全文搜索)
+
+    /// 全文搜索 — 在 actor 内执行避免阻塞 UI
+    /// 遍历当前项目的所有会话，匹配每条消息的 content computed property
+    /// - Parameters:
+    ///   - query: 搜索关键词（大小写不敏感，支持中文）
+    ///   - projectPath: 项目路径（按此过滤会话范围）
+    /// - Returns: 匹配结果数组（按 matchCount 降序排序）
+    /// 性能目标：100 会话 × 50 消息 = 5000 条，< 500ms
+    func search(query: String, projectPath: String) async -> [SessionSearchResult] {
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return []
+        }
+
+        // 获取所有会话并按 projectPath 过滤
+        let allSessions = listSessions()
+        let projectSessions = allSessions.filter { $0.projectPath == projectPath }
+
+        let lowerQuery = query.lowercased()
+        var results: [SessionSearchResult] = []
+
+        for session in projectSessions {
+            var matchCount = 0
+            var firstMatchSnippet: String?
+            var firstMatchMessageId: String?
+
+            for message in session.messages {
+                let content = message.content
+                guard !content.isEmpty else { continue }
+
+                // 大小写不敏感匹配
+                let lowerContent = content.lowercased()
+                if let range = lowerContent.range(of: lowerQuery) {
+                    matchCount += 1
+
+                    // 记录第一个匹配的片段和消息 ID
+                    if firstMatchSnippet == nil {
+                        // 提取匹配片段：关键词前后各 30 字符
+                        let matchStart = range.lowerBound
+                        let matchEnd = range.upperBound
+
+                        let snippetStart = content.index(
+                            matchStart,
+                            offsetBy: -30,
+                            limitedBy: content.startIndex
+                        ) ?? content.startIndex
+
+                        let snippetEnd = content.index(
+                            matchEnd,
+                            offsetBy: 30,
+                            limitedBy: content.endIndex
+                        ) ?? content.endIndex
+
+                        // 添加省略号表示截断
+                        var snippet = String(content[snippetStart..<snippetEnd])
+                        if snippetStart != content.startIndex {
+                            snippet = "..." + snippet
+                        }
+                        if snippetEnd != content.endIndex {
+                            snippet = snippet + "..."
+                        }
+                        firstMatchSnippet = snippet
+                        firstMatchMessageId = message.id
+                    }
+                }
+            }
+
+            if matchCount > 0 {
+                results.append(SessionSearchResult(
+                    sessionId: session.id,
+                    sessionTitle: session.title,
+                    matchedSnippet: firstMatchSnippet ?? "",
+                    matchCount: matchCount,
+                    matchedMessageId: firstMatchMessageId ?? ""
+                ))
+            }
+        }
+
+        // 按 matchCount 降序排序
+        results.sort { $0.matchCount > $1.matchCount }
+
+        return results
+    }
+}
+
+// MARK: - Session Search Result (T05: #15)
+
+/// 会话搜索结果 — 单个会话的搜索匹配信息
+/// 不可新增 Message enum case（铁律 #10）— 此结构体仅用于搜索结果展示
+struct SessionSearchResult: Identifiable {
+    /// 唯一标识（用于 SwiftUI ForEach）
+    let id = UUID()
+    /// 匹配的会话 ID
+    let sessionId: UUID
+    /// 会话标题
+    let sessionTitle: String
+    /// 匹配片段（关键词前后各 30 字，带省略号）
+    let matchedSnippet: String
+    /// 该会话中匹配的消息总数
+    let matchCount: Int
+    /// 第一个匹配消息的 ID（用于跳转定位）
+    let matchedMessageId: String
 }

@@ -24,6 +24,10 @@ struct ChatMessageList: View {
     // Bug 4 fix: 标记编程式滚动，防止 onPreferenceChange 误判为用户上滑
     @State private var isProgrammaticScroll: Bool = false
 
+    // T05: Bug 6 长内容折叠状态 — 按 message.id 跟踪展开状态
+    // 折叠状态是纯 UI @State（铁律 #10：不存入 Message）
+    @State private var expandedMessageIds: Set<UUID> = []
+
     /// 是否显示"滚到底"按钮 — 当用户上滑且不在底部时显示
     private var showScrollToBottomButton: Bool {
         let maxScrollOffset = contentHeight - scrollViewHeight
@@ -36,8 +40,12 @@ struct ChatMessageList: View {
                 ScrollView {
                     LazyVStack(spacing: 8) {
                         ForEach(messages) { message in
-                            MessageBubble(message: message)
-                                .id(message.id)
+                            MessageBubble(
+                                message: message,
+                                isExpanded: expandedMessageIds.contains(message.id),
+                                toggleExpansion: { toggleExpansion(message.id) }
+                            )
+                            .id(message.id)
                         }
 
                         // 流式文本（Agent 正在输出）
@@ -162,6 +170,22 @@ struct ChatMessageList: View {
             // 动画结束后解除标记
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 isProgrammaticScroll = false
+            }
+        }
+    }
+
+    // MARK: - Long Message Collapse / Expand (T05: Bug 6)
+
+    /// 切换消息的折叠/展开状态
+    /// - Parameter id: 消息的 UUID
+    /// 折叠状态是纯 UI @State，不存入 Message（铁律 #10）
+    /// 使用 withAnimation 实现流畅的折叠/展开动画（验收标准 #6）
+    private func toggleExpansion(_ id: UUID) {
+        withAnimation(.easeInOut(duration: 0.25)) {
+            if expandedMessageIds.contains(id) {
+                expandedMessageIds.remove(id)
+            } else {
+                expandedMessageIds.insert(id)
             }
         }
     }

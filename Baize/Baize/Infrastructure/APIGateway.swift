@@ -1,6 +1,7 @@
 import Foundation
 
 /// LLM 响应增量 chunk — AgentLoop 消费的类型
+/// T04: 新增 .usage case 用于 Provider 上报真实 token 用量（由 APIGateway 包装层拦截，不转发给 AgentLoop）
 enum LLMChunk: Sendable {
     /// 文本增量
     case textDelta(String)
@@ -10,6 +11,18 @@ enum LLMChunk: Sendable {
     case toolCallDelta(id: String, argumentsDelta: String)
     /// 流式完成
     case done(finishReason: String)
+    /// T04: 用量信息（Provider 解析自 SSE 的 usage 字段，APIGateway 拦截后不转发给 AgentLoop）
+    case usage(LLMUsage)
+}
+
+/// T04: LLM 用量信息 — 由 Provider 从 SSE 响应中解析
+/// OpenAI 在 [DONE] 前的最后一个 chunk 的 usage 字段返回
+/// Anthropic 在 message_delta 事件的 usage 字段返回
+struct LLMUsage: Sendable {
+    /// 输入 token 数
+    let promptTokens: Int
+    /// 输出 token 数
+    let completionTokens: Int
 }
 
 /// LLM API 调用网关 — Actor 并发模型
@@ -39,6 +52,9 @@ actor APIGateway {
     /// 当前活跃的模型名称
     private var activeModel: String = BaizeAPI.defaultModel
 
+    /// T04: 用量追踪器（非侵入式注入 — 在 streamComplete 包装层拦截 usage，不破坏 Provider 流）
+    private var usageTracker: UsageTracker?
+
     // MARK: - Initialization
 
     init(keychainService: KeychainService) {
@@ -62,7 +78,11 @@ actor APIGateway {
     // MARK: - Public API
 
     /// 发送 Chat Completions 请求，返回 SSE 流式响应
-    /// 委托到当前活跃的 Provider 执行
+    /// T04: 包装 Provider 流，非侵入式拦截 usage 数据记录到 UsageTracker
+    /// - 不破坏 toOpenAIMergedFormat/toAnthropicMessages（铁律 #11）— 仅在流包装层拦截
+    /// - Provider 通过 stream_options(OpenAI) 或 message_delta(Anthropic) 上报真实 usage
+    /// - 无 usage 时用 token 估算兜底（BaizeToken.tokenEstimateMultiplier）
+    /// - .usage chunk 拦截后不转发给 AgentLoop
     /// - Parameters:
     ///   - messages: 对话消息数组
     ///   - tools: 工具定义数组
@@ -84,8 +104,73 @@ actor APIGateway {
             }
         }
 
+        // T04: 捕获到局部变量（Task 闭包非 actor isolated，不能直接访问 self 属性）
+        let tracker = self.usageTracker
+        // prompt token 估算（复用 Array<Message>.estimatedTokens，含 toolCall/toolResult token）
+        let estimatedPromptTokens = messages.estimatedTokens
+
         apiLogger.info("APIGateway: delegating to provider '\(currentProviderId)' with model '\(resolvedModel)'")
-        return provider.streamComplete(messages: messages, tools: tools, model: resolvedModel)
+        let rawStream = provider.streamComplete(messages: messages, tools: tools, model: resolvedModel)
+
+        // T04: 包装层 — 拦截 .usage 和 .done，记录用量到 UsageTracker
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                var receivedUsage: LLMUsage?
+                var completionCharCount = 0
+                do {
+                    for try await chunk in rawStream {
+                        switch chunk {
+                        case .usage(let usage):
+                            // 拦截真实 usage（不转发给 AgentLoop）
+                            receivedUsage = usage
+                            continue
+
+                        case .textDelta(let text):
+                            // 累计 completion 字符数（用于无 usage 时估算）
+                            completionCharCount += text.count
+
+                        case .done:
+                            // 流结束 — 记录用量
+                            let promptTokens = receivedUsage?.promptTokens ?? estimatedPromptTokens
+                            let completionTokens = receivedUsage?.completionTokens
+                                ?? Int(Double(completionCharCount) * BaizeToken.tokenEstimateMultiplier)
+                            let cost = BaizePricing.estimateCost(
+                                model: resolvedModel,
+                                prompt: promptTokens,
+                                completion: completionTokens
+                            )
+                            if let tracker = tracker {
+                                await tracker.record(UsageRecord(
+                                    timestamp: Date(),
+                                    provider: currentProviderId,
+                                    model: resolvedModel,
+                                    promptTokens: promptTokens,
+                                    completionTokens: completionTokens,
+                                    estimatedCost: cost
+                                ))
+                            }
+
+                        case .toolCallBegin, .toolCallDelta:
+                            // 工具调用 chunk 不影响 usage 统计
+                            break
+                        }
+                        // .usage 已被上面的 continue 拦截，不会到达这里
+                        continuation.yield(chunk)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// T04: 注入用量追踪器（由 BaizeApp 在启动时调用）
+    /// - Parameter tracker: UsageTracker 实例
+    func setUsageTracker(_ tracker: UsageTracker) {
+        self.usageTracker = tracker
+        apiLogger.info("APIGateway: UsageTracker injected")
     }
 
     /// 取消当前活跃的 SSE stream

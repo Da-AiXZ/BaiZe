@@ -12,6 +12,8 @@ struct FileExplorerView: View {
 
     /// W5 fix: 从 AppState 获取共享 FileSystemService（延迟初始化）
     /// W15/W21 fix: fallback 使用 appState.currentProjectPath 而非默认路径
+    /// T03: 文件树根目录已从 BaizePath.projectRoot 改为 appState.currentProjectPath，
+    /// 切换项目时通过 onChange(of: appState.currentProjectPath) 自动刷新
     private var fileSystemService: FileSystemService {
         guard let shared = appState.fileSystemService else {
             let fallback = FileSystemService(rootPath: appState.currentProjectPath)

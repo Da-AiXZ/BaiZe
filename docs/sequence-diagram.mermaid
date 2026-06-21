@@ -1,79 +1,159 @@
-sequenceDiagram
-    participant CI as GitHub Actions
-    participant XG as XcodeGen
-    participant XB as xcodebuild
-    participant DR as download-runtime.sh
-    participant BI as build-ipa.sh
-    participant VI as verify-ipa.sh
-    participant GH as GitHub Artifact
+%% 白泽功能补全 — 时序图
+%% 包含 4 个关键流程：项目切换、Git clone+新建项目、UsageTracker 记录、会话搜索
 
-    CI->>CI: checkout repository
-    CI->>CI: brew install ldid xcodegen xcpretty
-    CI->>CI: select Xcode 15.4
-    CI->>XG: xcodegen generate (project.yml → Baize.xcodeproj)
-    XG-->>CI: Baize.xcodeproj created
-    CI->>XB: xcodebuild -resolvePackageDependencies
-    XB-->>CI: SPM packages resolved (ios_system, KeychainAccess)
-    CI->>DR: bash scripts/download-runtime.sh
-    DR->>DR: download nodejs-mobile arm64 binary
-    DR->>DR: download CPython iOS binary (or create placeholder)
-    DR-->>CI: Runtime binaries in Baize/Baize/Frameworks/
-    CI->>XB: xcodebuild archive -scheme Baize -sdk iphoneos -arch arm64
-    Note over XB: Compiles ALL Swift sources (including BaizeApp.swift @main)
-    Note over XB: Embeds Info.plist, entitlements, resources
-    Note over XB: Output: build/Baize.xcarchive/Products/Applications/Baize.app
-    XB-->>CI: build/Baize.xcarchive
-    CI->>BI: bash scripts/build-ipa.sh build/Baize.xcarchive output
-    BI->>BI: Extract Baize.app from xcarchive
-    BI->>BI: Copy Runtime binaries into Baize.app/Frameworks/
-    BI->>BI: ldid -SBaize/Baize/Baize.entitlements Baize.app/Baize
-    BI->>BI: ldid -S each Frameworks/* binary
-    BI->>BI: zip → Baize.ipa
-    BI-->>CI: output/Baize.ipa
-    CI->>VI: bash scripts/verify-ipa.sh output/Baize.ipa
-    VI->>VI: Check bundle structure (Payload/Baize.app/)
-    VI->>VI: ldid -e Baize.app/Baize → verify entitlements
-    VI->>VI: Check Info.plist (CFBundleIdentifier, etc.)
-    VI->>VI: Check Frameworks/ (node, python3)
-    VI-->>CI: Verification report
-    CI->>GH: upload-artifact Baize-IPA
+%% ===== 1. 项目切换联动流程 (#14) =====
 
 sequenceDiagram
-    participant Dev as Developer/CI
-    participant XG as XcodeGen
-    participant PY as project.yml
-    participant PS as Package.swift
-    participant XP as Baize.xcodeproj
+    actor User
+    participant Dashboard as DashboardView
+    participant AppState
+    participant Registry as ProjectRegistry
+    participant OldGit as GitService (old)
+    participant NewGit as GitService (new)
+    participant GitVM as GitViewModel
+    participant TermVM as TerminalViewModel
+    participant ProjCtx as ProjectContext
+    participant FileSvc as FileSystemService
+    participant Runtime as RuntimeExecutor
+    participant FileExp as FileExplorerView
+    participant ChatView as ChatView
 
-    Dev->>XG: xcodegen generate
-    XG->>PY: Read project.yml
-    XG->>PS: Read Package.swift (for SPM dependency metadata)
-    Note over XG: Create iOS app target "Baize"
-    Note over XG: Sources = all Swift files under Baize/Baize/
-    Note over XG: Dependencies = ios_system + KeychainAccess
-    Note over XG: Settings = INFOPLIST_FILE, CODE_SIGN_ENTITLEMENTS, etc.
-    XG->>XP: Generate Baize.xcodeproj/project.pbxproj
-    XG-->>Dev: Baize.xcodeproj ready
+    User->>Dashboard: 点击项目卡片
+    Dashboard->>AppState: switchProject(to: newPath)
+    AppState->>AppState: 检查 EditorState 未保存改动
+    alt 有未保存改动
+        AppState-->>Dashboard: 弹出保存提示
+        User->>Dashboard: 确认保存
+    end
+    AppState->>Registry: update(entry.lastOpened = now)
+    AppState->>AppState: currentProjectPath = newPath
+    
+    note over AppState,NewGit: 重建 GitService (repositoryPath 是 let)
+    AppState->>NewGit: GitService(repositoryPath: newPath)
+    AppState->>GitVM: GitViewModel(gitService: newGit)
+    note over OldGit: 旧实例由 ARC 回收 (defer free 已执行)
+    
+    AppState->>TermVM: currentWorkingDir = newPath
+    AppState->>ProjCtx: updateRootPath(newPath)
+    ProjCtx->>ProjCtx: 重新加载 BAIZE.md
+    AppState->>FileSvc: updateRootPath(newPath)
+    AppState->>Runtime: ios_setMiniRoot(newPath)
+    
+    note over FileExp,ChatView: @Published currentProjectPath 自动驱动
+    FileExp-->>FileExp: 文件树根目录更新 (reactive)
+    ChatView-->>ChatView: 会话列表按 projectPath 过滤 (reactive)
+    
+    AppState-->>Dashboard: 切换完成
+
+%% ===== 2. Git clone + 新建项目联动流程 (#7 + #13') =====
 
 sequenceDiagram
-    participant BI as build-ipa.sh
-    participant ARC as xcarchive
-    participant APP as Baize.app
-    participant FRW as Frameworks/
-    participant LD as ldid
-    participant ZIP as zip
+    actor User
+    participant Wizard as NewProjectWizard
+    participant GitSvc as GitService
+    participant Registry as ProjectRegistry
+    participant AppState
+    participant Progress as ProgressHandler
 
-    BI->>ARC: Find build/Baize.xcarchive
-    BI->>APP: Extract Products/Applications/Baize.app
-    BI->>APP: Verify Baize.app/Baize executable exists
-    BI->>FRW: mkdir Baize.app/Frameworks/
-    BI->>FRW: cp node → Frameworks/node
-    BI->>FRW: cp python3 → Frameworks/python3
-    BI->>LD: ldid -SBaize/Baize/Baize.entitlements Baize.app/Baize
-    Note over LD: Fakesign main executable with entitlements
-    BI->>LD: ldid -S Frameworks/node
-    BI->>LD: ldid -S Frameworks/python3
-    Note over LD: Fakesign runtime binaries (no entitlements)
-    BI->>ZIP: mkdir Payload/ && cp -r Baize.app Payload/
-    BI->>ZIP: zip -r Baize.ipa Payload/
-    BI-->>BI: output/Baize.ipa created
+    User->>Wizard: 选择"从 Git clone 创建"
+    User->>Wizard: 输入 URL + 项目名
+    Wizard->>Wizard: 校验项目名 (非空/合法字符/不重名)
+    Wizard->>GitSvc: clone(remoteURL: url, toPath: projectRoot/projectName)
+    
+    note over GitSvc: git_clone_options 配置 credentials + progress callback
+    GitSvc->>GitSvc: git_clone(&repo, url, path, &opts)
+    
+    loop 对象传输
+        GitSvc->>Progress: progressHandler(percent, message)
+        Progress-->>Wizard: 更新进度条 UI
+    end
+    
+    alt clone 成功
+        GitSvc-->>Wizard: 成功
+        GitSvc->>GitSvc: git_repository_free(repo)
+        Wizard->>Registry: add(ProjectEntry(path, name, stack))
+        Wizard->>AppState: switchProject(to: projectRoot/projectName)
+        note over AppState: 触发完整联动 (见流程 1)
+        Wizard-->>User: 项目创建完成，已切换
+    else clone 失败
+        GitSvc-->>Wizard: GitError.cloneFailed / networkError
+        Wizard->>Wizard: 回滚 (删除已创建目录)
+        Wizard-->>User: 显示错误信息
+    end
+
+%% ===== 3. UsageTracker 记录流程 (#12) =====
+
+sequenceDiagram
+    participant Loop as AgentLoop
+    participant Gateway as APIGateway
+    participant Provider as LLMProvider
+    participant Pricing as BaizePricing
+    participant Tracker as UsageTracker
+    participant Disk as File System
+
+    Loop->>Gateway: streamComplete(messages, tools, model)
+    Gateway->>Gateway: 捕获 resolvedModel, providerId, tracker
+    Gateway->>Provider: provider.streamComplete(messages, tools, model)
+    Provider-->>Gateway: 原始 AsyncThrowingStream~LLMChunk~
+    
+    note over Gateway: 包装流 — 拦截 .usage 和 .done
+    Gateway-->>Loop: 包装后的 AsyncThrowingStream~LLMChunk~
+
+    loop 消费每个 chunk
+        Loop->>Gateway: await next chunk
+        
+        alt chunk == .usage(LLMUsage)
+            Gateway->>Gateway: 缓存 usage 数据
+            note over Gateway: 不转发 .usage 给 AgentLoop
+        else chunk == .textDelta(text)
+            Gateway->>Gateway: 累积 completionTextLength
+            Gateway-->>Loop: yield .textDelta
+        else chunk == .done(finishReason)
+            alt 有真实 usage
+                Gateway->>Pricing: estimateCost(model, prompt, completion)
+                Pricing-->>Gateway: cost
+                Gateway->>Tracker: record(UsageRecord(真实 token))
+            else 无 usage (估算)
+                Gateway->>Gateway: 估算 prompt/completion tokens
+                Gateway->>Pricing: estimateCost(model, estPrompt, estCompletion)
+                Pricing-->>Gateway: cost
+                Gateway->>Tracker: record(UsageRecord(估算 token))
+            end
+            Tracker->>Disk: 追加写入 usage/{yyyy-MM-dd}.json
+            Gateway-->>Loop: yield .done
+        else 其他 chunk
+            Gateway-->>Loop: yield chunk (透传)
+        end
+    end
+
+%% ===== 4. 会话搜索流程 (#15) =====
+
+sequenceDiagram
+    actor User
+    participant List as SessionListView
+    participant Store as ConversationStore
+    participant Disk as File System
+
+    User->>List: 输入搜索关键词
+    List->>List: debounce 300ms
+    List->>Store: search(query: keyword, projectPath: current)
+    
+    Store->>Disk: 读取所有会话 JSON 文件
+    Disk-->>Store: List~ConversationSession~
+    
+    Store->>Store: 过滤 projectPath 匹配的会话
+    
+    loop 每个匹配项目的会话
+        Store->>Store: 遍历 messages[].content (大小写不敏感)
+        alt content 包含关键词
+            Store->>Store: 提取匹配片段 (前后各 30 字)
+            Store->>Store: 记录 matchCount + matchedMessageId
+        end
+    end
+    
+    Store-->>List: List~SessionSearchResult~
+    List-->>User: 显示搜索结果 (标题 + 高亮片段 + 匹配数)
+    
+    User->>List: 点击搜索结果
+    List->>List: 加载该会话
+    List->>List: 滚动到 matchedMessageId 位置

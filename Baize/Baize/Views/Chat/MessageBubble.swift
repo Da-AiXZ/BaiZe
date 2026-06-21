@@ -6,13 +6,22 @@ import SwiftUI
 /// 错误消息：红色警示样式
 struct MessageBubble: View {
     let message: DisplayMessage
+    /// T05: 长消息折叠/展开状态（纯 UI 状态，铁律 #10：不存入 Message）
+    let isExpanded: Bool
+    /// T05: 切换折叠/展开状态的回调
+    let toggleExpansion: () -> Void
 
     var body: some View {
         switch message.role {
         case .user:
             UserMessageBubble(content: message.content, timestamp: message.timestamp)
         case .assistant:
-            AssistantMessageBubble(content: message.content, timestamp: message.timestamp)
+            AssistantMessageBubble(
+                content: message.content,
+                timestamp: message.timestamp,
+                isExpanded: isExpanded,
+                toggleExpansion: toggleExpansion
+            )
         case .toolCall:
             if let toolCall = message.toolCall, let status = message.toolStatus {
                 ToolCallBubble(
@@ -71,9 +80,46 @@ private struct UserMessageBubble: View {
 // MARK: - Assistant Message Bubble
 
 /// Agent 文本消息气泡 — 深色背景，左对齐
+/// T05: Bug 6 长内容折叠/展开 + 分段渲染优化
 private struct AssistantMessageBubble: View {
     let content: String
     let timestamp: Date
+    /// T05: 折叠/展开状态（由 ChatMessageList 管理，通过 Binding 传递）
+    let isExpanded: Bool
+    /// T05: 切换折叠/展开的回调
+    let toggleExpansion: () -> Void
+
+    /// 折叠阈值：超过 2000 字符或 50 行的消息触发折叠（验收标准 #3）
+    private let collapseCharThreshold: Int = 2000
+    private let collapseLineThreshold: Int = 50
+    /// 分段渲染阈值：超过 5000 字符的消息按段落分割渲染
+    private let segmentCharThreshold: Int = 5000
+
+    /// 是否应折叠（超过阈值）
+    private var shouldCollapse: Bool {
+        content.count > collapseCharThreshold
+            || content.components(separatedBy: "\n").count > collapseLineThreshold
+    }
+
+    /// 折叠时显示的内容（前 50 行）
+    private var collapsedContent: String {
+        let lines = content.components(separatedBy: "\n")
+        let previewLines = Array(lines.prefix(collapseLineThreshold))
+        return previewLines.joined(separator: "\n")
+    }
+
+    /// 当前应显示的内容（折叠时截断，展开时完整）
+    private var displayContent: String {
+        if shouldCollapse && !isExpanded {
+            return collapsedContent
+        }
+        return content
+    }
+
+    /// 是否需要分段渲染（超长文本按段落分割，避免单条 Text O(n²) 布局）
+    private var shouldSegment: Bool {
+        displayContent.count > segmentCharThreshold
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -87,15 +133,34 @@ private struct AssistantMessageBubble: View {
                 )
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(content)
-                    .font(.system(size: 14))
-                    .foregroundColor(.primary)
-                    // Bug 6 fix: 确保长文本垂直扩展、水平不溢出，优化布局计算
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color.baizeBubbleAssistant)
-                    .cornerRadius(12)
+                // 内容渲染：分段或单条 Text
+                if shouldSegment {
+                    segmentedContentBubble
+                } else {
+                    Text(displayContent)
+                        .font(.system(size: 14))
+                        .foregroundColor(.primary)
+                        // Bug 6 fix: 确保长文本垂直扩展、水平不溢出
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color.baizeBubbleAssistant)
+                        .cornerRadius(12)
+                }
+
+                // 展开/折叠按钮（仅当消息超过阈值时显示）
+                if shouldCollapse {
+                    Button(action: toggleExpansion) {
+                        HStack(spacing: 4) {
+                            Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                                .font(.caption)
+                            Text(isExpanded ? "收起" : "展开全文")
+                                .font(.caption)
+                        }
+                        .foregroundColor(.baizeAccent)
+                    }
+                    .buttonStyle(.plain)
+                }
 
                 Text(timestamp.chatTimestamp)
                     .font(.caption2)
@@ -104,6 +169,26 @@ private struct AssistantMessageBubble: View {
 
             Spacer(minLength: 40)
         }
+    }
+
+    /// 分段渲染视图 — 超长文本按段落（\n\n）分割，每段一个 Text
+    /// 避免 SwiftUI Text 超长字符串 O(n²) 布局（验收标准 #1/#2/#7）
+    /// 不破坏 Markdown 代码块渲染：代码块本身就是 \n\n 分隔的段落
+    private var segmentedContentBubble: some View {
+        let paragraphs = displayContent.components(separatedBy: "\n\n")
+
+        return VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, paragraph in
+                Text(paragraph)
+                    .font(.system(size: 14))
+                    .foregroundColor(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.baizeBubbleAssistant)
+        .cornerRadius(12)
     }
 }
 

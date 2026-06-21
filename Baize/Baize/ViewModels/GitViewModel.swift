@@ -75,6 +75,41 @@ class GitViewModel: ObservableObject {
     /// 是否正在初始化仓库
     @Published var isInitializing: Bool = false
 
+    // MARK: - T02 Published State
+
+    /// 贮藏列表
+    @Published var stashList: [GitStashEntry] = []
+
+    /// 标签列表
+    @Published var tags: [GitTag] = []
+
+    /// 远程分支列表
+    @Published var remoteBranches: [GitBranch] = []
+
+    /// Clone 进度（0-1）
+    @Published var cloneProgress: Double = 0
+
+    /// Clone 状态文本
+    @Published var cloneStatus: String = ""
+
+    /// 是否正在克隆
+    @Published var isCloning: Bool = false
+
+    /// 是否正在 Fetch
+    @Published var isFetching: Bool = false
+
+    /// 是否正在 Pull
+    @Published var isPulling: Bool = false
+
+    /// 是否正在 Merge
+    @Published var isMerging: Bool = false
+
+    /// 是否正在 Rebase
+    @Published var isRebasing: Bool = false
+
+    /// 是否正在贮藏操作
+    @Published var isStashing: Bool = false
+
     // MARK: - Initialization
 
     init(gitService: GitService) {
@@ -365,7 +400,346 @@ class GitViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Test Connection
+    // MARK: - Fetch (T02)
+
+    /// 从远程仓库拉取更新
+    func fetch() async {
+        guard hasGitToken else {
+            showError("未配置 GitHub Token，请先在设置中配置")
+            return
+        }
+
+        isFetching = true
+        defer { isFetching = false }
+
+        do {
+            let result = try await gitService.fetch()
+            showSuccessMessage("Fetch 完成（接收 \(result.receivedBytes) 字节）")
+            // 刷新远程分支列表
+            await loadRemoteBranches()
+        } catch let gitError as GitError {
+            showError(gitError.errorDescription ?? "Fetch 失败")
+        } catch {
+            showError("Fetch 失败: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Pull (T02)
+
+    /// 拉取并合并远程更新
+    func pull() async {
+        guard hasGitToken else {
+            showError("未配置 GitHub Token，请先在设置中配置")
+            return
+        }
+
+        isPulling = true
+        defer { isPulling = false }
+
+        do {
+            let result = try await gitService.pull()
+            if result.success {
+                if result.isFastForward {
+                    showSuccessMessage("Pull 成功（Fast-forward）")
+                } else {
+                    showSuccessMessage("Pull 成功（合并完成）")
+                }
+                await refreshStatus()
+                await loadLog()
+            } else {
+                showError("Pull 遇到冲突，涉及 \(result.conflictFiles.count) 个文件: \(result.conflictFiles.joined(separator: ", "))")
+            }
+        } catch let gitError as GitError {
+            showError(gitError.errorDescription ?? "Pull 失败")
+        } catch {
+            showError("Pull 失败: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Merge (T02)
+
+    /// 合并指定分支到当前分支
+    func merge(branch: String) async {
+        isMerging = true
+        defer { isMerging = false }
+
+        do {
+            let result = try await gitService.merge(branch: branch)
+            if result.success {
+                showSuccessMessage(result.isFastForward ? "合并成功（Fast-forward）" : "合并成功")
+                await refreshStatus()
+                await loadLog()
+                await loadBranches()
+            } else {
+                showError("合并冲突，涉及 \(result.conflictFiles.count) 个文件: \(result.conflictFiles.joined(separator: ", "))")
+            }
+        } catch let gitError as GitError {
+            showError(gitError.errorDescription ?? "合并失败")
+        } catch {
+            showError("合并失败: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Rebase (T02)
+
+    /// 将当前分支变基到指定分支
+    func rebase(branch: String) async {
+        isRebasing = true
+        defer { isRebasing = false }
+
+        do {
+            try await gitService.rebase(branch: branch)
+            showSuccessMessage("Rebase 成功")
+            await refreshStatus()
+            await loadLog()
+        } catch let gitError as GitError {
+            showError(gitError.errorDescription ?? "Rebase 失败")
+        } catch {
+            showError("Rebase 失败: \(error.localizedDescription)")
+        }
+    }
+
+    /// 中止 rebase
+    func rebaseAbort() async {
+        do {
+            try await gitService.rebaseAbort()
+            showSuccessMessage("Rebase 已中止")
+            await refreshStatus()
+        } catch let gitError as GitError {
+            showError(gitError.errorDescription ?? "中止 Rebase 失败")
+        } catch {
+            showError("中止 Rebase 失败: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Stash (T02)
+
+    /// 加载贮藏列表
+    func loadStashList() async {
+        do {
+            stashList = try await gitService.stashList()
+        } catch let gitError as GitError {
+            // 空贮藏列表不算错误
+            if case .stashEmpty = gitError {
+                stashList = []
+            } else {
+                showError(gitError.errorDescription ?? "加载贮藏列表失败")
+            }
+        } catch {
+            showError("加载贮藏列表失败: \(error.localizedDescription)")
+        }
+    }
+
+    /// 贮藏当前改动
+    func stashPush(message: String) async {
+        isStashing = true
+        defer { isStashing = false }
+
+        do {
+            try await gitService.stashPush(message: message)
+            showSuccessMessage("改动已贮藏")
+            await refreshStatus()
+            await loadStashList()
+        } catch let gitError as GitError {
+            showError(gitError.errorDescription ?? "贮藏失败")
+        } catch {
+            showError("贮藏失败: \(error.localizedDescription)")
+        }
+    }
+
+    /// 恢复并删除指定贮藏
+    func stashPop(index: Int) async {
+        isStashing = true
+        defer { isStashing = false }
+
+        do {
+            try await gitService.stashPop(index: index)
+            showSuccessMessage("贮藏已恢复")
+            await refreshStatus()
+            await loadStashList()
+        } catch let gitError as GitError {
+            showError(gitError.errorDescription ?? "恢复贮藏失败")
+        } catch {
+            showError("恢复贮藏失败: \(error.localizedDescription)")
+        }
+    }
+
+    /// 删除指定贮藏
+    func stashDrop(index: Int) async {
+        isStashing = true
+        defer { isStashing = false }
+
+        do {
+            try await gitService.stashDrop(index: index)
+            showSuccessMessage("贮藏已删除")
+            await loadStashList()
+        } catch let gitError as GitError {
+            showError(gitError.errorDescription ?? "删除贮藏失败")
+        } catch {
+            showError("删除贮藏失败: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Reset (T02)
+
+    /// 重置到指定 commit
+    func reset(to oid: String, mode: GitResetMode) async {
+        do {
+            try await gitService.reset(to: oid, mode: mode)
+            showSuccessMessage("已重置（\(mode.displayName)）")
+            await refreshStatus()
+            await loadLog()
+        } catch let gitError as GitError {
+            showError(gitError.errorDescription ?? "重置失败")
+        } catch {
+            showError("重置失败: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Tag (T02)
+
+    /// 加载标签列表
+    func loadTags() async {
+        do {
+            tags = try await gitService.listTags()
+        } catch let gitError as GitError {
+            showError(gitError.errorDescription ?? "加载标签失败")
+        } catch {
+            showError("加载标签失败: \(error.localizedDescription)")
+        }
+    }
+
+    /// 创建标签
+    func createTag(name: String, message: String?, targetOid: String?) async {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            showError("标签名不能为空")
+            return
+        }
+
+        do {
+            try await gitService.createTag(name: trimmedName, message: message, targetOid: targetOid)
+            showSuccessMessage("标签 '\(trimmedName)' 已创建")
+            await loadTags()
+        } catch let gitError as GitError {
+            showError(gitError.errorDescription ?? "创建标签失败")
+        } catch {
+            showError("创建标签失败: \(error.localizedDescription)")
+        }
+    }
+
+    /// 删除标签
+    func deleteTag(name: String) async {
+        do {
+            try await gitService.deleteTag(name: name)
+            showSuccessMessage("标签 '\(name)' 已删除")
+            await loadTags()
+        } catch let gitError as GitError {
+            showError(gitError.errorDescription ?? "删除标签失败")
+        } catch {
+            showError("删除标签失败: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Clone (T02)
+
+    /// 克隆远程仓库
+    func clone(remoteURL: String, toPath: String) async {
+        isCloning = true
+        cloneProgress = 0
+        cloneStatus = "准备克隆..."
+        defer { isCloning = false }
+
+        do {
+            try await gitService.clone(remoteURL: remoteURL, toPath: toPath) { progress, status in
+                Task { @MainActor in
+                    self.cloneProgress = progress
+                    self.cloneStatus = status
+                }
+            }
+            cloneProgress = 1.0
+            cloneStatus = "克隆完成"
+            showSuccessMessage("仓库克隆成功")
+        } catch let gitError as GitError {
+            cloneStatus = "克隆失败"
+            showError(gitError.errorDescription ?? "克隆失败")
+        } catch {
+            cloneStatus = "克隆失败"
+            showError("克隆失败: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Branch Delete / Rename (T02)
+
+    /// 删除分支
+    func deleteBranch(name: String) async {
+        do {
+            try await gitService.deleteBranch(name: name)
+            showSuccessMessage("分支 '\(name)' 已删除")
+            await loadBranches()
+        } catch let gitError as GitError {
+            showError(gitError.errorDescription ?? "删除分支失败")
+        } catch {
+            showError("删除分支失败: \(error.localizedDescription)")
+        }
+    }
+
+    /// 重命名分支
+    func renameBranch(oldName: String, newName: String) async {
+        let trimmedNew = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedNew.isEmpty else {
+            showError("新分支名不能为空")
+            return
+        }
+
+        do {
+            try await gitService.renameBranch(oldName: oldName, newName: trimmedNew)
+            showSuccessMessage("分支已从 '\(oldName)' 重命名为 '\(trimmedNew)'")
+            await loadBranches()
+        } catch let gitError as GitError {
+            showError(gitError.errorDescription ?? "重命名分支失败")
+        } catch {
+            showError("重命名分支失败: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Remote Branches (T02)
+
+    /// 加载远程分支列表
+    func loadRemoteBranches() async {
+        do {
+            remoteBranches = try await gitService.listRemoteBranches()
+        } catch let gitError as GitError {
+            // 静默处理远程分支加载失败（可能没有配置远程仓库）
+            if case .credentialsMissing = gitError {
+                remoteBranches = []
+            } else if case .operationFailed = gitError {
+                remoteBranches = []
+            } else {
+                showError(gitError.errorDescription ?? "加载远程分支失败")
+            }
+        } catch {
+            // 静默处理
+        }
+    }
+
+    /// 检出远程分支
+    func checkoutRemoteBranch(name: String) async {
+        isSwitchingBranch = true
+        defer { isSwitchingBranch = false }
+
+        do {
+            try await gitService.checkoutRemoteBranch(name: name)
+            showSuccessMessage("已检出远程分支: \(name)")
+            await refreshStatus()
+            await loadBranches()
+            await loadLog()
+        } catch let gitError as GitError {
+            showError(gitError.errorDescription ?? "检出远程分支失败")
+        } catch {
+            showError("检出远程分支失败: \(error.localizedDescription)")
+        }
+    }
 
     /// 测试 GitHub Token 连接
     /// - Parameters:

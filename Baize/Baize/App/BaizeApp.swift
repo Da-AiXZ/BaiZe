@@ -45,6 +45,15 @@ struct BaizeApp: App {
     /// Git Service (actor，封装 libgit2 C API)
     private let gitService: GitService
 
+    /// T03: Project Registry — 项目注册表（actor，持久化项目列表）
+    private let projectRegistry: ProjectRegistry
+
+    /// T03: Usage Tracker — 用量统计（actor，T04 深度集成）
+    private let usageTracker: UsageTracker
+
+    /// T04: Terminal History Store — 终端命令历史持久化（actor，按项目隔离）
+    private let terminalHistoryStore: TerminalHistoryStore
+
     // MARK: - Initialization
 
     init() {
@@ -75,6 +84,12 @@ struct BaizeApp: App {
         let conversation = ConversationStore()
         let registry = ToolRegistry(fileSystemService: fsService, runtimeExecutor: runtime, nodeEngine: nodeEngine, pythonEngine: pythonEngine)
 
+        // T03: 创建 ProjectRegistry + UsageTracker
+        let projectRegistry = ProjectRegistry(storePath: BaizePath.projectsRegistry)
+        let usageTracker = UsageTracker(storeDir: BaizePath.usageData)
+        // T04: 创建 TerminalHistoryStore（终端命令历史，按项目隔离）
+        let terminalHistoryStore = TerminalHistoryStore(storeDir: BaizePath.terminalHistory)
+
         self.keychainService = keychain
         self.apiGateway = api
         self.toolRegistry = registry
@@ -87,6 +102,9 @@ struct BaizeApp: App {
         self.nodeRuntimeEngine = nodeEngine
         self.pythonRuntimeEngine = pythonEngine
         self.gitService = gitSvc
+        self.projectRegistry = projectRegistry
+        self.usageTracker = usageTracker
+        self.terminalHistoryStore = terminalHistoryStore
 
         // W22 fix: 将所有服务实例注入 AppState，供 ChatView 等视图共享
         _appState = StateObject(wrappedValue: {
@@ -108,7 +126,8 @@ struct BaizeApp: App {
             // 生命周期：App 启动创建一次，App 生命周期内不销毁
             state.terminalViewModel = TerminalViewModel(
                 runtimeExecutor: runtime,
-                initialWorkingDir: workingRoot
+                initialWorkingDir: workingRoot,
+                terminalHistoryStore: terminalHistoryStore
             )
 
             // Git 集成：创建 GitViewModel 并注入 AppState
@@ -116,10 +135,16 @@ struct BaizeApp: App {
             state.gitService = gitSvc
             state.gitViewModel = gitVM
 
+            // T03: 注入 ProjectRegistry + UsageTracker
+            state.projectRegistry = projectRegistry
+            state.usageTracker = usageTracker
+
             // Phase 2C: 恢复上次 Provider/Model 选择
             state.restoreProviderSelection()
             state.restoreCustomConfig()
             Task {
+                // T04: 注入 UsageTracker 到 APIGateway（非侵入式拦截 usage 记录用量）
+                await api.setUsageTracker(usageTracker)
                 do {
                     try await api.setActiveProvider(providerId: state.activeProvider.providerId, model: state.activeModel)
                 } catch {
@@ -175,6 +200,13 @@ struct BaizeApp: App {
                     Task {
                         try await projectContext.load()
                         baizeLogger.info("Project context loaded on startup")
+                    }
+
+                    // T03: 加载项目注册表 + 注册当前项目
+                    Task {
+                        await appState.projectRegistry?.load()
+                        await appState.registerCurrentProject()
+                        baizeLogger.info("ProjectRegistry loaded + current project registered")
                     }
 
                     // 延迟启动运行时引擎 — App 完全启动后再初始化重型 C 运行时

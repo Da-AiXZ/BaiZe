@@ -243,6 +243,11 @@ actor AgentLoop {
 
                 case .done(finishReason: let reason):
                     agentLogger.info("LLM stream done, finish reason: \(reason)")
+
+                case .usage:
+                    // T04: usage chunk 由 APIGateway 包装层拦截记录到 UsageTracker，不转发给 AgentLoop
+                    // 此 case 仅为满足 Swift enum switch exhaustive 要求，正常运行不会到达
+                    break
                 }
             }
 

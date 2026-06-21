@@ -177,6 +177,16 @@ class AppState: ObservableObject {
     /// BaizeApp.init() 中创建一次，App 生命周期内不销毁
     var terminalViewModel: TerminalViewModel?
 
+    /// T03: Project Registry — 项目注册表（actor，持久化项目列表）
+    var projectRegistry: ProjectRegistry?
+
+    /// T03: Usage Tracker — 用量统计（actor，T04 会深度集成）
+    var usageTracker: UsageTracker?
+
+    /// T03: Editor State — 编辑器状态引用（用于切换项目时检查未保存改动 + 清空 Tab）
+    /// 由 EditorContainerView 在初始化时注入
+    var editorState: EditorState?
+
     // MARK: - Error State
 
     /// 最近错误消息（用于全局 Alert）
@@ -279,6 +289,130 @@ class AppState: ObservableObject {
     /// 设置 API 配置状态
     func updateAPIStatus(isConfigured: Bool) {
         apiConfigured = isConfigured
+    }
+
+    // MARK: - T03: Project Switching
+
+    /// T03: 切换当前项目，触发全子系统联动（10 步）
+    ///
+    /// 切换流程：
+    /// 1. 检查是否已在当前项目（是则跳过）
+    /// 2. 检查编辑器未保存改动 → 自动保存
+    /// 3. 更新 currentProjectPath
+    /// 4. 更新 FileSystemService 根路径
+    /// 5. 更新 ProjectContext 根路径 + 重新加载 BAIZE.md
+    /// 6. 重建 GitService 实例（repositoryPath 是 let，必须新建）
+    /// 7. 重建 GitViewModel（持有新 GitService）
+    /// 8. 更新 TerminalViewModel 工作目录
+    /// 9. 更新 RuntimeExecutor ios_setMiniRoot（进程级）
+    /// 10. 更新 ProjectRegistry lastOpened + 清空编辑器 Tab
+    ///
+    /// - Parameter projectPath: 新项目的绝对路径
+    func switchProject(to projectPath: String) async {
+        // Step 1: 检查是否已在当前项目
+        guard projectPath != currentProjectPath else {
+            baizeLogger.info("switchProject: already at target path, skipping")
+            return
+        }
+
+        baizeLogger.info("switchProject: switching from '\(currentProjectPath)' to '\(projectPath)'")
+
+        // Step 2: 检查编辑器未保存改动 → 自动保存
+        if let editor = editorState, editor.hasUnsavedChanges {
+            if let activeTab = editor.activeTab {
+                let content = editor.currentContent
+                do {
+                    try fileSystemService?.writeFile(at: activeTab.filePath, content: content)
+                    editor.markSaved()
+                    baizeLogger.info("switchProject: auto-saved '\(activeTab.fileName)' before switching")
+                } catch {
+                    baizeLogger.error("switchProject: failed to auto-save '\(activeTab.fileName)': \(error.localizedDescription)")
+                }
+            }
+        }
+
+        // Step 3: 更新 currentProjectPath
+        currentProjectPath = projectPath
+
+        // Step 4: 更新 FileSystemService 根路径
+        fileSystemService?.updateRootPath(projectPath)
+
+        // Step 5: 更新 ProjectContext 根路径 + 重新加载 BAIZE.md
+        if let projectCtx = projectContext {
+            await projectCtx.updateRootPath(projectPath)
+        }
+
+        // Step 6: 重建 GitService 实例（repositoryPath 是 let，必须新建）
+        if let keychain = keychainService {
+            let newGitService = GitService(repositoryPath: projectPath, keychainService: keychain)
+            // Step 7: 重建 GitViewModel（持有新 GitService）
+            let newGitVM = GitViewModel(gitService: newGitService)
+            gitService = newGitService
+            gitViewModel = newGitVM
+            baizeLogger.info("switchProject: GitService + GitViewModel rebuilt for '\(projectPath)'")
+        }
+
+        // Step 8: 更新 TerminalViewModel 工作目录
+        terminalViewModel?.currentWorkingDir = projectPath
+
+        // Step 9: 更新 RuntimeExecutor ios_setMiniRoot（进程级）
+        runtimeExecutor?.updateProjectRoot(projectPath)
+
+        // Step 10: 更新 ProjectRegistry lastOpened + 清空编辑器 Tab
+        if let registry = projectRegistry {
+            if let entry = await registry.find(path: projectPath) {
+                var updated = entry
+                updated.lastOpened = Date()
+                await registry.update(updated)
+                baizeLogger.info("switchProject: updated lastOpened for '\(entry.name)'")
+            }
+        }
+
+        // 清空编辑器 Tab 和 AppState 打开文件列表
+        editorState?.openTabs = []
+        editorState?.activeTab = nil
+        editorState?.hasUnsavedChanges = false
+        openFiles = []
+        selectedFilePath = nil
+
+        baizeLogger.info("switchProject: completed switch to '\(projectPath)'")
+    }
+
+    /// T03: 注册当前项目到 ProjectRegistry（首次启动时调用）
+    /// 如果当前项目路径尚未注册，创建 ProjectEntry 并添加
+    func registerCurrentProject() async {
+        guard let registry = projectRegistry else {
+            baizeLogger.warning("registerCurrentProject: projectRegistry is nil, skipping")
+            return
+        }
+
+        let path = currentProjectPath
+
+        // 检查是否已注册
+        if let existing = await registry.find(path: path) {
+            // 已注册，更新 lastOpened
+            var updated = existing
+            updated.lastOpened = Date()
+            await registry.update(updated)
+            baizeLogger.info("registerCurrentProject: project already registered, updated lastOpened")
+            return
+        }
+
+        // 未注册，创建新条目
+        let projectName = (path as NSString).deletingLastPathComponent.isEmpty
+            ? "Baize"
+            : (path as NSString).lastPathComponent
+
+        let entry = ProjectEntry(
+            id: UUID(),
+            name: projectName,
+            path: path,
+            stack: "Unknown",
+            icon: "folder.fill",
+            lastOpened: Date()
+        )
+        await registry.add(entry)
+        baizeLogger.info("registerCurrentProject: registered '\(projectName)' at \(path)")
     }
 
     /// 确保 BaiZe 项目目录存在

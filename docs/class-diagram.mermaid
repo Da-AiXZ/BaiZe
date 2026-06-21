@@ -1,108 +1,292 @@
+%% 白泽功能补全 — 类图
+%% 定义所有新增数据模型、Actor/Service 接口、GitService 新增方法签名
+
 classDiagram
-    class ProjectYML {
+    direction TB
+
+    %% ===== 数据模型 =====
+
+    class ProjectEntry {
+        +UUID id
         +String name
-        +Options options
-        +List~SPMPackage~ packages
-        +List~Target~ targets
-    }
-
-    class Options {
-        +Bool createIntermediateGroups
-        +Bool generateEmptyDirectories
-        +String minimumXcodeGenVersion
-    }
-
-    class SPMPackage {
-        +String name
-        +String url
-        +String branch
-        +String majorVersion
-        +String from
-    }
-
-    class Target {
-        +String name
-        +String type
-        +String platform
-        +DeploymentTarget deploymentTarget
-        +List~Source~ sources
-        +List~Dependency~ dependencies
-        +Settings settings
-        +String entitlementsPath
-    }
-
-    class DeploymentTarget {
-        +String iOS
-    }
-
-    class Source {
         +String path
-        +String type
-        +String buildPhase
-        +List~String~ excludes
+        +String stack
+        +String icon
+        +Date lastOpened
+        +Color iconColor
     }
 
-    class Dependency {
-        +String package
-        +String product
+    class UsageRecord {
+        +Date timestamp
+        +String provider
+        +String model
+        +Int promptTokens
+        +Int completionTokens
+        +Double estimatedCost
     }
 
-    class Settings {
-        +Dict base
-        +Dict config
+    class UsageSummary {
+        +Int totalTokens
+        +Int apiCallCount
+        +Double totalCost
     }
 
-    class BuildIPAScript {
-        +String archivePath
-        +String outputDir
-        +String productName
-        +String entitlementsPath
-        +extractAppFromArchive()
-        +insertRuntimeBinaries()
-        +fakesignWithLdid()
-        +createIPA()
+    class TerminalHistoryRecord {
+        +String projectPath
+        +List~String~ commands
+        +Date lastUpdated
     }
 
-    class DownloadRuntimeScript {
-        +String runtimeDir
-        +String nodeVersion
-        +String pythonVersion
-        +downloadNodejsMobile()
-        +downloadCPythoniOS()
-        +createPlaceholder()
-        +verifyBinary()
+    class GitStashEntry {
+        +UUID id
+        +Int index
+        +String message
+        +Date date
     }
 
-    class VerifyIPAScript {
-        +String ipaPath
-        +verifyBundleStructure()
-        +verifyEntitlements()
-        +verifyRuntimeBinaries()
-        +verifyInfoPlist()
-        +generateReport()
-    }
-
-    class CIWorkflow {
+    class GitTag {
+        +UUID id
         +String name
-        +List~Trigger~ on
-        +EnvVars env
-        +List~Step~ steps
+        +String oid
+        +Date date
+        +String message
+        +Bool isAnnotated
     }
 
-    class Step {
-        +String name
-        +String uses
-        +String run
-        +CacheConfig cache
+    class GitFetchResult {
+        +Int updatedBranches
+        +Int receivedBytes
     }
 
-    ProjectYML --> Options
-    ProjectYML --> SPMPackage
-    ProjectYML --> Target
-    Target --> DeploymentTarget
-    Target --> Source
-    Target --> Dependency
-    Target --> Settings
-    BuildIPAScript --> CIWorkflow : called by
-    DownloadRuntimeScript --> CIWorkflow : called by
-    VerifyIPAScript --> CIWorkflow : called by
+    class GitMergeResult {
+        +Bool success
+        +List~String~ conflictFiles
+        +Bool isFastForward
+    }
+
+    class GitResetMode {
+        <<enumeration>>
+        soft
+        mixed
+        hard
+    }
+
+    class ExportFormat {
+        <<enumeration>>
+        markdown
+        plaintext
+        json
+    }
+
+    class ExportContentMode {
+        <<enumeration>>
+        minimal
+        full
+    }
+
+    class SessionSearchResult {
+        +UUID id
+        +UUID sessionId
+        +String sessionTitle
+        +String matchedSnippet
+        +Int matchCount
+        +String matchedMessageId
+    }
+
+    class LLMUsage {
+        +Int promptTokens
+        +Int completionTokens
+    }
+
+    class ProjectTemplate {
+        <<enumeration>>
+        reactVite
+        swiftPackage
+        python
+        nodejs
+        staticHTML
+        +String displayName
+        +String iconName
+        +String stackDescription
+        +String bundleDirectoryName
+    }
+
+    class GitSubTab {
+        <<enumeration>>
+        changes
+        history
+        branches
+        stash
+        +String title
+        +String systemImage
+    }
+
+    %% ===== Actor / Service =====
+
+    class ProjectRegistry {
+        <<actor>>
+        -List~ProjectEntry~ projects
+        -String storePath
+        +init(String)
+        +List~ProjectEntry~ load()
+        +List~ProjectEntry~ list()
+        +add(ProjectEntry)
+        +remove(UUID)
+        +update(ProjectEntry)
+        +ProjectEntry find(String path)
+        -save()
+    }
+
+    class UsageTracker {
+        <<actor>>
+        -String storeDir
+        +init(String)
+        +record(UsageRecord)
+        +UsageSummary getTodaySummary()
+        +List~UsageRecord~ loadDay(Date)
+        +cleanupOldRecords()
+    }
+
+    class TerminalHistoryStore {
+        <<actor>>
+        -String storeDir
+        +init(String)
+        +List~String~ load(String projectPath)
+        +append(String command, String projectPath)
+        +clear(String projectPath)
+    }
+
+    class ConversationExporter {
+        +export(ConversationSession, ExportFormat, String, ExportContentMode) URL
+        -String exportMarkdown(ConversationSession, Bool)
+        -String exportPlaintext(ConversationSession, Bool)
+        -Data exportJSON(ConversationSession)
+        -String sanitizeFilename(String)
+    }
+
+    class BaizePricing {
+        <<enumeration>>
+        +Double getInputPrice(String model)
+        +Double getOutputPrice(String model)
+        +Double estimateCost(String model, Int prompt, Int completion)
+    }
+
+    %% ===== 现有类扩展（新增方法） =====
+
+    class GitService {
+        <<actor>>
+        -String repositoryPath
+        -KeychainService keychainService
+        +fetch() GitFetchResult
+        +pull() GitMergeResult
+        +merge(String branch) GitMergeResult
+        +rebase(String branch) GitMergeResult
+        +rebaseAbort()
+        +stashPush(String message)
+        +List~GitStashEntry~ stashList()
+        +GitMergeResult stashPop()
+        +stashDrop(Int index)
+        +reset(String oid, GitResetMode mode)
+        +createTag(String name, String message, String targetOid)
+        +List~GitTag~ listTags()
+        +deleteTag(String name)
+        +clone(String remoteURL, String toPath, Function progressHandler)
+        +deleteBranch(String name)
+        +renameBranch(String oldName, String newName)
+        +List~GitBranch~ listRemoteBranches()
+        +checkoutRemoteBranch(String name)
+    }
+
+    class GitViewModel {
+        <<MainActor ObservableObject>>
+        -GitService gitService
+        +List~GitStashEntry~ stashList
+        +List~GitTag~ tags
+        +List~GitBranch~ remoteBranches
+        +Double cloneProgress
+        +String cloneStatus
+        +fetch()
+        +pull()
+        +merge(String branch)
+        +rebase(String branch)
+        +rebaseAbort()
+        +stashPush(String message)
+        +loadStashList()
+        +stashPop()
+        +stashDrop(Int index)
+        +reset(String oid, GitResetMode mode)
+        +createTag(String name, String message)
+        +loadTags()
+        +deleteTag(String name)
+        +clone(String url, String projectName)
+        +deleteBranch(String name)
+        +renameBranch(String oldName, String newName)
+        +loadRemoteBranches()
+        +checkoutRemoteBranch(String name)
+    }
+
+    class ConversationStore {
+        <<actor>>
+        -String storeDirectory
+        +save(ConversationSession)
+        +ConversationSession load(UUID)
+        +List~ConversationSession~ listSessions()
+        +List~ConversationSession~ listSessions(String projectPath)
+        +delete(UUID)
+        +List~SessionSearchResult~ search(String query, String projectPath)
+    }
+
+    class APIGateway {
+        <<actor>>
+        -KeychainService keychainService
+        -UsageTracker usageTracker
+        +setUsageTracker(UsageTracker)
+        +AsyncThrowingStream streamComplete(List~Message~, List~ToolDefinition~, String model)
+    }
+
+    class LLMChunk {
+        <<enumeration>>
+        textDelta(String)
+        toolCallBegin(String id, String name)
+        toolCallDelta(String id, String argumentsDelta)
+        usage(LLMUsage)
+        done(String finishReason)
+    }
+
+    class AppState {
+        <<MainActor ObservableObject>>
+        +String currentProjectPath
+        +ProjectRegistry projectRegistry
+        +UsageTracker usageTracker
+        +GitService gitService
+        +GitViewModel gitViewModel
+        +switchProject(String path)
+        -performSwitch(String path)
+    }
+
+    %% ===== 关系 =====
+
+    ProjectRegistry --> ProjectEntry : manages
+    UsageTracker --> UsageRecord : records
+    UsageTracker --> BaizePricing : uses for cost
+    UsageTracker --> UsageSummary : returns
+    TerminalHistoryStore --> TerminalHistoryRecord : persists
+    ConversationExporter --> ExportFormat : uses
+    ConversationExporter --> ExportContentMode : uses
+    GitService --> GitStashEntry : returns
+    GitService --> GitTag : returns
+    GitService --> GitFetchResult : returns
+    GitService --> GitMergeResult : returns
+    GitService --> GitResetMode : uses
+    GitViewModel --> GitService : calls
+    GitViewModel --> GitStashEntry : displays
+    GitViewModel --> GitTag : displays
+    ConversationStore --> SessionSearchResult : returns
+    APIGateway --> LLMChunk : yields
+    LLMChunk --> LLMUsage : carries
+    APIGateway --> UsageTracker : records to
+    APIGateway --> BaizePricing : estimates cost
+    AppState --> ProjectRegistry : owns
+    AppState --> UsageTracker : owns
+    AppState --> GitService : recreates on switch
+    AppState --> GitViewModel : recreates on switch
