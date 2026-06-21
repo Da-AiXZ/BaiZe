@@ -12,53 +12,54 @@ struct ContentView: View {
 
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
 
-    @ViewBuilder
     var body: some View {
         // R3 重构：横屏用 HSplitView（聊天 + 工作台），竖屏用 TabView + 抽屉
-        if horizontalSizeClass == .regular {
-            // 横屏：NavigationSplitView（文件浏览器 + HSplitView(工作区 + 工作台)）
-            NavigationSplitView(columnVisibility: $columnVisibility) {
-                FileExplorerView(appState: appState)
-                    .navigationTitle("项目文件")
-            } detail: {
-                R3WorkspacePane(appState: appState, showWorkbench: $showWorkbench)
-                    .safeAreaInset(edge: .top, spacing: 0) {
-                        topBar
-                    }
-            }
-            .navigationSplitViewStyle(.balanced)
-        } else {
-            // 竖屏：保留 TabView 布局 + 工作台作为独立 Tab
-            TabView(selection: $appState.selectedTab) {
-                NavigationStack {
-                    WorkspacePane(appState: appState)
+        Group {
+            if horizontalSizeClass == .regular {
+                // 横屏：NavigationSplitView（文件浏览器 + HSplitView(工作区 + 工作台)）
+                NavigationSplitView(columnVisibility: $columnVisibility) {
+                    FileExplorerView(appState: appState)
+                        .navigationTitle("项目文件")
+                } detail: {
+                    R3WorkspacePane(appState: appState, showWorkbench: $showWorkbench)
                         .safeAreaInset(edge: .top, spacing: 0) {
                             topBar
                         }
                 }
-                .tabItem { Label(AppTab.workspace.title, systemImage: AppTab.workspace.systemImage) }
-                .tag(AppTab.workspace)
+                .navigationSplitViewStyle(.balanced)
+            } else {
+                // 竖屏：保留 TabView 布局 + 工作台作为独立 Tab
+                TabView(selection: $appState.selectedTab) {
+                    NavigationStack {
+                        WorkspacePane(appState: appState)
+                            .safeAreaInset(edge: .top, spacing: 0) {
+                                topBar
+                            }
+                    }
+                    .tabItem { Label(AppTab.workspace.title, systemImage: AppTab.workspace.systemImage) }
+                    .tag(AppTab.workspace)
 
-                NavigationStack {
-                    WorkbenchSidebar(appState: appState)
-                        .navigationTitle("工作台")
-                }
-                .tabItem { Label("工作台", systemImage: "sidebar.right") }
-                .tag(AppTab.git)
+                    NavigationStack {
+                        WorkbenchSidebar(appState: appState)
+                            .navigationTitle("工作台")
+                    }
+                    .tabItem { Label("工作台", systemImage: "sidebar.right") }
+                    .tag(AppTab.git)
 
-                NavigationStack {
-                    DashboardView()
-                }
-                .tabItem { Label(AppTab.dashboard.title, systemImage: AppTab.dashboard.systemImage) }
-                .tag(AppTab.dashboard)
+                    NavigationStack {
+                        DashboardView()
+                    }
+                    .tabItem { Label(AppTab.dashboard.title, systemImage: AppTab.dashboard.systemImage) }
+                    .tag(AppTab.dashboard)
 
-                NavigationStack {
-                    SettingsView(appState: appState)
+                    NavigationStack {
+                        SettingsView(appState: appState)
+                    }
+                    .tabItem { Label(AppTab.settings.title, systemImage: AppTab.settings.systemImage) }
+                    .tag(AppTab.settings)
                 }
-                .tabItem { Label(AppTab.settings.title, systemImage: AppTab.settings.systemImage) }
-                .tag(AppTab.settings)
+                .tint(Color.baizeAccent)
             }
-            .tint(Color.baizeAccent)
         }
         // Agent 运行时自动切换焦点到对话面板
         // Bug 5 fix: 使用 withAnimation 包裹，替代原 WorkspacePane 上的 .animation 修饰符
