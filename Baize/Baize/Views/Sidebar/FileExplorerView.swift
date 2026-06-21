@@ -100,6 +100,7 @@ struct FileExplorerView: View {
 /// - 点击目录时 DisclosureGroup 自动切换展开/折叠
 /// - 首次展开时从磁盘读取子项（懒加载），避免一次性加载整棵树
 /// - 子目录同样使用 FileTreeNode 递归渲染，支持无限层级展开
+@MainActor
 struct FileTreeNode: View {
     let item: FileItem
     @Binding var selectedFilePath: String?
@@ -158,7 +159,7 @@ struct FileTreeNode: View {
         .contextMenu { FileItemContextMenu(item: item, appState: appState) }
         .onChange(of: isExpanded) { expanded in
             if expanded && !hasLoadedChildren {
-                Task { @MainActor in loadChildren() }
+                loadChildren()
             }
         }
     }
@@ -169,7 +170,7 @@ struct FileTreeNode: View {
         FileItemRow(
             item: item,
             isSelected: selectedFilePath == item.path,
-            onTap: { Task { @MainActor in openFile() } }
+            onTap: { openFile() }
         )
         .contextMenu { FileItemContextMenu(item: item, appState: appState) }
     }
