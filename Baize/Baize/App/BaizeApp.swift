@@ -108,6 +108,9 @@ struct BaizeApp: App {
         self.usageTracker = usageTracker
         self.terminalHistoryStore = terminalHistoryStore
 
+        // R1: SkillRegistry 在 autoclosure 外声明，供后续 async 初始化使用
+        let skillReg = SkillRegistry()
+
         // W22 fix: 将所有服务实例注入 AppState，供 ChatView 等视图共享
         _appState = StateObject(wrappedValue: {
             let state = AppState()
@@ -142,17 +145,13 @@ struct BaizeApp: App {
             state.usageTracker = usageTracker
 
             // R1/R2 新增服务实例化（T02/T04 真实实现）
-            let skillReg = SkillRegistry()        // T02 完整实现
+            // skillReg 已在 autoclosure 外声明
             let memStore = memoryStore            // 复用已创建的 MemoryStore 实例（与 ContextManager 共享）
             let cmdRegistry = CommandRegistry()   // T02 完整实现
             let planMode = PlanModeState()        // T02 完整实现
             let taskListActor = TaskList()         // T04 完整实现
             let teamCoord = TeamCoordinator(taskList: taskListActor)  // T04 完整实现
             let mcpMgr = MCPManager()              // T04 完整实现
-
-            // R1: 加载内置技能和用户技能
-            await skillReg.loadBundledSkills()
-            await skillReg.loadUserSkills()
 
             // R1: 创建 WebSearch Provider（降级策略：有 API key 用 Tavily/Bing/Google，无 key 用 DuckDuckGo）
             let webSearch = WebSearchFactory.createBestAvailable(keychainService: keychain)
@@ -169,20 +168,28 @@ struct BaizeApp: App {
             // Phase 2C: 恢复上次 Provider/Model 选择
             state.restoreProviderSelection()
             state.restoreCustomConfig()
-            Task {
-                // T04: 注入 UsageTracker 到 APIGateway（非侵入式拦截 usage 记录用量）
-                await api.setUsageTracker(usageTracker)
-                // R1 扩展：注入 ToolRegistry 到 PermissionEngine（动态查询工具属性 + needsPermission）
-                permission.setToolRegistry(registry)
-                do {
-                    try await api.setActiveProvider(providerId: state.activeProvider.providerId, model: state.activeModel)
-                } catch {
-                    baizeLogger.error("Failed to restore provider selection: \(error.localizedDescription)")
-                }
-            }
 
             return state
         }())
+
+        // Swift 6 fix: async 初始化移出 StateObject autoclosure（autoclosure 不支持 concurrency）
+        let restoredProviderId = appState.activeProvider.providerId
+        let restoredModel = appState.activeModel
+
+        Task {
+            // R1: 加载内置技能和用户技能
+            await skillReg.loadBundledSkills()
+            await skillReg.loadUserSkills()
+            // T04: 注入 UsageTracker 到 APIGateway（非侵入式拦截 usage 记录用量）
+            await api.setUsageTracker(usageTracker)
+            // R1 扩展：注入 ToolRegistry 到 PermissionEngine（动态查询工具属性 + needsPermission）
+            await permission.setToolRegistry(registry)
+            do {
+                try await api.setActiveProvider(providerId: restoredProviderId, model: restoredModel)
+            } catch {
+                baizeLogger.error("Failed to restore provider selection: \(error.localizedDescription)")
+            }
+        }
     }
 
     /// 检测可用的工作目录

@@ -37,8 +37,9 @@ struct AgentTool: Tool {
         }
 
         // 获取共享服务（从 context 中获取）
-        guard let apiGateway = context.apiGateway else {
-            return ToolResult.error(message: "API 网关未初始化")
+        guard let apiGateway = context.apiGateway,
+              let toolRegistry = context.toolRegistry else {
+            return ToolResult.error(message: "API 网关或工具注册表未初始化")
         }
 
         // 创建子 agent 的 PermissionEngine（.plan 模式 — 仅只读工具）
@@ -62,7 +63,7 @@ struct AgentTool: Tool {
             agentLoopFactory: {
                 AgentLoop(
                     apiGateway: apiGateway,
-                    toolRegistry: context.toolRegistry,
+                    toolRegistry: toolRegistry,
                     permissionEngine: subPermissionEngine,
                     contextManager: subContextManager,
                     conversationStore: ConversationStore(),

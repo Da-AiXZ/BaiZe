@@ -16,7 +16,7 @@ actor CommandRegistry {
 
     init() {
         registerBuiltinCommands()
-        commandLogger.info("CommandRegistry initialized with \(commands.count) built-in commands")
+        commandLogger.info("CommandRegistry initialized with \(self.commands.count) built-in commands")
     }
 
     // MARK: - Registration

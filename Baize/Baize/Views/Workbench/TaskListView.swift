@@ -66,7 +66,6 @@ struct TaskListView: View {
     }
 
     /// 状态徽章
-    @ViewBuilder
     private func statusBadge(_ status: String) -> some View {
         let label: String
         let color: Color
@@ -75,7 +74,7 @@ struct TaskListView: View {
         case "in_progress": label = "进行中"; color = .baizeAccent
         default: label = "待办"; color = .secondary
         }
-        Text(label)
+        return Text(label)
             .font(.system(size: 10, weight: .medium))
             .foregroundColor(.white)
             .padding(.horizontal, 6)

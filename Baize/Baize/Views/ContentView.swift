@@ -12,6 +12,7 @@ struct ContentView: View {
 
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
 
+    @ViewBuilder
     var body: some View {
         // R3 重构：横屏用 HSplitView（聊天 + 工作台），竖屏用 TabView + 抽屉
         if horizontalSizeClass == .regular {

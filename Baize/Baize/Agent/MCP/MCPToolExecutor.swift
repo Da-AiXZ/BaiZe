@@ -178,7 +178,7 @@ class MCPServerConnection: @unchecked Sendable {
         ])
         _ = result  // 初始化响应包含 serverInfo 和 capabilities
         isConnected = true
-        agentLogger.info("MCP: initialized server '\(config.name)'")
+        agentLogger.info("MCP: initialized server '\(self.config.name)'")
     }
 
     /// 发送 tools/list 请求 — 获取 MCP server 的工具列表
@@ -244,7 +244,7 @@ class MCPServerConnection: @unchecked Sendable {
     func disconnect() {
         isConnected = false
         session.invalidateAndCancel()
-        agentLogger.info("MCP: disconnected server '\(config.name)'")
+        agentLogger.info("MCP: disconnected server '\(self.config.name)'")
     }
 }
 

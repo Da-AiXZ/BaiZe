@@ -19,7 +19,7 @@ actor MCPManager {
 
     init() {
         configs = MCPServerConfig.loadAll()
-        agentLogger.info("MCPManager initialized with \(configs.count) server configs")
+        agentLogger.info("MCPManager initialized with \(self.configs.count) server configs")
     }
 
     // MARK: - Connection Management

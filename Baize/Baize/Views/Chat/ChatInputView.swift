@@ -138,12 +138,10 @@ struct ChatInputView: View {
 
         // 1. 检测 slash 命令
         if trimmed.hasPrefix("/") {
-            Task {
+            Task { @MainActor in
                 if let registry = state.commandRegistry {
                     if let (command, _) = await registry.parse(input: trimmed) {
-                        await MainActor.run {
-                            commandSuggestion = command.name
-                        }
+                        commandSuggestion = command.name
                     }
                 }
             }
@@ -151,12 +149,10 @@ struct ChatInputView: View {
         }
 
         // 2. 检测技能触发词
-        Task {
+        Task { @MainActor in
             if let registry = state.skillRegistry {
                 if let skill = await registry.matchSkill(input: trimmed) {
-                    await MainActor.run {
-                        skillSuggestion = skill.name
-                    }
+                    skillSuggestion = skill.name
                 }
             }
         }

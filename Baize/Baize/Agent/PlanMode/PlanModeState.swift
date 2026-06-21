@@ -55,7 +55,7 @@ actor PlanModeState {
     /// 从 idle 转为 planning，重置计划文本
     func enter() {
         guard phase == .idle else {
-            planModeLogger.warning("PlanModeState: cannot enter from phase \(phase)")
+            planModeLogger.warning("PlanModeState: cannot enter from phase \(String(describing: self.phase), privacy: .public)")
             return
         }
         phase = .planning
@@ -70,7 +70,7 @@ actor PlanModeState {
     /// - Returns: true=用户批准，false=用户拒绝
     func exit(plan: String) async -> Bool {
         guard phase == .planning else {
-            planModeLogger.warning("PlanModeState: cannot exit from phase \(phase)")
+            planModeLogger.warning("PlanModeState: cannot exit from phase \(String(describing: self.phase), privacy: .public)")
             return false
         }
 
@@ -88,7 +88,7 @@ actor PlanModeState {
     /// 从 awaitingApproval 转为 approved，恢复 continuation
     func approve() {
         guard phase == .awaitingApproval else {
-            planModeLogger.warning("PlanModeState: cannot approve from phase \(phase)")
+            planModeLogger.warning("PlanModeState: cannot approve from phase \(String(describing: self.phase), privacy: .public)")
             return
         }
         phase = .approved
@@ -102,7 +102,7 @@ actor PlanModeState {
     /// - Parameter reason: 拒绝原因
     func reject(reason: String) {
         guard phase == .awaitingApproval else {
-            planModeLogger.warning("PlanModeState: cannot reject from phase \(phase)")
+            planModeLogger.warning("PlanModeState: cannot reject from phase \(String(describing: self.phase), privacy: .public)")
             return
         }
         phase = .rejected

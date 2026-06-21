@@ -185,9 +185,6 @@ enum SettingsSection: Hashable, Identifiable {
     case about
 
     var id: Self { self }
-}
-
-    var id: String { "\(self)" }
 
     var title: String {
         switch self {
@@ -195,6 +192,9 @@ enum SettingsSection: Hashable, Identifiable {
         case .permission: return "权限模式"
         case .storage: return "存储与运行时"
         case .gitConfig: return "Git 配置"
+        case .searchEngine: return "搜索引擎"
+        case .memory: return "记忆管理"
+        case .skills: return "技能管理"
         case .about: return "关于白泽"
         }
     }

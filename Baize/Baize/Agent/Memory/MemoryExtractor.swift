@@ -30,7 +30,7 @@ struct MemoryExtractor {
         scope: MemoryScope = .user
     ) async {
         // 1. 检查是否开启自动提取
-        guard isAutoExtractionEnabled() else {
+        guard Self.isAutoExtractionEnabled() else {
             memoryLogger.info("MemoryExtractor: auto extraction disabled, skipping")
             return
         }
