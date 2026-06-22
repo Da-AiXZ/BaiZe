@@ -1978,8 +1978,10 @@ actor GitService {
 
         if parentCount > 0 {
             // 有 parent — diff parent tree vs commit tree
-            let parent = git_commit_parent(commitHandle, 0)
-            defer { git_commit_free(parent) }
+            // P1-#15 fix: git_commit_parent 在 Swift 桥接中使用 out 参数模式
+            var parent: OpaquePointer? = nil
+            try checkGit(git_commit_parent(&parent, commitHandle, 0), operation: "git_commit_parent (show)")
+            defer { if let p = parent { git_commit_free(p) } }
             if let parentHandle = parent {
                 let parentTreeOid = git_commit_tree_id(parentHandle)
                 var parentTree: OpaquePointer? = nil
