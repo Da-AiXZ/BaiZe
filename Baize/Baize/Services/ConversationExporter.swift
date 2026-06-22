@@ -61,7 +61,7 @@ struct ConversationExporter {
 
         // 导出目录：{projectPath}/exports/
         let exportsDir = (projectPath as NSString).appendingPathComponent(BaizePath.exportsDirName)
-        try fileManager.ensureDirectoryExists(atPath: exportsDir)
+        try fileManager.createDirectory(atPath: exportsDir, withIntermediateDirectories: true)
 
         let sanitizedTitle = sanitizeFilename(session.title)
         let fileName = "\(sanitizedTitle).\(format.fileExtension)"

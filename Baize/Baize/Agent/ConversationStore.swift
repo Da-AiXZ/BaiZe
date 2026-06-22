@@ -35,13 +35,13 @@ actor ConversationStore {
 
         // 尝试创建主路径目录
         do {
-            try fileManager.ensureDirectoryExists(atPath: storeDirectory)
+            try fileManager.createDirectory(atPath: storeDirectory, withIntermediateDirectories: true)
             agentLogger.info("ConversationStore: primary directory created/verified: \(storeDirectory)")
         } catch {
             agentLogger.error("ConversationStore: primary directory creation failed: \(error.localizedDescription), trying fallback")
             // 主路径失败，切到 fallback
             do {
-                try fileManager.ensureDirectoryExists(atPath: fallbackStoreDirectory)
+                try fileManager.createDirectory(atPath: fallbackStoreDirectory, withIntermediateDirectories: true)
                 self.storeDirectory = fallbackStoreDirectory
                 self.isUsingFallback = true
                 agentLogger.info("ConversationStore: using fallback directory: \(fallbackConv)")
@@ -204,17 +204,17 @@ actor ConversationStore {
     private func ensureDirectoryWritable() throws {
         // 如果已经在用 fallback，确保 fallback 目录存在
         if isUsingFallback {
-            try fileManager.ensureDirectoryExists(atPath: storeDirectory)
+            try fileManager.createDirectory(atPath: storeDirectory, withIntermediateDirectories: true)
             return
         }
 
         // 尝试确保主路径存在
         do {
-            try fileManager.ensureDirectoryExists(atPath: storeDirectory)
+            try fileManager.createDirectory(atPath: storeDirectory, withIntermediateDirectories: true)
         } catch {
             // 主路径失败，切到 fallback
             agentLogger.error("ConversationStore: primary path failed at save time, switching to fallback: \(error.localizedDescription)")
-            try fileManager.ensureDirectoryExists(atPath: fallbackStoreDirectory)
+            try fileManager.createDirectory(atPath: fallbackStoreDirectory, withIntermediateDirectories: true)
             storeDirectory = fallbackStoreDirectory
             isUsingFallback = true
         }

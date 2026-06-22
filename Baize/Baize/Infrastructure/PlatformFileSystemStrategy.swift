@@ -95,7 +95,7 @@ struct FileManagerFileSystemStrategy: FileSystemStrategy {
 
     func createDirectory(at path: String) async throws {
         do {
-            try FileManager.default.ensureDirectoryExists(atPath: path)
+            try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
             baizeLogger.info("[FileManagerStrategy] Create directory: \(path)")
         } catch {
             throw BaizeError.fileSystemError("无法创建目录: \(path) — \(error.localizedDescription)")

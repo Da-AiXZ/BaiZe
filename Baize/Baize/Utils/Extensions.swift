@@ -162,14 +162,6 @@ extension URL {
 // MARK: - FileManager Extensions
 
 extension FileManager {
-    /// 确保目录存在，不存在则创建
-    /// T02: 删除 4 级回退，统一使用 FileManager 标准 API
-    func ensureDirectoryExists(atPath path: String) throws {
-        if !fileExists(atPath: path) {
-            try createDirectory(atPath: path, withIntermediateDirectories: true)
-        }
-    }
-
     /// 获取文件大小（字节）
     func fileSize(atPath path: String) -> Int64? {
         guard let attrs = try? attributesOfItem(atPath: path),

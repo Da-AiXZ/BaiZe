@@ -192,7 +192,7 @@ actor ProjectRegistry {
 
             // 确保父目录存在
             let parentDir = (storePath as NSString).deletingLastPathComponent
-            try fileManager.ensureDirectoryExists(atPath: parentDir)
+            try fileManager.createDirectory(atPath: parentDir, withIntermediateDirectories: true)
 
             try data.write(to: URL(fileURLWithPath: storePath), options: .atomic)
         } catch {
