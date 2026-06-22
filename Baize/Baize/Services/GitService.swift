@@ -1006,12 +1006,18 @@ actor GitService {
 
         // B02 fix (round 2): 只有有 token 时才设置 credentials 回调
         // 公开仓库不需要凭据，设置凭据回调可能导致 libgit2 尝试认证而失败
+        // 注意：payload 必须在 git_remote_fetch 之后才能释放，所以 defer 在函数级别
+        var payloadPointer: UnsafeMutableRawPointer? = nil
         if !token.isEmpty {
             let payload = GitCredentialsPayload(username: username, token: token)
-            let payloadPointer = Unmanaged.passRetained(payload).toOpaque()
-            defer { Unmanaged<GitCredentialsPayload>.fromOpaque(payloadPointer).release() }
+            payloadPointer = Unmanaged.passRetained(payload).toOpaque()
             callbacks.credentials = credentialsCallback
             callbacks.payload = payloadPointer
+        }
+        defer {
+            if let ptr = payloadPointer {
+                Unmanaged<GitCredentialsPayload>.fromOpaque(ptr).release()
+            }
         }
 
         // 配置 fetch 选项
