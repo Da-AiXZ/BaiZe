@@ -81,7 +81,7 @@ struct ExecuteCommandTool: Tool {
             )
         }
 
-        let shellService = await gitService.gitShellService()
+        let shellService = await gitService.getGitShellService()
 
         do {
             let result = try await shellService.executeGitCommand(command)

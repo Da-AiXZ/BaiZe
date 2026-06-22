@@ -129,6 +129,12 @@ final class GitCloneProgressPayload {
 /// Git 核心服务 — actor 封装 libgit2 C API
 actor GitService {
 
+    /// 仓库路径
+    private let repositoryPath: String
+
+    /// Keychain 服务 — 用于读取 Git token
+    private let keychainService: KeychainService
+
     /// T03: git 二进制 shell 服务 — 用于 fetch / push / pull / clone 等网络操作
     private let gitShellService: GitShellService
 
@@ -150,7 +156,7 @@ actor GitService {
     }
 
     /// T03: 暴露 GitShellService 引用，供 ExecuteCommandTool 路由 git 命令
-    func gitShellService() -> GitShellService {
+    func getGitShellService() -> GitShellService {
         gitShellService
     }
 

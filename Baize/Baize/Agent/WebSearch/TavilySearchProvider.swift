@@ -64,7 +64,6 @@ struct TavilySearchProvider: WebSearchProvider {
             }
             let content = item["content"] as? String ?? ""
             let snippet = content.count > 500 ? String(content.prefix(500)) + "..." : content
-            let score = item["score"] as? Double ?? 0.0
             return WebSearchResult(
                 title: title,
                 url: urlString,

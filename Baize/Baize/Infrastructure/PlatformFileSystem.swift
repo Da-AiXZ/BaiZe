@@ -340,7 +340,8 @@ actor PlatformFileSystem {
         } else {
             setStrategy(.fileManager)
         }
-        baizeLogger.info("[PlatformFileSystem] Selected strategy: \(currentStrategy().rawValue)")
+        let strategyName = currentStrategy().rawValue
+        baizeLogger.info("[PlatformFileSystem] Selected strategy: \(strategyName)")
     }
 
     // MARK: - Private Helpers

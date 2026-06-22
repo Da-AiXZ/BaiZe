@@ -149,25 +149,41 @@ class FileSystemService: @unchecked Sendable {
 
     // MARK: - Private Helpers
 
+    /// 线程安全的结果容器 — 替代 captured var，满足 Swift 6 严格并发检查
+    private final class LockedBox<T>: @unchecked Sendable {
+        private var _value: T?
+        private let lock = NSLock()
+
+        func get() -> T? {
+            lock.lock(); defer { lock.unlock() }
+            return _value
+        }
+
+        func set(_ value: T) {
+            lock.lock(); defer { lock.unlock() }
+            _value = value
+        }
+    }
+
     /// 在同步上下文中等待 actor 的 async 调用
     /// 使用 Task.detached 在全局并发队列执行，避免阻塞当前 actor/主线程
     private func runSync<T>(_ operation: @Sendable @escaping () async throws -> T) throws -> T {
         let semaphore = DispatchSemaphore(value: 0)
-        var result: Result<T, Error>?
+        let box = LockedBox<Result<T, Error>?>()
 
         Task.detached {
             do {
                 let value = try await operation()
-                result = .success(value)
+                box.set(.success(value))
             } catch {
-                result = .failure(error)
+                box.set(.failure(error))
             }
             semaphore.signal()
         }
 
         semaphore.wait()
 
-        guard let finalResult = result else {
+        guard let finalResult = box.get() else {
             throw BaizeError.fileSystemError("同步等待文件系统操作未完成")
         }
 

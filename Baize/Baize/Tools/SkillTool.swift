@@ -46,6 +46,8 @@ struct SkillTool: Tool {
 
         // 执行技能 — T05: 使用 SkillExecutor 在子 Agent 中真正执行 workflow
         guard let skill = await skillRegistry.getSkill(name: skillName) else {
+            let skills = await skillRegistry.listSkills()
+            let availableNames = skills.map { $0.name }.joined(separator: ", ")
             return ToolResult.error(
                 message: "未找到技能: \(skillName)。可用技能: \(availableNames.isEmpty ? "（暂无已安装技能）" : availableNames)"
             )
