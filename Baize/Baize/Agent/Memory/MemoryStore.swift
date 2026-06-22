@@ -7,16 +7,19 @@ import Foundation
 /// - project scope → BaizePath.projectMemoryDir/memories.jsonl
 /// - team scope → BaizePath.teamMemoryDir/memories.jsonl
 ///
-/// 检索算法（简单版）：
-/// score = keywordMatchCount * 1.0 + recencyScore * 0.5
-/// recencyScore = 1.0 / (1 + daysSinceLastAccess)
-/// 加载所有 scope 的记忆，按 score 降序取 top limit
+/// T05 改造：
+/// - 所有写操作通过 PlatformFileSystem 执行，失败时抛错（不再静默吞掉）
+/// - 目录创建由 PlatformFileSystem 负责，确保 iOS 端可创建
+/// - 保留 JSONL + 关键词检索算法
 actor MemoryStore {
 
     // MARK: - Properties
 
     /// 记忆存储根目录
     private let baseDir: String
+
+    /// T05: 平台文件系统统一入口（可选，未注入则使用 FileManager 回退）
+    private let platformFileSystem: PlatformFileSystem?
 
     /// JSON 编码器（配置日期格式）
     private let encoder: JSONEncoder = {
@@ -34,8 +37,13 @@ actor MemoryStore {
 
     // MARK: - Initialization
 
-    init(baseDir: String = BaizePath.memoryDir) {
+    /// 创建 MemoryStore
+    /// - Parameters:
+    ///   - baseDir: 记忆存储根目录
+    ///   - platformFileSystem: 可选的 PlatformFileSystem；注入后所有写操作通过它执行
+    init(baseDir: String = BaizePath.memoryDir, platformFileSystem: PlatformFileSystem? = nil) {
         self.baseDir = baseDir
+        self.platformFileSystem = platformFileSystem
         ensureDirectoriesExist()
         memoryLogger.info("MemoryStore initialized with baseDir: \(baseDir)")
     }
@@ -43,6 +51,7 @@ actor MemoryStore {
     // MARK: - Append
 
     /// 追加一条记忆到对应 scope 的 memories.jsonl
+    /// T05: 失败时抛错，调用方需捕获处理
     /// - Parameters:
     ///   - scope: 记忆作用域
     ///   - content: 记忆内容文本
@@ -53,7 +62,7 @@ actor MemoryStore {
         content: String,
         type: MemoryType,
         keywords: [String] = []
-    ) async {
+    ) async throws {
         let memory = Memory(
             scope: scope,
             content: content,
@@ -62,28 +71,18 @@ actor MemoryStore {
         )
 
         let filePath = memoryFilePath(scope: scope)
+        let jsonLine = encodeMemory(memory)
+        let lineToWrite = jsonLine + "\n"
 
-        do {
-            let jsonLine = encodeMemory(memory)
-            let lineToWrite = jsonLine + "\n"
-
-            let fm = FileManager.default
-            if fm.fileExists(atPath: filePath) {
-                // 追加到现有文件
-                if let handle = FileHandle(forWritingAtPath: filePath) {
-                    handle.seekToEndOfFile()
-                    handle.write(lineToWrite.data(using: .utf8)!)
-                    handle.closeFile()
-                }
-            } else {
-                // 创建新文件
-                try lineToWrite.write(toFile: filePath, atomically: true, encoding: .utf8)
-            }
-
-            memoryLogger.info("MemoryStore: appended \(type.rawValue) memory to \(scope.rawValue) scope")
-        } catch {
-            memoryLogger.error("MemoryStore: failed to append memory: \(error.localizedDescription)")
+        if let pfs = platformFileSystem {
+            // T05: 使用 PlatformFileSystem 统一追加写入（目录创建已在 appendFile 中处理）
+            try await pfs.appendFile(at: filePath, content: lineToWrite)
+        } else {
+            // 回退：旧 FileManager 行为（保留以兼容未注入 platformFileSystem 的调用点）
+            try writeViaFileManager(filePath: filePath, lineToWrite: lineToWrite)
         }
+
+        memoryLogger.info("MemoryStore: appended \(type.rawValue) memory to \(scope.rawValue) scope")
     }
 
     // MARK: - Retrieve
@@ -217,10 +216,27 @@ actor MemoryStore {
 
     /// 确保记忆目录存在
     private func ensureDirectoriesExist() {
-        let fm = FileManager.default
         let dirs = [baseDir, BaizePath.userMemoryDir, BaizePath.projectMemoryDir, BaizePath.teamMemoryDir]
         for dir in dirs {
-            try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        }
+    }
+
+    /// 使用 FileManager 回退写入（旧行为，未注入 PlatformFileSystem 时使用）
+    private func writeViaFileManager(filePath: String, lineToWrite: String) throws {
+        let fm = FileManager.default
+        let directory = (filePath as NSString).deletingLastPathComponent
+        try fm.createDirectory(atPath: directory, withIntermediateDirectories: true)
+
+        if fm.fileExists(atPath: filePath) {
+            guard let handle = FileHandle(forWritingAtPath: filePath) else {
+                throw BaizeError.fileSystemError("无法打开记忆文件进行追加: \(filePath)")
+            }
+            handle.seekToEndOfFile()
+            handle.write(lineToWrite.data(using: .utf8)!)
+            handle.closeFile()
+        } else {
+            try lineToWrite.write(toFile: filePath, atomically: true, encoding: .utf8)
         }
     }
 }

@@ -12,6 +12,12 @@ protocol FileSystemStrategy: Sendable {
     ///   - content: 要写入的内容
     func writeFile(at path: String, content: String) async throws
 
+    /// 追加文件内容（JSONL 等追加写场景）
+    /// - Parameters:
+    ///   - path: 绝对文件路径
+    ///   - content: 要追加的内容
+    func appendFile(at path: String, content: String) async throws
+
     /// 精确字符串替换编辑
     /// - Parameters:
     ///   - path: 文件路径
@@ -45,6 +51,25 @@ struct FileManagerFileSystemStrategy: FileSystemStrategy {
         } catch {
             throw BaizeError.fileSystemError("无法写入文件: \(path) — \(error.localizedDescription)")
         }
+    }
+
+    /// 追加文件内容（JSONL 追加写）
+    func appendFile(at path: String, content: String) async throws {
+        let directory = (path as NSString).deletingLastPathComponent
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+
+        let fm = FileManager.default
+        if fm.fileExists(atPath: path) {
+            guard let handle = FileHandle(forWritingAtPath: path) else {
+                throw BaizeError.fileSystemError("无法打开文件进行追加: \(path)")
+            }
+            handle.seekToEndOfFile()
+            handle.write(content.data(using: .utf8)!)
+            handle.closeFile()
+        } else {
+            try content.write(toFile: path, atomically: true, encoding: .utf8)
+        }
+        baizeLogger.info("[FileManagerStrategy] Append file: \(path.fileName) (\(content.utf8.count) bytes)")
     }
 
     func editFile(at path: String, oldString: String, newString: String) async throws -> Bool {
@@ -133,6 +158,12 @@ struct PosixSpawnFileSystemStrategy: FileSystemStrategy {
             try? FileManager.default.removeItem(atPath: tempPath)
             throw error
         }
+    }
+
+    /// 追加文件内容：回退到 FileManager 实现（POSIX spawn 下重定向追加较复杂）
+    func appendFile(at path: String, content: String) async throws {
+        try await FileManagerFileSystemStrategy().appendFile(at: path, content: content)
+        baizeLogger.info("[PosixSpawnStrategy] Append file (FileManager fallback): \(path.fileName) (\(content.utf8.count) bytes)")
     }
 
     func editFile(at path: String, oldString: String, newString: String) async throws -> Bool {
@@ -278,6 +309,12 @@ struct IOSSystemFileSystemStrategy: FileSystemStrategy {
             try? FileManager.default.removeItem(atPath: tempPath)
             throw error
         }
+    }
+
+    /// 追加文件内容：回退到 FileManager 实现（ios_system 的 shell 重定向支持不稳定）
+    func appendFile(at path: String, content: String) async throws {
+        try await FileManagerFileSystemStrategy().appendFile(at: path, content: content)
+        baizeLogger.info("[IOSSystemStrategy] Append file (FileManager fallback): \(path.fileName) (\(content.utf8.count) bytes)")
     }
 
     func editFile(at path: String, oldString: String, newString: String) async throws -> Bool {

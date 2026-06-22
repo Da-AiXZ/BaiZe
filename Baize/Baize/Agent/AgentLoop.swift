@@ -42,6 +42,9 @@ actor AgentLoop {
     /// 当前模型的 contextWindow（P1-3 动态预算，由 ChatView 更新）
     private var contextWindow: Int = BaizeToken.maxContextTokens
 
+    /// T05: 每次 query loop 结束时触发的 stop hooks（如 memory extraction）
+    private var stopHooks: [(@Sendable () async -> Void)] = []
+
     /// 是否正在运行 Agent Loop
     private var isRunning: Bool = false
 
@@ -512,16 +515,19 @@ actor AgentLoop {
 
                 // 继续循环（工具结果注入后，LLM 需要继续推理）
                 agentLogger.info("Tool calls processed, continuing loop")
+                await runStopHooks()
                 continue
             }
 
             // 6. 无 tool_calls — LLM 只返回了文本，循环结束
             agentLogger.info("No tool calls, Agent Loop ending after \(iterationCount) iterations")
+            await runStopHooks()
             break
         }
 
         if iterationCount >= maxIterations {
             agentLogger.warning("Agent Loop hit max iterations limit (\(maxIterations))")
+            await runStopHooks()
         }
     }
 
@@ -694,7 +700,20 @@ actor AgentLoop {
         return (command.name, args)
     }
 
-    // MARK: - R1: Memory Extraction
+    // MARK: - R1: Memory Extraction + T05 Stop Hooks
+
+    /// T05: 注册 stop hook — 每次 query loop 结束时触发
+    /// - Parameter hook: 异步回调
+    func registerStopHook(_ hook: @escaping @Sendable () async -> Void) {
+        stopHooks.append(hook)
+    }
+
+    /// T05: 运行所有 stop hooks（在每次循环迭代结束时调用）
+    private func runStopHooks() async {
+        for hook in stopHooks {
+            await hook()
+        }
+    }
 
     /// 会话结束后自动提取记忆（异步，不阻塞 .completed）
     /// Bug #4 fix: 移除冗余的双层 guard，skillRegistry 在此方法中未被使用

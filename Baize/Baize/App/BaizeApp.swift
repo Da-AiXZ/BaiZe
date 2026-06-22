@@ -101,7 +101,7 @@ struct BaizeApp: App {
         let api = APIGateway(keychainService: keychain)
         // P0-2: ContextManager 注入 apiGateway，用于调 LLM 生成上下文摘要
         // R1: ContextManager 注入 memoryStore，用于在 buildSystemPrompt 时注入相关记忆
-        let memoryStore = MemoryStore()
+        let memoryStore = MemoryStore(platformFileSystem: platformFS)
         let contextMgr = ContextManager(projectContext: projectCtx, apiGateway: api, memoryStore: memoryStore)
         let conversation = ConversationStore()
         let registry = ToolRegistry(fileSystemService: fsService, platformFileSystem: platformFS, runtimeExecutor: runtime, nodeEngine: nodeEngine, pythonEngine: pythonEngine)

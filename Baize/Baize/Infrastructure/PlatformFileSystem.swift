@@ -240,6 +240,14 @@ actor PlatformFileSystem {
         try await strategy.writeFile(at: path, content: content)
     }
 
+    /// 追加文件内容（JSONL 等追加写场景）
+    /// - Parameters:
+    ///   - path: 绝对文件路径
+    ///   - content: 要追加的内容
+    func appendFile(at path: String, content: String) async throws {
+        try await strategy.appendFile(at: path, content: content)
+    }
+
     /// 精确字符串替换编辑
     /// - Parameters:
     ///   - path: 文件路径

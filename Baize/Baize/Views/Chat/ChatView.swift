@@ -303,6 +303,8 @@ struct ChatView: View {
             )
             self.agentLoop = loop
             baizeLogger.info("Created new AgentLoop for new conversation")
+            // T05: 注册 stop hook，每次 query loop 结束时提取记忆
+            await registerMemoryStopHook(for: loop)
             // P1-3: 新建 AgentLoop 后同步当前模型的 contextWindow
             await loop.updateContextWindow(resolveContextWindow())
         }
@@ -747,6 +749,8 @@ struct ChatView: View {
             )
         let window = resolveContextWindow()
         await loop.updateContextWindow(window)
+        // T05: 注册 stop hook，每次 query loop 结束时提取记忆
+        await registerMemoryStopHook(for: loop)
 
         await MainActor.run {
             self.agentLoop = loop
@@ -823,11 +827,20 @@ struct ChatView: View {
                 session: session
             )
             await loop.updateContextWindow(resolveContextWindow())
+            // T05: 注册 stop hook，每次 query loop 结束时提取记忆
+            await registerMemoryStopHook(for: loop)
             await MainActor.run {
                 self.agentLoop = loop
                 self.currentSessionId = session.id
             }
             await loadSessionList()
+        }
+    }
+
+    /// T05: 为 AgentLoop 注册 stop hook — 每次 query loop 结束时触发记忆提取
+    private func registerMemoryStopHook(for loop: AgentLoop) async {
+        await loop.registerStopHook { [weak loop] in
+            await loop?.extractMemories()
         }
     }
 

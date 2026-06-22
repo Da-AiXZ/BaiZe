@@ -62,12 +62,16 @@ struct MemoryExtractor {
         }
 
         for memory in extractedMemories {
-            await memoryStore.appendMemory(
-                scope: scope,
-                content: memory.content,
-                type: memory.type,
-                keywords: memory.keywords
-            )
+            do {
+                try await memoryStore.appendMemory(
+                    scope: scope,
+                    content: memory.content,
+                    type: memory.type,
+                    keywords: memory.keywords
+                )
+            } catch {
+                memoryLogger.warning("MemoryStore: failed to append memory: \(error.localizedDescription)")
+            }
         }
 
         memoryLogger.info("MemoryExtractor: extracted and stored \(extractedMemories.count) memories")
