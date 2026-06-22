@@ -169,7 +169,7 @@ class FileSystemService: @unchecked Sendable {
     /// 使用 Task.detached 在全局并发队列执行，避免阻塞当前 actor/主线程
     private func runSync<T>(_ operation: @Sendable @escaping () async throws -> T) throws -> T {
         let semaphore = DispatchSemaphore(value: 0)
-        let box = LockedBox<Result<T, Error>?>()
+        let box = LockedBox<Result<T, Error>>()
 
         Task.detached {
             do {
