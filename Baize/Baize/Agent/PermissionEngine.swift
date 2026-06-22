@@ -153,7 +153,8 @@ actor PermissionEngine {
             if let info = toolInfo {
                 if info.isReadOnly {
                     decision = PermissionDecision(effect: .allow, reason: "接受编辑：只读操作自动允许")
-                } else if !info.isDestructive && isFileEditTool(toolName: toolName) {
+                } else if isFileEditTool(toolName: toolName) {
+                    // 文件编辑类工具在 acceptEdits 下自动允许，不依赖 isDestructive 标志
                     decision = PermissionDecision(effect: .allow, reason: "接受编辑：文件编辑自动允许")
                 } else {
                     decision = PermissionDecision(
@@ -196,14 +197,6 @@ actor PermissionEngine {
             }
         }
 
-        // Step 4: 检查会话级授权 — "本次会话不再询问"的工具直接放行
-        if decision.effect == .ask {
-            let operationKey = buildOperationKey(toolCall: toolCall)
-            if hasSessionApproval(forTool: toolName, operation: operationKey) {
-                return PermissionDecision(effect: .allow, reason: "会话级授权：本次会话不再询问")
-            }
-        }
-
         // Step 5: R1 运行时 needsPermission() 检查
         // 在现有决策基础上，调用工具自身的 needsPermission() 做运行时权限判断
         // 只有当现有决策为 .allow 时才检查（.ask 和 .deny 已经足够严格）
@@ -226,7 +219,16 @@ actor PermissionEngine {
             }
         }
 
-        // Step 6: dontAsk 模式 — 最终把仍需要确认的 .ask 转为 .deny
+        // Step 6: 检查会话级授权 — "本次会话不再询问"的工具直接放行
+        // 放在 needsPermission 之后，确保会话授权能覆盖运行时权限检查的结果
+        if finalDecision.effect == .ask {
+            let operationKey = buildOperationKey(toolCall: toolCall)
+            if hasSessionApproval(forTool: toolName, operation: operationKey) {
+                finalDecision = PermissionDecision(effect: .allow, reason: "会话级授权：本次会话不再询问")
+            }
+        }
+
+        // Step 7: dontAsk 模式 — 最终把仍需要确认的 .ask 转为 .deny
         // 已经 allow 或 deny 的决策不受影响；会话授权过的 allow 也不受影响
         if mode == .dontAsk && finalDecision.effect == .ask {
             return PermissionDecision(
