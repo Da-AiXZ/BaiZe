@@ -354,6 +354,8 @@ enum PermissionMode: String, CaseIterable, Codable {
     case acceptEdits
     case plan
     case bypass
+    /// 不询问模式：所有需要确认的操作均自动拒绝（不弹窗），参考 Claude Code dontAsk
+    case dontAsk
 
     var displayName: String {
         switch self {
@@ -361,6 +363,7 @@ enum PermissionMode: String, CaseIterable, Codable {
         case .acceptEdits: return "接受编辑"
         case .plan: return "只读规划"
         case .bypass: return "绕过模式"
+        case .dontAsk: return "不询问"
         }
     }
 
@@ -370,6 +373,7 @@ enum PermissionMode: String, CaseIterable, Codable {
         case .acceptEdits: return "自动接受文件编辑，执行命令仍需确认"
         case .plan: return "Agent 只分析不执行，禁止所有写入"
         case .bypass: return "自动执行所有操作（需确认开启）"
+        case .dontAsk: return "所有需要确认的操作均自动拒绝，不弹出任何权限对话框"
         }
     }
 }

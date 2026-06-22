@@ -1,159 +1,86 @@
-%% 白泽功能补全 — 时序图
-%% 包含 4 个关键流程：项目切换、Git clone+新建项目、UsageTracker 记录、会话搜索
-
-%% ===== 1. 项目切换联动流程 (#14) =====
-
 sequenceDiagram
-    actor User
-    participant Dashboard as DashboardView
-    participant AppState
-    participant Registry as ProjectRegistry
-    participant OldGit as GitService (old)
-    participant NewGit as GitService (new)
-    participant GitVM as GitViewModel
-    participant TermVM as TerminalViewModel
-    participant ProjCtx as ProjectContext
-    participant FileSvc as FileSystemService
-    participant Runtime as RuntimeExecutor
-    participant FileExp as FileExplorerView
-    participant ChatView as ChatView
-
-    User->>Dashboard: 点击项目卡片
-    Dashboard->>AppState: switchProject(to: newPath)
-    AppState->>AppState: 检查 EditorState 未保存改动
-    alt 有未保存改动
-        AppState-->>Dashboard: 弹出保存提示
-        User->>Dashboard: 确认保存
-    end
-    AppState->>Registry: update(entry.lastOpened = now)
-    AppState->>AppState: currentProjectPath = newPath
-    
-    note over AppState,NewGit: 重建 GitService (repositoryPath 是 let)
-    AppState->>NewGit: GitService(repositoryPath: newPath)
-    AppState->>GitVM: GitViewModel(gitService: newGit)
-    note over OldGit: 旧实例由 ARC 回收 (defer free 已执行)
-    
-    AppState->>TermVM: currentWorkingDir = newPath
-    AppState->>ProjCtx: updateRootPath(newPath)
-    ProjCtx->>ProjCtx: 重新加载 BAIZE.md
-    AppState->>FileSvc: updateRootPath(newPath)
-    AppState->>Runtime: ios_setMiniRoot(newPath)
-    
-    note over FileExp,ChatView: @Published currentProjectPath 自动驱动
-    FileExp-->>FileExp: 文件树根目录更新 (reactive)
-    ChatView-->>ChatView: 会话列表按 projectPath 过滤 (reactive)
-    
-    AppState-->>Dashboard: 切换完成
-
-%% ===== 2. Git clone + 新建项目联动流程 (#7 + #13') =====
-
-sequenceDiagram
-    actor User
-    participant Wizard as NewProjectWizard
-    participant GitSvc as GitService
-    participant Registry as ProjectRegistry
-    participant AppState
-    participant Progress as ProgressHandler
-
-    User->>Wizard: 选择"从 Git clone 创建"
-    User->>Wizard: 输入 URL + 项目名
-    Wizard->>Wizard: 校验项目名 (非空/合法字符/不重名)
-    Wizard->>GitSvc: clone(remoteURL: url, toPath: projectRoot/projectName)
-    
-    note over GitSvc: git_clone_options 配置 credentials + progress callback
-    GitSvc->>GitSvc: git_clone(&repo, url, path, &opts)
-    
-    loop 对象传输
-        GitSvc->>Progress: progressHandler(percent, message)
-        Progress-->>Wizard: 更新进度条 UI
-    end
-    
-    alt clone 成功
-        GitSvc-->>Wizard: 成功
-        GitSvc->>GitSvc: git_repository_free(repo)
-        Wizard->>Registry: add(ProjectEntry(path, name, stack))
-        Wizard->>AppState: switchProject(to: projectRoot/projectName)
-        note over AppState: 触发完整联动 (见流程 1)
-        Wizard-->>User: 项目创建完成，已切换
-    else clone 失败
-        GitSvc-->>Wizard: GitError.cloneFailed / networkError
-        Wizard->>Wizard: 回滚 (删除已创建目录)
-        Wizard-->>User: 显示错误信息
-    end
-
-%% ===== 3. UsageTracker 记录流程 (#12) =====
-
-sequenceDiagram
+    autonumber
+    participant App as BaizeApp
+    participant PFS as PlatformFileSystem
+    participant FM as FileManagerStrategy
+    participant PS as PosixSpawnStrategy
+    participant IOS as IosSystemStrategy
+    participant FSS as FileSystemService
+    participant Git as GitService
+    participant Shell as GitShellService
+    participant Process as Process
+    participant PE as PermissionEngine
+    participant TR as ToolRegistry
+    participant PMS as PlanModeState
     participant Loop as AgentLoop
-    participant Gateway as APIGateway
-    participant Provider as LLMProvider
-    participant Pricing as BaizePricing
-    participant Tracker as UsageTracker
-    participant Disk as File System
+    participant AT as AgentTool
+    participant Sub as AgentLoop(sub)
+    participant ME as MemoryExtractor
+    participant MS as MemoryStore
 
-    Loop->>Gateway: streamComplete(messages, tools, model)
-    Gateway->>Gateway: 捕获 resolvedModel, providerId, tracker
-    Gateway->>Provider: provider.streamComplete(messages, tools, model)
-    Provider-->>Gateway: 原始 AsyncThrowingStream~LLMChunk~
-    
-    note over Gateway: 包装流 — 拦截 .usage 和 .done
-    Gateway-->>Loop: 包装后的 AsyncThrowingStream~LLMChunk~
-
-    loop 消费每个 chunk
-        Loop->>Gateway: await next chunk
-        
-        alt chunk == .usage(LLMUsage)
-            Gateway->>Gateway: 缓存 usage 数据
-            note over Gateway: 不转发 .usage 给 AgentLoop
-        else chunk == .textDelta(text)
-            Gateway->>Gateway: 累积 completionTextLength
-            Gateway-->>Loop: yield .textDelta
-        else chunk == .done(finishReason)
-            alt 有真实 usage
-                Gateway->>Pricing: estimateCost(model, prompt, completion)
-                Pricing-->>Gateway: cost
-                Gateway->>Tracker: record(UsageRecord(真实 token))
-            else 无 usage (估算)
-                Gateway->>Gateway: 估算 prompt/completion tokens
-                Gateway->>Pricing: estimateCost(model, estPrompt, estCompletion)
-                Pricing-->>Gateway: cost
-                Gateway->>Tracker: record(UsageRecord(估算 token))
-            end
-            Tracker->>Disk: 追加写入 usage/{yyyy-MM-dd}.json
-            Gateway-->>Loop: yield .done
-        else 其他 chunk
-            Gateway-->>Loop: yield chunk (透传)
+    %% App startup: filesystem probe
+    App->>PFS: init(probePath: projectRoot)
+    PFS->>FM: createDirectory(probePath)
+    alt FileManager success
+        PFS->>PFS: selectedStrategy = .fileManager
+    else FileManager fails
+        PFS->>PS: createDirectory(probePath)
+        alt posix_spawn success
+            PFS->>PFS: selectedStrategy = .posixSpawn
+        else posix_spawn fails
+            PFS->>IOS: createDirectory(probePath)
+            PFS->>PFS: selectedStrategy = .iosSystem
         end
     end
+    PFS-->>App: selectedStrategy
 
-%% ===== 4. 会话搜索流程 (#15) =====
+    %% UI / AI shared filesystem path
+    App->>FSS: createDirectory(projectPath)
+    FSS->>PFS: createDirectory(projectPath)
+    PFS->>PFS: use selectedStrategy
+    PFS-->>FSS: success
+    FSS-->>App: success
 
-sequenceDiagram
-    actor User
-    participant List as SessionListView
-    participant Store as ConversationStore
-    participant Disk as File System
+    %% Git fetch via git binary
+    Loop->>Git: fetch()
+    Git->>Shell: fetch(remote: origin)
+    Shell->>Process: launch(gitURL, ["fetch", origin], env: [GIT_SSL_CAINFO])
+    Process-->>Shell: stdout, stderr, exitCode
+    Shell-->>Git: GitFetchResult
+    Git-->>Loop: ToolResult
 
-    User->>List: 输入搜索关键词
-    List->>List: debounce 300ms
-    List->>Store: search(query: keyword, projectPath: current)
-    
-    Store->>Disk: 读取所有会话 JSON 文件
-    Disk-->>Store: List~ConversationSession~
-    
-    Store->>Store: 过滤 projectPath 匹配的会话
-    
-    loop 每个匹配项目的会话
-        Store->>Store: 遍历 messages[].content (大小写不敏感)
-        alt content 包含关键词
-            Store->>Store: 提取匹配片段 (前后各 30 字)
-            Store->>Store: 记录 matchCount + matchedMessageId
-        end
+    %% Permission evaluation single gate
+    Loop->>PE: evaluate(toolCall: edit_file, context:)
+    PE->>PE: Step 1 denyRule
+    PE->>PE: Step 2 askRule
+    PE->>TR: getTool(name:) + needsPermission
+    TR-->>PE: destructive=true
+    PE->>PMS: isInPlanMode()
+    PMS-->>PE: true
+    PE->>PE: Step 3 safetyCheck: plan+write -> deny
+    PE-->>Loop: Decision(effect: .deny)
+
+    %% SubAgent isolation
+    Loop->>AT: execute "agent" tool
+    AT->>AT: new FileSystemService(rootPath)
+    AT->>AT: new PermissionEngine
+    AT->>Sub: AgentLoop(context: subAgentContext)
+    Sub->>Sub: run(taskDescription)
+    Sub->>Sub: auto-confirm .askConfirmation
+    Sub-->>AT: event stream (final text only)
+    AT-->>Loop: ToolResult.success
+
+    %% Memory extraction via stopHooks
+    Loop->>Loop: query loop ends, no tool_call
+    Loop->>ME: extractAndStore(session:...)
+    ME->>ME: check if main agent wrote memory
+    alt main agent wrote memory
+        ME->>ME: skip
+    else no memory writes
+        ME->>Sub: runForkedAgent(extractPrompt)
+        Sub-->>ME: [ExtractedMemory]
+        ME->>MS: appendMemory(...)
+        MS->>PFS: createDirectory + writeFile
+        PFS-->>MS: success
     end
-    
-    Store-->>List: List~SessionSearchResult~
-    List-->>User: 显示搜索结果 (标题 + 高亮片段 + 匹配数)
-    
-    User->>List: 点击搜索结果
-    List->>List: 加载该会话
-    List->>List: 滚动到 matchedMessageId 位置
+    ME-->>Loop: done

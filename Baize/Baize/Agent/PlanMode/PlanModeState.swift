@@ -140,11 +140,6 @@ actor PlanModeState {
         phase == .planning || phase == .awaitingApproval
     }
 
-    /// 是否可以执行写操作（非计划模式时允许）
-    func canExecuteWrite() -> Bool {
-        !isInPlanMode()
-    }
-
     /// 获取当前阶段
     func getPhase() -> PlanModePhase {
         phase

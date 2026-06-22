@@ -105,6 +105,9 @@ struct PermissionSettingsView: View {
         case .bypass:
             return "所有操作 → 自动允许（危险命令除外）\n" +
                    "系统级危险操作仍被拒绝（如 rm -rf /）"
+        case .dontAsk:
+            return "只读操作 → 自动允许\n" +
+                   "所有需要确认的操作 → 直接拒绝（不弹窗）"
         }
     }
 }

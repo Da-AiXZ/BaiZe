@@ -1,292 +1,163 @@
-%% 白泽功能补全 — 类图
-%% 定义所有新增数据模型、Actor/Service 接口、GitService 新增方法签名
-
 classDiagram
-    direction TB
-
-    %% ===== 数据模型 =====
-
-    class ProjectEntry {
-        +UUID id
-        +String name
-        +String path
-        +String stack
-        +String icon
-        +Date lastOpened
-        +Color iconColor
+    class BaizeApp {
+        +resolveWorkingDirectory() String
+        +initPlatformFileSystem() PlatformFileSystem
     }
 
-    class UsageRecord {
-        +Date timestamp
-        +String provider
-        +String model
-        +Int promptTokens
-        +Int completionTokens
-        +Double estimatedCost
+    class PlatformFileSystem {
+        -selectedStrategy: Strategy
+        +readFile(at:) String
+        +createDirectory(at:)
+        +writeFile(at:content:atomically:)
+        +editFile(at:oldString:newString:) Bool
+        +deleteItem(at:)
     }
 
-    class UsageSummary {
-        +Int totalTokens
-        +Int apiCallCount
-        +Double totalCost
+    class FileSystemStrategy {
+        <<protocol>>
+        +createDirectory(at:)
+        +writeFile(at:content:atomically:)
+        +editFile(at:oldString:newString:) Bool
+        +deleteItem(at:)
     }
 
-    class TerminalHistoryRecord {
-        +String projectPath
-        +List~String~ commands
-        +Date lastUpdated
+    class FileManagerStrategy
+    class PosixSpawnStrategy
+    class IosSystemStrategy
+
+    class FileSystemService {
+        -rootPath: String
+        -platformFS: PlatformFileSystem
+        +readFile(at:) String
+        +writeFile(at:content:)
+        +createDirectory(at:)
+        +listDirectory(at:)
     }
 
-    class GitStashEntry {
-        +UUID id
-        +Int index
-        +String message
-        +Date date
-    }
-
-    class GitTag {
-        +UUID id
-        +String name
-        +String oid
-        +Date date
-        +String message
-        +Bool isAnnotated
-    }
-
-    class GitFetchResult {
-        +Int updatedBranches
-        +Int receivedBytes
-    }
-
-    class GitMergeResult {
-        +Bool success
-        +List~String~ conflictFiles
-        +Bool isFastForward
-    }
-
-    class GitResetMode {
-        <<enumeration>>
-        soft
-        mixed
-        hard
-    }
-
-    class ExportFormat {
-        <<enumeration>>
-        markdown
-        plaintext
-        json
-    }
-
-    class ExportContentMode {
-        <<enumeration>>
-        minimal
-        full
-    }
-
-    class SessionSearchResult {
-        +UUID id
-        +UUID sessionId
-        +String sessionTitle
-        +String matchedSnippet
-        +Int matchCount
-        +String matchedMessageId
-    }
-
-    class LLMUsage {
-        +Int promptTokens
-        +Int completionTokens
-    }
-
-    class ProjectTemplate {
-        <<enumeration>>
-        reactVite
-        swiftPackage
-        python
-        nodejs
-        staticHTML
-        +String displayName
-        +String iconName
-        +String stackDescription
-        +String bundleDirectoryName
-    }
-
-    class GitSubTab {
-        <<enumeration>>
-        changes
-        history
-        branches
-        stash
-        +String title
-        +String systemImage
-    }
-
-    %% ===== Actor / Service =====
-
-    class ProjectRegistry {
+    class RuntimeExecutor {
         <<actor>>
-        -List~ProjectEntry~ projects
-        -String storePath
-        +init(String)
-        +List~ProjectEntry~ load()
-        +List~ProjectEntry~ list()
-        +add(ProjectEntry)
-        +remove(UUID)
-        +update(ProjectEntry)
-        +ProjectEntry find(String path)
-        -save()
+        -nodeStrategy: RuntimeStrategy
+        -pythonStrategy: RuntimeStrategy
+        +executeCommand(command:workingDir:) ExecutionResult
+        +executeNode(script:workingDir:) ExecutionResult
+        +executePython(script:workingDir:) ExecutionResult
     }
 
-    class UsageTracker {
+    class GitShellService {
         <<actor>>
-        -String storeDir
-        +init(String)
-        +record(UsageRecord)
-        +UsageSummary getTodaySummary()
-        +List~UsageRecord~ loadDay(Date)
-        +cleanupOldRecords()
+        -gitURL: URL
+        -caBundleURL: URL
+        +fetch() GitFetchResult
+        +push(force:)
+        +pull() GitMergeResult
+        +clone(url:to:)
     }
-
-    class TerminalHistoryStore {
-        <<actor>>
-        -String storeDir
-        +init(String)
-        +List~String~ load(String projectPath)
-        +append(String command, String projectPath)
-        +clear(String projectPath)
-    }
-
-    class ConversationExporter {
-        +export(ConversationSession, ExportFormat, String, ExportContentMode) URL
-        -String exportMarkdown(ConversationSession, Bool)
-        -String exportPlaintext(ConversationSession, Bool)
-        -Data exportJSON(ConversationSession)
-        -String sanitizeFilename(String)
-    }
-
-    class BaizePricing {
-        <<enumeration>>
-        +Double getInputPrice(String model)
-        +Double getOutputPrice(String model)
-        +Double estimateCost(String model, Int prompt, Int completion)
-    }
-
-    %% ===== 现有类扩展（新增方法） =====
 
     class GitService {
         <<actor>>
-        -String repositoryPath
-        -KeychainService keychainService
+        -gitShell: GitShellService
+        +status() GitStatus
+        +log(limit:) [GitCommit]
+        +add(filePath:)
+        +commit(message:)
+        +push(force:)
         +fetch() GitFetchResult
-        +pull() GitMergeResult
-        +merge(String branch) GitMergeResult
-        +rebase(String branch) GitMergeResult
-        +rebaseAbort()
-        +stashPush(String message)
-        +List~GitStashEntry~ stashList()
-        +GitMergeResult stashPop()
-        +stashDrop(Int index)
-        +reset(String oid, GitResetMode mode)
-        +createTag(String name, String message, String targetOid)
-        +List~GitTag~ listTags()
-        +deleteTag(String name)
-        +clone(String remoteURL, String toPath, Function progressHandler)
-        +deleteBranch(String name)
-        +renameBranch(String oldName, String newName)
-        +List~GitBranch~ listRemoteBranches()
-        +checkoutRemoteBranch(String name)
     }
 
-    class GitViewModel {
-        <<MainActor ObservableObject>>
-        -GitService gitService
-        +List~GitStashEntry~ stashList
-        +List~GitTag~ tags
-        +List~GitBranch~ remoteBranches
-        +Double cloneProgress
-        +String cloneStatus
-        +fetch()
-        +pull()
-        +merge(String branch)
-        +rebase(String branch)
-        +rebaseAbort()
-        +stashPush(String message)
-        +loadStashList()
-        +stashPop()
-        +stashDrop(Int index)
-        +reset(String oid, GitResetMode mode)
-        +createTag(String name, String message)
-        +loadTags()
-        +deleteTag(String name)
-        +clone(String url, String projectName)
-        +deleteBranch(String name)
-        +renameBranch(String oldName, String newName)
-        +loadRemoteBranches()
-        +checkoutRemoteBranch(String name)
-    }
-
-    class ConversationStore {
+    class PermissionEngine {
         <<actor>>
-        -String storeDirectory
-        +save(ConversationSession)
-        +ConversationSession load(UUID)
-        +List~ConversationSession~ listSessions()
-        +List~ConversationSession~ listSessions(String projectPath)
-        +delete(UUID)
-        +List~SessionSearchResult~ search(String query, String projectPath)
+        -mode: Mode
+        -sessionApprovals: Set~String~
+        -toolRegistry: ToolRegistry
+        +setMode(_:)
+        +getMode() Mode
+        +evaluate(toolCall:context:) Decision
     }
 
-    class APIGateway {
+    class ToolRegistry {
         <<actor>>
-        -KeychainService keychainService
-        -UsageTracker usageTracker
-        +setUsageTracker(UsageTracker)
-        +AsyncThrowingStream streamComplete(List~Message~, List~ToolDefinition~, String model)
+        +register(_:)
+        +getTool(name:) Tool
+        +getToolDefinitions() [ToolDefinition]
+        +isEnabled(toolName:mode:) Bool
     }
 
-    class LLMChunk {
-        <<enumeration>>
-        textDelta(String)
-        toolCallBegin(String id, String name)
-        toolCallDelta(String id, String argumentsDelta)
-        usage(LLMUsage)
-        done(String finishReason)
+    class PlanModeState {
+        <<actor>>
+        -phase: PlanModePhase
+        +enter()
+        +exit(plan:) Bool
+        +approve()
+        +reject(reason:)
     }
 
-    class AppState {
-        <<MainActor ObservableObject>>
-        +String currentProjectPath
-        +ProjectRegistry projectRegistry
-        +UsageTracker usageTracker
-        +GitService gitService
-        +GitViewModel gitViewModel
-        +switchProject(String path)
-        -performSwitch(String path)
+    class AgentLoop {
+        <<actor>>
+        -permissionEngine: PermissionEngine
+        -toolRegistry: ToolRegistry
+        -fileSystemService: FileSystemService
+        -runtimeExecutor: RuntimeExecutor
+        -gitService: GitService
+        -memoryStore: MemoryStore
+        -planModeState: PlanModeState
+        +run(userMessage:) AsyncStream~AgentEvent~
+        +confirmToolCall(toolCall:allowed:)
+        -extractMemories()
     }
 
-    %% ===== 关系 =====
+    class SubAgentContext {
+        +id: UUID
+        +fileSystemService: FileSystemService
+        +permissionEngine: PermissionEngine
+        +conversationSession: ConversationSession
+        +allowedTools: [String]
+    }
 
-    ProjectRegistry --> ProjectEntry : manages
-    UsageTracker --> UsageRecord : records
-    UsageTracker --> BaizePricing : uses for cost
-    UsageTracker --> UsageSummary : returns
-    TerminalHistoryStore --> TerminalHistoryRecord : persists
-    ConversationExporter --> ExportFormat : uses
-    ConversationExporter --> ExportContentMode : uses
-    GitService --> GitStashEntry : returns
-    GitService --> GitTag : returns
-    GitService --> GitFetchResult : returns
-    GitService --> GitMergeResult : returns
-    GitService --> GitResetMode : uses
-    GitViewModel --> GitService : calls
-    GitViewModel --> GitStashEntry : displays
-    GitViewModel --> GitTag : displays
-    ConversationStore --> SessionSearchResult : returns
-    APIGateway --> LLMChunk : yields
-    LLMChunk --> LLMUsage : carries
-    APIGateway --> UsageTracker : records to
-    APIGateway --> BaizePricing : estimates cost
-    AppState --> ProjectRegistry : owns
-    AppState --> UsageTracker : owns
-    AppState --> GitService : recreates on switch
-    AppState --> GitViewModel : recreates on switch
+    class AgentTool {
+        +execute(input:context:) ToolResult
+    }
+
+    class SkillExecutor {
+        <<actor>>
+        +execute(name:arguments:context:) ToolResult
+        +activateConditionalSkills(for:) [String]
+    }
+
+    class MemoryStore {
+        <<actor>>
+        +ensureDirectoriesExist()
+        +appendMemory(scope:content:type:keywords:)
+        +findRelevantMemories(query:limit:) [Memory]
+    }
+
+    class MemoryExtractor {
+        +extractAndStore(session:apiGateway:memoryStore:scope:)
+    }
+
+    BaizeApp --> PlatformFileSystem : creates
+    PlatformFileSystem --> FileSystemStrategy : uses
+    FileSystemStrategy <|-- FileManagerStrategy
+    FileSystemStrategy <|-- PosixSpawnStrategy
+    FileSystemStrategy <|-- IosSystemStrategy
+    FileSystemService --> PlatformFileSystem : writes via
+    FileSystemService --> FileSystemStrategy : reads via
+    RuntimeExecutor ..> FileSystemService : uses workingDir
+    GitService --> GitShellService : remote ops
+    GitService --> FileSystemService : local ops
+    AgentLoop --> PermissionEngine
+    AgentLoop --> ToolRegistry
+    AgentLoop --> FileSystemService
+    AgentLoop --> RuntimeExecutor
+    AgentLoop --> GitService
+    AgentLoop --> MemoryStore
+    AgentLoop --> PlanModeState
+    PermissionEngine --> ToolRegistry
+    ToolRegistry ..> PermissionEngine : isEnabled(mode)
+    AgentTool --> SubAgentContext : creates
+    SubAgentContext --> FileSystemService : independent
+    SubAgentContext --> PermissionEngine : independent
+    AgentTool --> AgentLoop : spawns
+    SkillExecutor --> AgentTool : uses
+    AgentLoop --> MemoryExtractor : triggers
+    MemoryExtractor --> MemoryStore : writes
+    MemoryStore --> PlatformFileSystem : writes via
