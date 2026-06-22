@@ -36,7 +36,7 @@ struct WebSearchTool: Tool {
         let maxResults = input["max_results"] as? Int ?? input["maxResults"] as? Int ?? 5
 
         do {
-            let results = try await provider.search(query: query, maxResults: maxResults)
+            var results = try await provider.search(query: query, maxResults: maxResults)
 
             if results.isEmpty {
                 return ToolResult.success(
@@ -45,13 +45,22 @@ struct WebSearchTool: Tool {
                 )
             }
 
+            // P2-#23 fix: 过滤低质量结果 — 移除空标题/空摘要的结果，优先权威来源
+            results = results.filter { result in
+                !result.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !result.snippet.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+
             // 格式化结果为文本
             let formattedResults = results.enumerated().map { index, result in
                 "[\(index + 1)] \(result.title)\n    URL: \(result.url)\n    摘要: \(result.snippet)"
             }.joined(separator: "\n\n")
 
+            // P2-#21 fix: 添加搜索结果使用提示，提醒 AI 基于实际搜索结果回答而非臆测
+            let qualityHint = "\n\n⚠️ 请基于以上搜索结果的实际内容回答用户问题。不要编造或臆测搜索结果中未提及的信息。如果搜索结果不足以回答问题，请如实告知用户。"
+
             return ToolResult.success(
-                output: "搜索「\(query)」找到 \(results.count) 条结果（来源: \(provider.displayName)）:\n\n\(formattedResults)",
+                output: "搜索「\(query)」找到 \(results.count) 条结果（来源: \(provider.displayName)）:\n\n\(formattedResults)\(qualityHint)",
                 metadata: [
                     "query": query,
                     "provider": provider.id,

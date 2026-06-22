@@ -34,7 +34,10 @@ final class GitDiffCollector {
             path = ""
         }
         if let target = targetFilePath {
-            isCollecting = (path == target)
+            // P2-#12 fix: 标准化路径比较 — 去掉前导 ./ 和尾部 /，避免路径不匹配导致"无差异"
+            let normalizedPath = path.hasPrefix("./") ? String(path.dropFirst(2)) : path
+            let normalizedTarget = target.hasPrefix("./") ? String(target.dropFirst(2)) : target
+            isCollecting = (normalizedPath == normalizedTarget)
         } else {
             isCollecting = true
         }
