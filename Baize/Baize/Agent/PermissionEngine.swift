@@ -200,9 +200,9 @@ actor PermissionEngine {
         // Step 5: R1 运行时 needsPermission() 检查
         // 在现有决策基础上，调用工具自身的 needsPermission() 做运行时权限判断
         // 只有当现有决策为 .allow 时才检查（.ask 和 .deny 已经足够严格）
-        // bypass 模式跳过 needsPermission 检查，确保 bypass 真正绕过所有权限
+        // bypass 和 acceptEdits 模式跳过 needsPermission 检查，确保文件编辑工具在 acceptEdits 下不会被降级为 ask
         var finalDecision = decision
-        if finalDecision.effect == .allow, mode != .bypass, let registry = toolRegistry {
+        if finalDecision.effect == .allow, mode != .bypass, mode != .acceptEdits, let registry = toolRegistry {
             let tool = await registry.getTool(name: toolName)
             let toolPermission = tool?.needsPermission(input: arguments, context: context)
 
