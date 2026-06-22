@@ -117,6 +117,7 @@ struct ChatView: View {
             )
         }
         // R1: PlanMode 审批弹窗
+        // P1-#9 fix: 添加 fallback view 防止 pendingPlanForApproval 为 nil 时 sheet 黑屏
         .sheet(isPresented: $appState.showPlanApprovalSheet) {
             if let plan = appState.pendingPlanForApproval {
                 PlanApprovalView(
@@ -138,9 +139,20 @@ struct ChatView: View {
                         }
                     }
                 )
+            } else {
+                // P1-#9 fix: 数据未就绪时显示加载指示器而非黑屏
+                VStack(spacing: 16) {
+                    ProgressView()
+                    Text("正在加载计划...")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.baizeBackground)
             }
         }
         // R1: 结构化提问弹窗
+        // P1-#9 fix: 添加 fallback view 防止 pendingQuestions 为 nil 时 sheet 黑屏
         .sheet(isPresented: $appState.showAskUserQuestionSheet) {
             if let questions = appState.pendingQuestions {
                 AskUserQuestionView(
@@ -159,6 +171,16 @@ struct ChatView: View {
                         ))
                     }
                 )
+            } else {
+                // P1-#9 fix: 数据未就绪时显示加载指示器而非黑屏
+                VStack(spacing: 16) {
+                    ProgressView()
+                    Text("正在加载问题...")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.baizeBackground)
             }
         }
     }

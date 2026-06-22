@@ -16,7 +16,7 @@ struct ChatInputView: View {
     @State private var editorHeight: CGFloat = 40
     @State private var isFocused: Bool = false
     /// R1: 命令补全建议
-    @State private var commandSuggestion: String? = nil
+    @State private var commandSuggestions: [String] = []
     /// R1: 技能触发提示
     @State private var skillSuggestion: String? = nil
 
@@ -65,24 +65,41 @@ struct ChatInputView: View {
         .onChange(of: text) { newValue in
             detectCommandOrSkill(newValue)
         }
-        // R1: 命令补全建议
+        // R1: 命令补全建议 — P1-#20 fix: 支持部分匹配，显示多个建议
         .overlay(alignment: .top) {
-            if let suggestion = commandSuggestion {
-                HStack(spacing: 6) {
-                    Image(systemName: "terminal.fill")
-                        .font(.system(size: 11))
-                        .foregroundColor(.baizeAccent)
-                    Text("命令: \(suggestion)")
-                        .font(.system(size: 12))
-                        .foregroundColor(.baizeAccent)
-                    Spacer()
+            if !commandSuggestions.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(commandSuggestions, id: \.self) { suggestion in
+                        Button(action: {
+                            // 点击建议自动补全命令名
+                            let parts = text.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+                            let args = parts.count > 1 ? String(parts[1]) : ""
+                            text = "/\(suggestion)\(args.isEmpty ? "" : " \(args)")"
+                            commandSuggestions = []
+                        }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "terminal.fill")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.baizeAccent)
+                                Text("/\(suggestion)")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.baizeAccent)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 4)
+                            .background(Color.baizeAccent.opacity(0.08))
+                            .cornerRadius(6)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
                 .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(Color.baizeAccent.opacity(0.1))
+                .padding(.vertical, 4)
+                .background(Color.baizeCardBackground)
                 .cornerRadius(8)
                 .padding(.horizontal, 12)
-                .offset(y: -32)
+                .offset(y: -8)
                 .transition(.opacity)
             }
         }
@@ -127,21 +144,27 @@ struct ChatInputView: View {
     // MARK: - R1: Command/Skill Detection
 
     /// 检测输入是否为 slash 命令或匹配技能触发词
+    /// P1-#20 fix: 支持部分匹配 slash 命令（输入 /co 即建议 /commit）
     private func detectCommandOrSkill(_ input: String) {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // 清空建议
-        commandSuggestion = nil
+        commandSuggestions = []
         skillSuggestion = nil
 
         guard !trimmed.isEmpty, let state = appState else { return }
 
-        // 1. 检测 slash 命令
+        // 1. 检测 slash 命令 — P1-#20 fix: 使用 searchCommands 支持部分匹配
         if trimmed.hasPrefix("/") {
             Task { @MainActor in
                 if let registry = state.commandRegistry {
-                    if let (command, _) = await registry.parse(input: trimmed) {
-                        commandSuggestion = command.name
+                    // 提取命令名（不含 / 前缀，不含参数）
+                    let withoutSlash = String(trimmed.dropFirst())
+                    let cmdName = withoutSlash.split(separator: " ").first.map(String.init) ?? withoutSlash
+                    // 如果输入只有 / 或命令名后有空格（已输入完命令名），不显示建议
+                    if !cmdName.isEmpty && !withoutSlash.contains(" ") {
+                        let matches = await registry.searchCommands(prefix: cmdName)
+                        commandSuggestions = matches.map { $0.name }
                     }
                 }
             }
@@ -180,7 +203,6 @@ struct AutoResizingTextEditor: UIViewRepresentable {
     func makeUIView(context: Context) -> UITextView {
         let textView = UITextView()
         textView.delegate = context.coordinator
-        textView.isScrollEnabled = true
         textView.isEditable = isEditable
         textView.isSelectable = isEditable
         textView.font = UIFont.systemFont(ofSize: 14)
@@ -192,6 +214,17 @@ struct AutoResizingTextEditor: UIViewRepresentable {
         textView.textContainerInset = UIEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
         textView.returnKeyType = .send
         textView.enablesReturnKeyAutomatically = false
+
+        // B14 fix: 确保文本自动换行，不水平延伸
+        // widthTracksTextView = true 使 textContainer 宽度跟随 textView 宽度
+        // lineBreakMode = .byWordWrapping 确保按词换行
+        textView.textContainer.widthTracksTextView = true
+        textView.textContainer.heightTracksTextView = false
+        textView.textContainer.lineBreakMode = .byWordWrapping
+        textView.textContainer.size = CGSize(width: textView.bounds.width, height: .greatestFiniteMagnitude)
+        textView.alwaysBounceVertical = true
+        textView.alwaysBounceHorizontal = false
+        textView.showsHorizontalScrollIndicator = false
 
         // Placeholder / text
         if text.isEmpty {

@@ -100,6 +100,20 @@ actor CommandRegistry {
         commands[name] != nil
     }
 
+    /// P1-#20 fix: 按前缀搜索命令（用于 slash 命令补全）
+    /// - Parameter prefix: 命令名前缀（不含 /）
+    /// - Returns: 匹配的命令列表（最多 5 个）
+    func searchCommands(prefix: String) -> [any SlashCommand] {
+        if prefix.isEmpty {
+            return Array(commands.values).sorted { $0.name < $1.name }.prefix(5).map { $0 }
+        }
+        let lowercased = prefix.lowercased()
+        let matched = commands.values
+            .filter { $0.name.lowercased().hasPrefix(lowercased) }
+            .sorted { $0.name < $1.name }
+        return Array(matched.prefix(5))
+    }
+
     // MARK: - Built-in Commands Registration
 
     /// 注册 10 个内置命令

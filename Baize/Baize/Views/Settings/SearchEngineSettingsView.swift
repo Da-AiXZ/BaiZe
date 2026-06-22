@@ -85,21 +85,28 @@ struct SearchEngineSettingsView: View {
     }
 
     /// 加载已保存的设置
+    /// P1-#22 fix: 从 UserDefaults 读取用户选择的搜索引擎（而非根据 API key 推断）
     private func loadSettings() {
         tavilyKey = keychain.load(key: WebSearchFactory.tavilyKeyKeychainKey) ?? ""
         bingKey = keychain.load(key: WebSearchFactory.bingKeyKeychainKey) ?? ""
         googleKey = keychain.load(key: WebSearchFactory.googleKeyKeychainKey) ?? ""
         googleCXId = UserDefaults.standard.string(forKey: "com.baize.google-cx-id") ?? ""
 
-        // 判断当前活跃 Provider
-        if tavilyKey.isEmpty && bingKey.isEmpty && googleKey.isEmpty {
-            selectedProvider = "duckduckgo"
-        } else if !tavilyKey.isEmpty {
-            selectedProvider = "tavily"
-        } else if !bingKey.isEmpty {
-            selectedProvider = "bing"
-        } else if !googleKey.isEmpty {
-            selectedProvider = "google"
+        // P1-#22 fix: 从 UserDefaults 读取用户选择的搜索引擎
+        let savedProvider = UserDefaults.standard.string(forKey: WebSearchFactory.selectedProviderUDKey)
+        if let provider = savedProvider {
+            selectedProvider = provider
+        } else {
+            // 首次使用 — 根据 API key 推断默认 Provider
+            if tavilyKey.isEmpty && bingKey.isEmpty && googleKey.isEmpty {
+                selectedProvider = "duckduckgo"
+            } else if !tavilyKey.isEmpty {
+                selectedProvider = "tavily"
+            } else if !bingKey.isEmpty {
+                selectedProvider = "bing"
+            } else if !googleKey.isEmpty {
+                selectedProvider = "google"
+            }
         }
     }
 
@@ -131,8 +138,11 @@ struct SearchEngineSettingsView: View {
             UserDefaults.standard.set(googleCXId, forKey: "com.baize.google-cx-id")
         }
 
-        // 重新创建 WebSearchProvider
-        let webSearch = WebSearchFactory.createBestAvailable(keychainService: keychain)
+        // P1-#22 fix: 保存用户选择的搜索引擎到 UserDefaults
+        UserDefaults.standard.set(selectedProvider, forKey: WebSearchFactory.selectedProviderUDKey)
+
+        // 重新创建 WebSearchProvider — P1-#22 fix: 使用用户选择的 Provider 而非自动推断
+        let webSearch = WebSearchFactory.create(provider: selectedProvider, keychainService: keychain)
         appState.webSearchProvider = webSearch
 
         withAnimation { showSavedToast = true }

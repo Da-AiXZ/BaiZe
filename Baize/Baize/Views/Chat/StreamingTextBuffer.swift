@@ -20,7 +20,9 @@ final class StreamingTextBuffer: ObservableObject {
     private var flushTimer: DispatchSourceTimer?
 
     /// flush 间隔（秒）
-    private let flushInterval: TimeInterval = 0.08
+    /// P1-#1 fix: 从 80ms 降到 16ms（60fps），实现逐字流畅输出
+    /// 之前 80ms 导致文本一批批出现而非逐字流式
+    private let flushInterval: TimeInterval = 0.016
 
     /// 追加文本到缓冲区（不触发 UI 重绘）
     /// T01-3 fix: O(1) append 替代 O(n) 字符串拼接

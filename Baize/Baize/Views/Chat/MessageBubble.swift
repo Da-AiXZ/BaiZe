@@ -231,12 +231,16 @@ private struct AssistantMessageBubble: View {
 // MARK: - Tool Call Bubble
 
 /// 工具调用气泡 — 显示工具名 + 参数摘要 + 执行状态
+/// B13 fix: 工具调用结果默认折叠，点击展开查看完整内容
 private struct ToolCallBubble: View {
     let toolCall: ToolCall
     /// W12 fix: 使用 ToolCallView.ToolCallStatus（唯一定义）而非 DisplayMessage.ToolCallStatus
     let status: ToolCallView.ToolCallStatus
     let result: ToolResult?
     let denialReason: String?
+
+    // B13 fix: 工具调用结果默认折叠
+    @State private var isResultExpanded: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -254,7 +258,7 @@ private struct ToolCallBubble: View {
                     Text(argumentSummary)
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
-                        .lineLimit(1)
+                        .lineLimit(2)
                 }
 
                 Spacer()
@@ -264,9 +268,9 @@ private struct ToolCallBubble: View {
             .background(toolCallBackground)
             .cornerRadius(10)
 
-            // 执行结果（如果已完成）
+            // 执行结果（如果已完成）— B13 fix: 默认折叠，点击展开
             if let result = result, status == .completed {
-                ResultBubble(result: result)
+                ResultBubble(result: result, isExpanded: $isResultExpanded)
             }
 
             // 拒绝原因（如果被拒绝）
@@ -307,32 +311,73 @@ private struct ToolCallBubble: View {
         }
     }
 
-    /// 工具参数摘要（截断到 60 字符）
+    /// 工具参数摘要（B12 fix: 统一截断到 120 字符，避免部分全显部分省略的不一致）
     private var argumentSummary: String {
         let args = toolCall.parsedArguments()
-        if args.isEmpty { return "无参数" }
+        if args.isEmpty {
+            // P0-5 fix: parsedArguments 为空时显示原始参数
+            if !toolCall.arguments.isEmpty && toolCall.arguments != "{}" {
+                return toolCall.arguments.truncated(to: 120)
+            }
+            return "无参数"
+        }
         // 显示最重要的参数值
-        let mainArgs = args.map { "\(String($0.key).prefix(20)): \(String(describing: $0.value).prefix(30))" }
-        return mainArgs.joined(separator: ", ").truncated(to: 60)
+        let mainArgs = args.map { "\(String($0.key).prefix(20)): \(String(describing: $0.value).prefix(40))" }
+        return mainArgs.joined(separator: ", ").truncated(to: 120)
     }
 }
 
 // MARK: - Result Bubble
 
 /// 工具执行结果气泡
+/// B12 fix: 使用 ScrollView + 统一截断阈值（2000 字符），避免部分全显部分省略
+/// B13 fix: 默认折叠，点击展开查看完整内容
 private struct ResultBubble: View {
     let result: ToolResult
+    @Binding var isExpanded: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(result.isError ? "⚠️ 执行错误" : "✅ 执行结果")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(result.isError ? .red : .green)
+            HStack(spacing: 4) {
+                Text(result.isError ? "⚠️ 执行错误" : "✅ 执行结果")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(result.isError ? .red : .green)
 
-            Text(result.output.truncated(to: 500))
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundColor(.primary.opacity(0.8))
-                .lineLimit(5)
+                Spacer()
+
+                // B13 fix: 展开/折叠按钮
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isExpanded.toggle()
+                    }
+                }) {
+                    HStack(spacing: 2) {
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 10))
+                        Text(isExpanded ? "收起" : "展开")
+                            .font(.system(size: 11))
+                    }
+                    .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            if isExpanded {
+                // B12 fix: 展开时使用 ScrollView 显示完整内容（最多 2000 字符）
+                ScrollView(.vertical, showsIndicators: true) {
+                    Text(result.output.truncated(to: 2000))
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundColor(.primary.opacity(0.8))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 200)
+            } else {
+                // 折叠时显示前 2 行预览
+                Text(result.output.truncated(to: 200))
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(.primary.opacity(0.8))
+                    .lineLimit(2)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)

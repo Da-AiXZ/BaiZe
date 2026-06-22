@@ -58,10 +58,20 @@ struct WebSearchResult: Sendable {
 /// 4. 最后 DuckDuckGo（免 key，始终可用）
 enum WebSearchFactory {
 
+    /// P1-#22 fix: 用户选择的搜索引擎的 UserDefaults 存储键
+    static let selectedProviderUDKey = "com.baize.selected-search-engine"
+
     /// 创建最佳可用的搜索 Provider
     /// - Parameter keychainService: Keychain 服务（读取 API key）
     /// - Returns: 最佳可用的 Provider 实例
+    /// P1-#22 fix: 优先使用用户保存的选择，其次自动推断
     static func createBestAvailable(keychainService: KeychainService) -> any WebSearchProvider {
+        // P1-#22 fix: 优先从 UserDefaults 读取用户选择的搜索引擎
+        if let savedProvider = UserDefaults.standard.string(forKey: selectedProviderUDKey) {
+            return create(provider: savedProvider, keychainService: keychainService)
+        }
+
+        // 自动推断（无用户选择时）
         // 1. Tavily（需 API key）
         if let tavilyKey = loadTavilyKey(from: keychainService), !tavilyKey.isEmpty {
             return TavilySearchProvider(apiKey: tavilyKey)
@@ -83,6 +93,46 @@ enum WebSearchFactory {
         // 4. DuckDuckGo（免 key，始终可用）
         webSearchLogger.info("WebSearch: no API key found, using DuckDuckGo (free)")
         return DuckDuckGoSearchProvider()
+    }
+
+    /// P1-#22 fix: 根据用户选择的 Provider 创建实例
+    /// - Parameters:
+    ///   - provider: Provider 标识（"tavily", "bing", "google", "duckduckgo"）
+    ///   - keychainService: Keychain 服务
+    /// - Returns: 对应的 Provider 实例（API key 缺失时降级到 DuckDuckGo）
+    static func create(provider: String, keychainService: KeychainService) -> any WebSearchProvider {
+        switch provider {
+        case "tavily":
+            if let key = loadTavilyKey(from: keychainService), !key.isEmpty {
+                return TavilySearchProvider(apiKey: key)
+            }
+            // API key 缺失 — 降级到 DuckDuckGo
+            webSearchLogger.warning("WebSearch: Tavily selected but no API key, falling back to DuckDuckGo")
+            return DuckDuckGoSearchProvider()
+
+        case "bing":
+            if let key = loadBingKey(from: keychainService), !key.isEmpty {
+                return BingSearchProvider(apiKey: key)
+            }
+            webSearchLogger.warning("WebSearch: Bing selected but no API key, falling back to DuckDuckGo")
+            return DuckDuckGoSearchProvider()
+
+        case "google":
+            if let key = loadGoogleKey(from: keychainService), !key.isEmpty {
+                let cxId = UserDefaults.standard.string(forKey: "com.baize.google-cx-id") ?? ""
+                if !cxId.isEmpty {
+                    return GoogleSearchProvider(apiKey: key, cxId: cxId)
+                }
+            }
+            webSearchLogger.warning("WebSearch: Google selected but no API key/CX, falling back to DuckDuckGo")
+            return DuckDuckGoSearchProvider()
+
+        case "duckduckgo":
+            return DuckDuckGoSearchProvider()
+
+        default:
+            return DuckDuckGoSearchProvider()
+        }
     }
 
     // MARK: - API Key Loading
