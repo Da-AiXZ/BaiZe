@@ -200,8 +200,8 @@ struct NewProjectWizard: View {
         await updateStatus("正在创建项目目录...")
         let fm = FileManager.default
         // B01 fix: 使用自定义路径创建父目录
-        try fm.ensureDirectoryExists(atPath: customRootPath)
-        try fm.ensureDirectoryExists(atPath: path)
+        try fm.createDirectory(atPath: customRootPath, withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: path, withIntermediateDirectories: true)
 
         await updateStatus("正在生成 BAIZE.md...")
         try generateBaizeMD(at: path, name: name, stack: "Unknown")
@@ -218,8 +218,8 @@ struct NewProjectWizard: View {
         await updateStatus("正在创建项目目录...")
         let fm = FileManager.default
         // B01 fix: 使用自定义路径创建父目录
-        try fm.ensureDirectoryExists(atPath: customRootPath)
-        try fm.ensureDirectoryExists(atPath: path)
+        try fm.createDirectory(atPath: customRootPath, withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: path, withIntermediateDirectories: true)
 
         await updateStatus("正在复制模板文件...")
         // 从 App Bundle 复制模板

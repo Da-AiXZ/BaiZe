@@ -163,164 +163,11 @@ extension URL {
 
 extension FileManager {
     /// 确保目录存在，不存在则创建
-    /// B01 fix (round 2): 改进目录创建逻辑，四级回退策略
-    /// 1. FileManager.createDirectory(withIntermediateDirectories: true) — 标准方式
-    /// 2. 逐级创建每个路径组件 — 避免一次性创建多级目录的权限问题
-    /// 3. posix_spawn mkdir -p — TrollStore no-sandbox 环境回退
-    /// 4. ios_system ios_popen mkdir -p — 终极回退，使用 ios_system 内置 mkdir
-    /// B01 fix (round 2): 新增第 4 级回退，使用 ios_system 的 ios_popen 执行 mkdir
-    /// 这是 AI 通过 execute_command 成功创建目录的同一套机制（ios_system 内置 mkdir）
+    /// T02: 删除 4 级回退，统一使用 FileManager 标准 API
     func ensureDirectoryExists(atPath path: String) throws {
         if !fileExists(atPath: path) {
-            // 尝试 FileManager 创建（标准方式）
-            do {
-                try createDirectory(atPath: path, withIntermediateDirectories: true)
-            } catch {
-                // B01 fix: 回退 1 — 逐级创建路径组件
-                baizeLogger.warning("FileManager.createDirectory failed for \(path): \(error.localizedDescription), trying component-by-component creation")
-                do {
-                    try createDirectoryComponents(atPath: path)
-                    if fileExists(atPath: path) {
-                        baizeLogger.info("Directory created via component-by-component: \(path)")
-                        return
-                    }
-                } catch {
-                    baizeLogger.warning("Component-by-component creation also failed: \(error.localizedDescription), trying posix_spawn fallback")
-                }
-
-                // B01 fix: 回退 2 — posix_spawn 执行 mkdir -p
-                do {
-                    try createDirectoryWithPosixSpawn(atPath: path)
-                    if fileExists(atPath: path) {
-                        return
-                    }
-                } catch {
-                    baizeLogger.warning("posix_spawn mkdir failed: \(error.localizedDescription), trying ios_system ios_popen fallback")
-                }
-
-                // B01 fix (round 2): 回退 3 — ios_system ios_popen 执行 mkdir -p
-                // ios_system 内置了 mkdir 命令，不依赖 /bin/mkdir 二进制
-                // 这是 AI 通过 execute_command 成功创建目录的同一套机制
-                try createDirectoryWithIosSystem(atPath: path)
-            }
+            try createDirectory(atPath: path, withIntermediateDirectories: true)
         }
-    }
-
-    /// B01 fix: 逐级创建路径组件
-    /// 将路径拆分为各组件，逐个创建，避免 withIntermediateDirectories 在某些环境下失败
-    private func createDirectoryComponents(atPath path: String) throws {
-        // 标准化路径 — 去掉末尾的 /
-        let normalizedPath = path.hasSuffix("/") ? String(path.dropLast()) : path
-        let components = normalizedPath.split(separator: "/").map(String.init)
-
-        var currentPath = ""
-        for component in components {
-            currentPath += "/" + component
-            if !fileExists(atPath: currentPath) {
-                try createDirectory(atPath: currentPath, withIntermediateDirectories: false)
-            }
-        }
-    }
-
-    /// P0-1 fix: 使用 posix_spawn 执行 mkdir -p 创建目录（TrollStore 回退方案）
-    /// TrollStore + no-sandbox 环境下，posix_spawn 创建的子进程可能绕过 FileManager 的沙盒限制
-    private func createDirectoryWithPosixSpawn(atPath path: String) throws {
-        // 尝试多个 mkdir 路径（iOS 上可能在 /bin/ 或 /usr/bin/）
-        let mkdirPaths = ["/bin/mkdir", "/usr/bin/mkdir"]
-
-        var spawnSuccess = false
-        var lastError: String = ""
-
-        for mkdirPath in mkdirPaths {
-            guard fileExists(atPath: mkdirPath) else { continue }
-
-            let argv: [UnsafeMutablePointer<CChar>?] = [
-                strdup("mkdir"),
-                strdup("-p"),
-                strdup(path),
-                nil
-            ]
-            defer {
-                for ptr in argv { if let p = ptr { free(p) } }
-            }
-
-            var pid: pid_t = 0
-            let spawnResult = posix_spawn(&pid, mkdirPath, nil, nil, argv, nil)
-
-            if spawnResult != 0 {
-                lastError = "posix_spawn failed (errno=\(spawnResult))"
-                continue
-            }
-
-            // 等待子进程完成
-            var status: Int32 = 0
-            waitpid(pid, &status, 0)
-
-            if status == 0 {
-                spawnSuccess = true
-                break
-            } else {
-                lastError = "mkdir -p exited with status \(status)"
-                continue
-            }
-        }
-
-        if !spawnSuccess {
-            // posix_spawn 也失败了 — 如果没有找到 mkdir 二进制，尝试 ios_system
-            // 作为最后的手段，直接抛出包含诊断信息的错误
-            throw BaizeError.fileSystemError(
-                "无法创建目录 \(path): \(lastError)。" +
-                "TrollStore 环境下可能需要手动创建目录或检查 entitlements 配置。"
-            )
-        }
-
-        // 验证目录是否创建成功
-        if !fileExists(atPath: path) {
-            throw BaizeError.fileSystemError("mkdir -p 执行成功但目录仍不存在: \(path)")
-        }
-
-        baizeLogger.info("Directory created via posix_spawn: \(path)")
-    }
-
-    /// B01 fix (round 2): 使用 ios_system 的 ios_popen 执行 mkdir -p
-    /// ios_system 内置了 70+ Unix 命令（包括 mkdir），不依赖系统二进制
-    /// 这是 AI 通过 execute_command → RuntimeExecutor → ios_popen 成功创建目录的同一套机制
-    /// 解决 FileManager.default 在 TrollStore 环境下的沙盒残留限制
-    private func createDirectoryWithIosSystem(atPath path: String) throws {
-        // 构建命令：mkdir -p "path"
-        // 使用引号包裹路径，处理包含空格的路径
-        let command = "mkdir -p \"\(path)\""
-
-        baizeLogger.info("ensureDirectoryExists: trying ios_popen mkdir: \(command)")
-
-        // ios_popen 是 ios_system 库的进程内命令执行接口
-        // 它不 fork 进程，而是在当前进程内执行内置命令
-        let fp = ios_popen(command, "r")
-
-        guard let filePtr = fp else {
-            throw BaizeError.fileSystemError(
-                "无法创建目录 \(path): ios_popen 返回 nil。" +
-                "FileManager、posix_spawn 和 ios_system 均失败。"
-            )
-        }
-
-        // 读取输出（mkdir -p 成功时无输出）
-        var buffer = [CChar](repeating: 0, count: 256)
-        var output = ""
-        while fgets(&buffer, Int32(buffer.count), filePtr) != nil {
-            output += String(cString: buffer)
-        }
-        fclose(filePtr)
-
-        // 验证目录是否创建成功
-        if !fileExists(atPath: path) {
-            let detail = output.isEmpty ? "(无输出)" : output
-            throw BaizeError.fileSystemError(
-                "ios_popen mkdir 执行完毕但目录仍不存在: \(path)。输出: \(detail)"
-            )
-        }
-
-        baizeLogger.info("Directory created via ios_system ios_popen: \(path)")
     }
 
     /// 获取文件大小（字节）
@@ -339,6 +186,12 @@ extension FileManager {
             return nil
         }
         return date
+    }
+
+    /// 判断路径是否为目录
+    func isDirectory(atPath path: String) -> Bool {
+        var isDir: ObjCBool = false
+        return fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
     }
 }
 

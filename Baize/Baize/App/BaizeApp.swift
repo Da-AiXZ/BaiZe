@@ -66,11 +66,20 @@ struct BaizeApp: App {
         // 检测可用的工作目录：优先 TrollStore no-sandbox 路径，失败则用沙箱 Documents
         let workingRoot = BaizeApp.resolveWorkingDirectory()
 
-        // T01: PlatformFileSystem 必须在其他服务之前创建
-        // 读操作保留 FileManager，写操作通过可插拔 FileSystemStrategy 执行
-        let platformFS = PlatformFileSystem(rootPath: workingRoot)
+        // T02: 同步探测平台文件系统能力，在创建 FileSystemService 前选定最佳策略
+        let capabilities = PlatformFileSystem.probeCapabilities()
+        let selectedStrategy: FileSystemStrategyType
+        if capabilities.posixSpawn {
+            selectedStrategy = .posixSpawn
+        } else if capabilities.iosSystem {
+            selectedStrategy = .iosSystem
+        } else {
+            selectedStrategy = .fileManager
+        }
+        baizeLogger.info("[BaizeApp] Probed capabilities: \(capabilities); selected strategy: \(selectedStrategy.rawValue)")
 
-        let fsService = FileSystemService(rootPath: workingRoot)
+        let platformFS = PlatformFileSystem(rootPath: workingRoot, strategyType: selectedStrategy)
+        let fsService = FileSystemService(rootPath: workingRoot, platformFileSystem: platformFS)
         let nodeEngine = NodeRuntimeEngine()
         // 不在 init 同步启动 — App 启动时 framework 还在加载，两个重型运行时
         // 同时初始化会导致 V8 引擎 EXC_BAD_ACCESS 崩溃。
@@ -92,7 +101,7 @@ struct BaizeApp: App {
         let memoryStore = MemoryStore()
         let contextMgr = ContextManager(projectContext: projectCtx, apiGateway: api, memoryStore: memoryStore)
         let conversation = ConversationStore()
-        let registry = ToolRegistry(fileSystemService: fsService, runtimeExecutor: runtime, nodeEngine: nodeEngine, pythonEngine: pythonEngine)
+        let registry = ToolRegistry(fileSystemService: fsService, platformFileSystem: platformFS, runtimeExecutor: runtime, nodeEngine: nodeEngine, pythonEngine: pythonEngine)
 
         // T03: 创建 ProjectRegistry + UsageTracker
         let projectRegistry = ProjectRegistry(storePath: BaizePath.projectsRegistry)
@@ -194,9 +203,10 @@ struct BaizeApp: App {
         let restoredModel = appState.activeModel
 
         Task {
-            // T01: 探测平台文件系统能力
+            // T01/T02: 探测平台文件系统能力并选择最佳策略
             let capabilities = await platformFS.probe()
             baizeLogger.info("PlatformFileSystem capabilities: \(capabilities)")
+            await platformFS.selectBestStrategy(basedOn: capabilities)
 
             // R1: 加载内置技能和用户技能
             await skillReg.loadBundledSkills()
@@ -222,13 +232,13 @@ struct BaizeApp: App {
 
         // 尝试创建 TrollStore 路径
         do {
-            try fm.ensureDirectoryExists(atPath: trollStorePath)
-            try fm.ensureDirectoryExists(atPath: BaizePath.internalData)
-            try fm.ensureDirectoryExists(atPath: BaizePath.conversations)
+            try fm.createDirectory(atPath: trollStorePath, withIntermediateDirectories: true)
+            try fm.createDirectory(atPath: BaizePath.internalData, withIntermediateDirectories: true)
+            try fm.createDirectory(atPath: BaizePath.conversations, withIntermediateDirectories: true)
             // Bug 3 fix: 确保终端历史目录存在
-            try fm.ensureDirectoryExists(atPath: BaizePath.terminalHistory)
+            try fm.createDirectory(atPath: BaizePath.terminalHistory, withIntermediateDirectories: true)
             // Bug 5 fix: 确保用量数据目录存在
-            try fm.ensureDirectoryExists(atPath: BaizePath.usageData)
+            try fm.createDirectory(atPath: BaizePath.usageData, withIntermediateDirectories: true)
             baizeLogger.info("Using TrollStore no-sandbox path: \(trollStorePath)")
 
             // Bug 3 fix: 恢复上次打开的项目路径
@@ -253,11 +263,11 @@ struct BaizeApp: App {
         let sandboxTermHistory = (sandboxInternal as NSString).appendingPathComponent("terminal_history")
         let sandboxUsage = (sandboxInternal as NSString).appendingPathComponent("usage")
 
-        try? fm.ensureDirectoryExists(atPath: sandboxRoot)
-        try? fm.ensureDirectoryExists(atPath: sandboxInternal)
-        try? fm.ensureDirectoryExists(atPath: sandboxConv)
-        try? fm.ensureDirectoryExists(atPath: sandboxTermHistory)
-        try? fm.ensureDirectoryExists(atPath: sandboxUsage)
+        try? fm.createDirectory(atPath: sandboxRoot, withIntermediateDirectories: true)
+        try? fm.createDirectory(atPath: sandboxInternal, withIntermediateDirectories: true)
+        try? fm.createDirectory(atPath: sandboxConv, withIntermediateDirectories: true)
+        try? fm.createDirectory(atPath: sandboxTermHistory, withIntermediateDirectories: true)
+        try? fm.createDirectory(atPath: sandboxUsage, withIntermediateDirectories: true)
 
         baizeLogger.info("Using sandbox fallback path: \(sandboxRoot)")
         return sandboxRoot + "/"

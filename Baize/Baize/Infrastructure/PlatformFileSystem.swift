@@ -30,6 +30,9 @@ actor PlatformFileSystem {
     /// 当前写操作策略
     private var strategy: FileSystemStrategy
 
+    /// T02: 探测后选定的策略类型
+    private var selectedStrategy: FileSystemStrategyType = .fileManager
+
     // MARK: - Initialization
 
     /// 创建 PlatformFileSystem
@@ -39,6 +42,15 @@ actor PlatformFileSystem {
     init(rootPath: String, strategyType: FileSystemStrategyType = .fileManager) {
         self.rootPath = rootPath
         self.strategy = strategyType.strategyInstance
+        self.selectedStrategy = strategyType
+
+        // 同步确保根目录存在（启动阶段需要同步完成）
+        do {
+            try FileManager.default.createDirectory(atPath: rootPath, withIntermediateDirectories: true)
+        } catch {
+            baizeLogger.error("PlatformFileSystem failed to create rootPath: \(rootPath) — \(error.localizedDescription)")
+        }
+
         baizeLogger.info("PlatformFileSystem initialized at \(rootPath) with strategy \(strategyType.rawValue)")
     }
 
@@ -55,17 +67,31 @@ actor PlatformFileSystem {
     /// - Parameter type: 策略类型
     func setStrategy(_ type: FileSystemStrategyType) {
         strategy = type.strategyInstance
+        selectedStrategy = type
         baizeLogger.info("PlatformFileSystem: strategy switched to \(type.rawValue)")
     }
 
     /// 获取当前策略类型
     func currentStrategy() -> FileSystemStrategyType {
-        if strategy is PosixSpawnFileSystemStrategy {
-            return .posixSpawn
-        } else if strategy is IOSSystemFileSystemStrategy {
-            return .iosSystem
-        }
-        return .fileManager
+        selectedStrategy
+    }
+
+    // MARK: - Static Probing (T02)
+
+    /// 同步探测平台文件系统能力
+    /// 在 BaizeApp.init 中调用，用于在创建 FileSystemService 前选定策略
+    /// - Returns: FileSystemCapabilities
+    static func probeCapabilities() -> FileSystemCapabilities {
+        let fm = FileManager.default
+        let gitAvailable = fm.fileExists(atPath: BaizeBinary.gitBinaryPath)
+        let mkdirAvailable = fm.fileExists(atPath: BaizeBinary.mkdirBinaryPath)
+        let caAvailable = fm.fileExists(atPath: BaizeBinary.caBundlePath)
+
+        return FileSystemCapabilities(
+            fileManager: true,
+            posixSpawn: gitAvailable && mkdirAvailable && caAvailable,
+            iosSystem: true
+        )
     }
 
     // MARK: - Read Operations (始终使用 FileManager)
@@ -93,7 +119,7 @@ actor PlatformFileSystem {
 
         guard fm.fileExists(atPath: dirPath) else {
             do {
-                try fm.ensureDirectoryExists(atPath: dirPath)
+                try fm.createDirectory(atPath: dirPath, withIntermediateDirectories: true)
             } catch {
                 throw BaizeError.fileSystemError("目录不存在且无法创建: \(dirPath)")
             }
@@ -243,24 +269,70 @@ actor PlatformFileSystem {
     // MARK: - Capability Probing
 
     /// 探测平台可用的文件系统能力
-    /// T01：FileManager 始终可用；POSIX spawn 需要 git + mkdir 二进制存在；ios_system 默认 false
+    /// T02：在临时路径真实测试每种策略能否成功创建目录
     /// - Returns: FileSystemCapabilities
     func probe() async -> FileSystemCapabilities {
+        let probeDir = (rootPath as NSString).appendingPathComponent(".baize/.probe/\(UUID().uuidString)")
         let fm = FileManager.default
-        let gitAvailable = fm.fileExists(atPath: BaizeBinary.gitBinaryPath)
-        let mkdirAvailable = fm.fileExists(atPath: BaizeBinary.mkdirBinaryPath)
-        let caAvailable = fm.fileExists(atPath: BaizeBinary.caBundlePath)
 
-        let posixAvailable = gitAvailable && mkdirAvailable && caAvailable
-        baizeLogger.info(
-            "[PlatformFileSystem] Probed capabilities: git=\(gitAvailable), mkdir=\(mkdirAvailable), ca=\(caAvailable)"
-        )
+        var fileManagerOK = false
+        var posixSpawnOK = false
+        var iosSystemOK = false
 
-        return FileSystemCapabilities(
-            fileManager: true,
-            posixSpawn: posixAvailable,
-            iosSystem: false
+        // 1. 测试 FileManager
+        do {
+            try fm.createDirectory(atPath: probeDir, withIntermediateDirectories: true)
+            fileManagerOK = true
+            try? fm.removeItem(atPath: probeDir)
+        } catch {
+            baizeLogger.warning("[PlatformFileSystem] FileManager probe failed: \(error.localizedDescription)")
+        }
+
+        // 2. 测试 POSIX spawn（需要 bundle 内 mkdir 二进制存在）
+        if fm.fileExists(atPath: BaizeBinary.mkdirBinaryPath) {
+            let posixProbeDir = (rootPath as NSString).appendingPathComponent(".baize/.probe/posix-\(UUID().uuidString)")
+            do {
+                let posixStrategy = PosixSpawnFileSystemStrategy()
+                try await posixStrategy.createDirectory(at: posixProbeDir)
+                posixSpawnOK = fm.fileExists(atPath: posixProbeDir)
+                if posixSpawnOK { try? fm.removeItem(atPath: posixProbeDir) }
+            } catch {
+                baizeLogger.warning("[PlatformFileSystem] POSIX spawn probe failed: \(error.localizedDescription)")
+            }
+        }
+
+        // 3. 测试 ios_system
+        let iosProbeDir = (rootPath as NSString).appendingPathComponent(".baize/.probe/ios-\(UUID().uuidString)")
+        do {
+            let iosStrategy = IOSSystemFileSystemStrategy()
+            try await iosStrategy.createDirectory(at: iosProbeDir)
+            iosSystemOK = fm.fileExists(atPath: iosProbeDir)
+            if iosSystemOK { try? fm.removeItem(atPath: iosProbeDir) }
+        } catch {
+            baizeLogger.warning("[PlatformFileSystem] ios_system probe failed: \(error.localizedDescription)")
+        }
+
+        let capabilities = FileSystemCapabilities(
+            fileManager: fileManagerOK,
+            posixSpawn: posixSpawnOK,
+            iosSystem: iosSystemOK
         )
+        baizeLogger.info("[PlatformFileSystem] Probed capabilities: \(capabilities)")
+        return capabilities
+    }
+
+    /// 根据探测结果选择最佳策略并切换
+    /// 优先级：posixSpawn > iosSystem > fileManager
+    /// - Parameter capabilities: probe() 返回的能力结果
+    func selectBestStrategy(basedOn capabilities: FileSystemCapabilities) {
+        if capabilities.posixSpawn {
+            setStrategy(.posixSpawn)
+        } else if capabilities.iosSystem {
+            setStrategy(.iosSystem)
+        } else {
+            setStrategy(.fileManager)
+        }
+        baizeLogger.info("[PlatformFileSystem] Selected strategy: \(currentStrategy().rawValue)")
     }
 
     // MARK: - Private Helpers

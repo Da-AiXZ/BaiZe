@@ -16,9 +16,17 @@ actor ToolRegistry {
     /// Swift 6 模式下 actor init 是 nonisolated，不能调 actor-isolated 方法
     /// 改用 static 工厂方法构建工具字典，init 直接赋值给 self.tools
     /// nodeEngine/pythonEngine 参数用于未来扩展（当前 RuntimeExecutor 已封装策略）
-    init(fileSystemService: FileSystemService? = nil, runtimeExecutor: RuntimeExecutor? = nil, nodeEngine: NodeRuntimeEngine? = nil, pythonEngine: PythonRuntimeEngine? = nil) {
+    init(fileSystemService: FileSystemService? = nil, platformFileSystem: PlatformFileSystem? = nil, runtimeExecutor: RuntimeExecutor? = nil, nodeEngine: NodeRuntimeEngine? = nil, pythonEngine: PythonRuntimeEngine? = nil) {
+        let fs: FileSystemService
+        if let existingFS = fileSystemService {
+            fs = existingFS
+        } else if let pfs = platformFileSystem {
+            fs = FileSystemService(rootPath: BaizePath.projectRoot, platformFileSystem: pfs)
+        } else {
+            fs = FileSystemService(rootPath: BaizePath.projectRoot)
+        }
         self.tools = Self.buildDefaultTools(
-            fs: fileSystemService ?? FileSystemService(rootPath: BaizePath.projectRoot),
+            fs: fs,
             rt: runtimeExecutor ?? RuntimeExecutor(),
             nodeEngine: nodeEngine,
             pythonEngine: pythonEngine

@@ -220,7 +220,7 @@ actor MemoryStore {
         let fm = FileManager.default
         let dirs = [baseDir, BaizePath.userMemoryDir, BaizePath.projectMemoryDir, BaizePath.teamMemoryDir]
         for dir in dirs {
-            try? fm.ensureDirectoryExists(atPath: dir)
+            try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
         }
     }
 }

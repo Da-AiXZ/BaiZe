@@ -80,7 +80,7 @@ actor TerminalHistoryStore {
         guard !excludedCommands.contains(trimmedCommand.lowercased()) else { return }
 
         do {
-            try fileManager.ensureDirectoryExists(atPath: storeDir)
+            try fileManager.createDirectory(atPath: storeDir, withIntermediateDirectories: true)
 
             let filePath = historyFilePath(for: projectPath)
             var commands = load(projectPath: projectPath)

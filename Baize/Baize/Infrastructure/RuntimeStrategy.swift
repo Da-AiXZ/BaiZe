@@ -366,7 +366,7 @@ struct PythonSpawnStrategy: RuntimeStrategy {
     /// 写入临时脚本文件
     private func writeTempScript(content: String, ext: String) -> String {
         let tempDir = BaizeRuntime.tempScriptDir
-        try? fileManager.ensureDirectoryExists(atPath: tempDir)
+        try? fileManager.createDirectory(atPath: tempDir, withIntermediateDirectories: true)
 
         let fileName = "baize_script_\(UUID().uuidString.prefix(8)).\(ext)"
         let fullPath = (tempDir as NSString).appendingPathComponent(fileName)

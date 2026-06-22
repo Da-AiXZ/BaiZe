@@ -68,7 +68,7 @@ actor UsageTracker {
     /// - Parameter record: 用量记录
     func record(_ record: UsageRecord) {
         do {
-            try fileManager.ensureDirectoryExists(atPath: storeDir)
+            try fileManager.createDirectory(atPath: storeDir, withIntermediateDirectories: true)
 
             let filePath = dayFilePath(for: record.timestamp)
             var records: [UsageRecord] = []
