@@ -8,7 +8,10 @@ struct ContentView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .detailOnly
     @State private var showNewProjectWizard = false
     @State private var projectList: [ProjectEntry] = []
-    @State private var showWorkbench: Bool = false
+    @State private var showRightSidebar: Bool = false
+    @State private var showDashboardSheet: Bool = false
+    @State private var showWorkbenchSheet: Bool = false
+    @State private var showSettingsSheet: Bool = false
 
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
 
@@ -21,7 +24,22 @@ struct ContentView: View {
                     FileExplorerView(appState: appState)
                         .navigationTitle("项目文件")
                 } detail: {
-                    R3WorkspacePane(appState: appState, showWorkbench: $showWorkbench)
+                    R3WorkspacePane(
+                        appState: appState,
+                        showRightSidebar: $showRightSidebar,
+                        onDashboard: {
+                            withAnimation(.easeInOut(duration: 0.3)) { showRightSidebar = false }
+                            showDashboardSheet = true
+                        },
+                        onWorkbench: {
+                            withAnimation(.easeInOut(duration: 0.3)) { showRightSidebar = false }
+                            showWorkbenchSheet = true
+                        },
+                        onSettings: {
+                            withAnimation(.easeInOut(duration: 0.3)) { showRightSidebar = false }
+                            showSettingsSheet = true
+                        }
+                    )
                         .safeAreaInset(edge: .top, spacing: 0) {
                             topBar
                         }
@@ -81,6 +99,45 @@ struct ContentView: View {
         .sheet(isPresented: $showNewProjectWizard) {
             NewProjectWizard(appState: appState)
         }
+        // iPad BugFix: 首页 Sheet（从右侧栏入口弹出）
+        .sheet(isPresented: $showDashboardSheet) {
+            NavigationStack {
+                DashboardView()
+                    .environmentObject(appState)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("完成") { showDashboardSheet = false }
+                        }
+                    }
+            }
+            .presentationDetents([.large])
+        }
+        // iPad BugFix: 工作台 Sheet（从右侧栏入口弹出）
+        .sheet(isPresented: $showWorkbenchSheet) {
+            NavigationStack {
+                WorkbenchSidebar(appState: appState)
+                    .navigationTitle("工作台")
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("完成") { showWorkbenchSheet = false }
+                        }
+                    }
+            }
+            .presentationDetents([.large])
+        }
+        // iPad BugFix: 设置 Sheet（从右侧栏入口弹出）
+        .sheet(isPresented: $showSettingsSheet) {
+            NavigationStack {
+                SettingsView(appState: appState)
+                    .navigationTitle("设置")
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("完成") { showSettingsSheet = false }
+                        }
+                    }
+            }
+            .presentationDetents([.large])
+        }
         // T03: 启动时加载项目列表 + 项目路径变化时刷新
         .task {
             await refreshProjectList()
@@ -92,7 +149,7 @@ struct ContentView: View {
 
     // MARK: - R3 Top Bar
 
-    /// 顶部工具栏 — 项目切换 + 焦点模式 + 工作台开关 + Agent 状态
+    /// 顶部工具栏 — 项目切换 + 焦点模式 + 右侧栏开关 + Agent 状态
     private var topBar: some View {
         HStack(spacing: 8) {
             ProjectSwitcherMenu(
@@ -109,18 +166,19 @@ struct ContentView: View {
 
             FocusModeBar(focusMode: $appState.focusMode, isAgentRunning: appState.isAgentRunning)
 
-            // R3: 工作台开关按钮（仅横屏显示）
+            // iPad BugFix: 右侧栏开关按钮（仅横屏显示，替代原工作台开关）
+            // 点击后 detail 右侧滑出 240pt 面板（首页/工作台/设置）
             if horizontalSizeClass == .regular {
                 Button(action: {
                     withAnimation(.easeInOut(duration: 0.3)) {
-                        showWorkbench.toggle()
+                        showRightSidebar.toggle()
                     }
                 }) {
-                    Image(systemName: showWorkbench ? "sidebar.right" : "sidebar.right")
+                    Image(systemName: "sidebar.right")
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(showWorkbench ? .baizeAccent : .secondary)
+                        .foregroundColor(showRightSidebar ? .baizeAccent : .secondary)
                         .padding(6)
-                        .background(showWorkbench ? Color.baizeAccent.opacity(0.1) : Color.clear)
+                        .background(showRightSidebar ? Color.baizeAccent.opacity(0.1) : Color.clear)
                         .cornerRadius(6)
                 }
                 .buttonStyle(.plain)
@@ -189,30 +247,118 @@ private struct WorkspacePane: View {
     }
 }
 
-// MARK: - R3 Workspace Pane (横屏: 聊天 + 工作台 HSplitView)
+// MARK: - R3 Workspace Pane (横屏: 工作区 + 右侧导航栏)
 
-/// R3 横屏工作区面板 — 编辑器/对话 + 工作台侧栏
+/// R3 横屏工作区面板 — 编辑器/对话 + 右侧导航栏（首页/工作台/设置入口）
+/// iPad BugFix: 原右侧 360pt 工作台侧栏改为 240pt 右侧导航栏，
+/// 工作台/首页/设置改为通过 sheet 弹出，解决 iPad regular 分支入口缺失问题。
 @MainActor
 private struct R3WorkspacePane: View {
     @ObservedObject var appState: AppState
-    @Binding var showWorkbench: Bool
+    @Binding var showRightSidebar: Bool
+    let onDashboard: () -> Void
+    let onWorkbench: () -> Void
+    let onSettings: () -> Void
 
     var body: some View {
         GeometryReader { geo in
             HStack(spacing: 0) {
                 // 左侧：工作区（编辑器 + 对话 + 终端）
                 WorkspacePane(appState: appState)
-                    .frame(width: showWorkbench ? geo.size.width - 360 : geo.size.width)
+                    .frame(width: showRightSidebar ? geo.size.width - 240 : geo.size.width)
 
-                // 右侧：工作台侧栏
-                if showWorkbench {
+                // 右侧：导航栏（首页/工作台/设置入口）
+                if showRightSidebar {
                     Divider()
                         .background(Color.baizeBorder)
-                    WorkbenchSidebar(appState: appState)
-                        .frame(width: 360)
+                    RightSidebar(
+                        appState: appState,
+                        onDashboard: onDashboard,
+                        onWorkbench: onWorkbench,
+                        onSettings: onSettings
+                    )
+                    .frame(width: 240)
                 }
             }
         }
+    }
+}
+
+// MARK: - Right Sidebar (iPad BugFix: 首页/工作台/设置入口)
+
+/// 右侧导航栏 — 240pt 宽，垂直排列三个入口（首页/工作台/设置）
+/// 风格与左侧"项目文件"栏一致：浅色背景、分隔线、图标 + 文字行
+/// 点击入口：收起右侧栏 + 弹对应 sheet（由 ContentView 传入的闭包处理）
+private struct RightSidebar: View {
+    let appState: AppState
+    let onDashboard: () -> Void
+    let onWorkbench: () -> Void
+    let onSettings: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // 标题栏（与左侧"项目文件"风格一致）
+            HStack {
+                Text("导航")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+
+            Divider().background(Color.baizeBorder)
+
+            // 三个入口
+            VStack(spacing: 0) {
+                RightSidebarRow(title: "首页", icon: "square.grid.2x2", action: onDashboard)
+                Divider().background(Color.baizeBorder.opacity(0.5)).padding(.leading, 46)
+                RightSidebarRow(title: "工作台", icon: "sidebar.right", action: onWorkbench)
+                Divider().background(Color.baizeBorder.opacity(0.5)).padding(.leading, 46)
+                RightSidebarRow(title: "设置", icon: "gearshape", action: onSettings)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .frame(width: 240)
+        .background(Color(.systemBackground))
+    }
+}
+
+/// 右侧导航栏行 — 图标 + 文字 + 右箭头，点击有高亮反馈
+private struct RightSidebarRow: View {
+    let title: String
+    let icon: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(.baizeAccent)
+                    .frame(width: 22)
+                Text(title)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.primary)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(Color.secondary.opacity(0.4))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 13)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(RightSidebarRowStyle())
+    }
+}
+
+/// 右侧导航栏行按钮样式 — 按下时高亮背景
+private struct RightSidebarRowStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(configuration.isPressed ? Color.baizeAccent.opacity(0.12) : Color.clear)
     }
 }
 
