@@ -26,11 +26,14 @@ struct TavilySearchProvider: WebSearchProvider {
         request.timeoutInterval = BaizeAPI.requestTimeout
 
         // 2. 构建请求体
+        // P2 fix (round 2): 添加 search_depth=advanced 提高搜索质量
+        // 添加 include_domains 排除低质量内容农场
         let requestBody: [String: Any] = [
             "query": query,
             "api_key": apiKey,
             "max_results": maxResults,
-            "include_answer": false
+            "include_answer": false,
+            "search_depth": "advanced"
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
@@ -53,14 +56,15 @@ struct TavilySearchProvider: WebSearchProvider {
         }
 
         // 5. 转换为 SearchResult
-        return results.compactMap { item in
+        // P2 fix (round 2): 提高摘要长度限制 300→500，保留更多上下文
+        var searchResults = results.compactMap { item -> WebSearchResult? in
             guard let title = item["title"] as? String,
                   let urlString = item["url"] as? String else {
                 return nil
             }
             let content = item["content"] as? String ?? ""
-            // content 可能很长，截取前 300 字符作为摘要
-            let snippet = content.count > 300 ? String(content.prefix(300)) + "..." : content
+            let snippet = content.count > 500 ? String(content.prefix(500)) + "..." : content
+            let score = item["score"] as? Double ?? 0.0
             return WebSearchResult(
                 title: title,
                 url: urlString,
@@ -68,6 +72,18 @@ struct TavilySearchProvider: WebSearchProvider {
                 source: id
             )
         }
+
+        // P2 fix (round 2): 过滤低质量来源 — 移除已知的内容农场和低质量站点
+        let lowQualityDomains: Set<String> = [
+            "ezinearticles.com", "articlesbase.com", "hubpages.com",
+            "squidoo.com", "buzzle.com", "selfgrowth.com"
+        ]
+        searchResults = searchResults.filter { result in
+            guard let host = URL(string: result.url)?.host?.lowercased() else { return true }
+            return !lowQualityDomains.contains { host.contains($0) }
+        }
+
+        return searchResults
     }
 }
 

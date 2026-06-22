@@ -69,6 +69,7 @@ struct SessionListView: View {
             .navigationTitle("历史会话")
             .navigationBarTitleDisplayMode(.inline)
             // T05: 导出格式选择 sheet
+            // P1-#9 fix (round 2): 添加 fallback view 防止 exportSession 为 nil 时 sheet 黑屏
             .sheet(isPresented: $showFormatSelection) {
                 if let session = exportSession {
                     ExportFormatSelectionSheet(
@@ -79,9 +80,19 @@ struct SessionListView: View {
                             showContentModeSelection = true
                         }
                     )
+                } else {
+                    VStack(spacing: 16) {
+                        ProgressView()
+                        Text("正在加载...")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.baizeBackground)
                 }
             }
             // T05: 内容模式选择 sheet
+            // P1-#9 fix (round 2): 添加 fallback view 防止 exportSession 为 nil 时 sheet 黑屏
             .sheet(isPresented: $showContentModeSelection) {
                 if let session = exportSession {
                     ExportContentModeSheet(
@@ -92,12 +103,31 @@ struct SessionListView: View {
                             performExport(session: session, format: selectedFormat, contentMode: mode)
                         }
                     )
+                } else {
+                    VStack(spacing: 16) {
+                        ProgressView()
+                        Text("正在加载...")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.baizeBackground)
                 }
             }
             // T05: ShareSheet — 分享导出的文件
+            // P1-#9 fix (round 2): 添加 fallback view 防止 exportedFileURL 为 nil 时 sheet 黑屏
             .sheet(isPresented: $showShareSheet) {
                 if let url = exportedFileURL {
                     ShareSheet(items: [url])
+                } else {
+                    VStack(spacing: 16) {
+                        ProgressView()
+                        Text("正在准备分享...")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.baizeBackground)
                 }
             }
             // T05: 导出错误提示

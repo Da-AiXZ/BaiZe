@@ -44,9 +44,10 @@ struct AgentTool: Tool {
 
         // 创建子 agent 的 PermissionEngine
         // P0-4 fix: 使用 .default 模式而非 .plan 模式
-        // .plan 模式只允许只读工具，导致子 agent 的 AgentTool/SendMessage/TaskCreate 等写操作被拒
-        // 子 agent 应继承父 agent 的权限策略，使用 .default 模式
+        // B08 fix (round 2): 每次创建全新的独立实例，不共享主会话的 PermissionEngine
+        // 同时注入 toolRegistry 以支持动态工具查询（send_message 等工具需要正确识别）
         let subPermissionEngine = PermissionEngine(mode: .default)
+        await subPermissionEngine.setToolRegistry(toolRegistry)
 
         // 创建子 agent 的 ConversationSession
         let subSession = ConversationSession(projectPath: context.projectPath)
@@ -60,6 +61,8 @@ struct AgentTool: Tool {
         )
 
         // 创建子 AgentLoop（共享 ToolRegistry，独立 session + 独立 PermissionEngine）
+        // B08 fix (round 2): 传递 nil 给 planModeState，子 agent 不继承父 agent 的 PlanMode 状态
+        // 之前传递 context.planModeState 导致子 agent 受到父 agent PlanMode 拦截影响
         // B08 fix: 传递 gitService 到子 agent，确保子 agent 的 execute_command 能拦截 git 命令
         let subLoop = await teamCoordinator.spawnTeammate(
             name: agentName,
@@ -76,7 +79,7 @@ struct AgentTool: Tool {
                     skillRegistry: context.skillRegistry,
                     memoryStore: nil,
                     commandRegistry: nil,
-                    planModeState: context.planModeState,
+                    planModeState: nil,
                     webSearchProvider: context.webSearchProvider,
                     gitService: context.gitService,
                     session: subSession
@@ -98,13 +101,21 @@ struct AgentTool: Tool {
                 case .error(let error):
                     return ToolResult.error(message: "子 agent 执行错误: \(error.localizedDescription)")
                 case .askConfirmation(let toolCall, let reason):
-                    // B08 fix: 子 agent 无法与用户交互，自动确认所有权限请求
+                    // B08 fix (round 2): 子 agent 无法与用户交互，自动确认所有权限请求
                     // 根因：子 agent 的 PermissionEngine 在 .default 模式下，进程工具（execute_command/run_node/run_python）
                     // 返回 .ask 需要用户确认。但 AgentTool 之前忽略了 .askConfirmation 事件，
                     // 导致子 agent 永久挂起等待 confirmToolCall() → 死锁
                     // 修复：收到 .askConfirmation 后自动调用 confirmToolCall(allowed: true)
+                    // B08 fix (round 2): 自动确认所有工具（包括 send_message），不限制工具类型
                     agentLogger.info("SubAgent auto-confirming tool: \(toolCall.name) — \(reason)")
                     await subLoop.confirmToolCall(toolCall: toolCall, allowed: true)
+                case .denied(let toolCall, let reason):
+                    // B08 fix (round 2): 记录被拒绝的工具调用，但不中断子 agent
+                    agentLogger.warning("SubAgent tool denied: \(toolCall.name) — \(reason)")
+                case .toolExecuting, .toolResult, .commandExecuting, .commandOutput:
+                    // B08 fix (round 2): 子 agent 的工具执行过程不写入主对话 messages
+                    // 只收集最终文本结果，子 agent 的中间过程对主对话不可见
+                    break
                 default:
                     break
                 }

@@ -357,11 +357,11 @@ actor AgentLoop {
                     switch decision.effect {
                     case .allow:
                         // R1: PlanMode 拦截写操作 — 计划模式下禁止非只读工具
-                        // P0-4 fix: bypass 模式跳过 PlanMode 拦截
+                        // B05 fix (round 2): PlanMode 写操作拦截是独立的安全约束，任何权限模式（包括 bypass）都不能跳过
+                        // 之前的 `currentMode != .bypass` 条件导致 bypass 模式能绕过 PlanMode 只读限制，这是设计错误
                         if let planMode = planModeState {
-                            let currentMode = await permissionEngine.getMode()
                             let isInPlan = await planMode.isInPlanMode()
-                            if isInPlan && currentMode != .bypass && !isToolReadOnly(name: name) {
+                            if isInPlan && !isToolReadOnly(name: name) {
                                 let deniedResult = ToolResult.denied(reason: "计划模式下禁止写操作: \(name)")
                                 continuation.yield(.denied(toolCall, "计划模式下禁止写操作"))
                                 session.messages.append(.toolResult(id: id, content: deniedResult.toToolResultContent()))
@@ -434,10 +434,10 @@ actor AgentLoop {
                         if allowed {
                             // B05 fix: PlanMode 拦截写操作 — 计划模式下即使用户同意也不执行写操作
                             // 之前只在 .allow 路径有此检查，.ask 路径缺失导致用户同意后可绕过计划模式只读限制
+                            // B05 fix (round 2): 移除 currentMode != .bypass 条件，PlanMode 拦截不应被任何模式跳过
                             if let planMode = planModeState {
-                                let currentMode = await permissionEngine.getMode()
                                 let isInPlan = await planMode.isInPlanMode()
-                                if isInPlan && currentMode != .bypass && !isToolReadOnly(name: name) {
+                                if isInPlan && !isToolReadOnly(name: name) {
                                     let deniedResult = ToolResult.denied(reason: "计划模式下禁止写操作: \(name)")
                                     continuation.yield(.denied(toolCall, "计划模式下禁止写操作"))
                                     session.messages.append(.toolResult(id: id, content: deniedResult.toToolResultContent()))

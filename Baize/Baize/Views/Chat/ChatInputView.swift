@@ -65,11 +65,11 @@ struct ChatInputView: View {
         .onChange(of: text) { newValue in
             detectCommandOrSkill(newValue)
         }
-        // R1: 命令补全建议 — P1-#20 fix: 支持部分匹配，显示多个建议
+        // R1: 命令补全建议 — P1-#20 fix (round 2): 使用 zIndex 叠加在输入框上方，不挤压布局
         .overlay(alignment: .top) {
             if !commandSuggestions.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {
-                    ForEach(commandSuggestions, id: \.self) { suggestion in
+                    ForEach(commandSuggestions.prefix(6), id: \.self) { suggestion in
                         Button(action: {
                             // 点击建议自动补全命令名
                             let parts = text.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
@@ -87,19 +87,22 @@ struct ChatInputView: View {
                                 Spacer()
                             }
                             .padding(.horizontal, 12)
-                            .padding(.vertical, 4)
+                            .padding(.vertical, 6)
                             .background(Color.baizeAccent.opacity(0.08))
                             .cornerRadius(6)
                         }
                         .buttonStyle(.plain)
                     }
                 }
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(Color.baizeCardBackground)
-                .cornerRadius(8)
-                .padding(.horizontal, 12)
-                .offset(y: -8)
+                .cornerRadius(10)
+                .shadow(radius: 4)
+                .padding(.horizontal, 4)
+                // P1-#20 fix (round 2): 固定在输入框上方，使用 zIndex 确保不被遮挡
+                .offset(y: -4)
+                .zIndex(100)
                 .transition(.opacity)
             }
         }
@@ -154,17 +157,28 @@ struct ChatInputView: View {
 
         guard !trimmed.isEmpty, let state = appState else { return }
 
-        // 1. 检测 slash 命令 — P1-#20 fix: 使用 searchCommands 支持部分匹配
+        // 1. 检测 slash 命令 — P1-#20 fix (round 2): 输入 / 立即显示所有命令
         if trimmed.hasPrefix("/") {
             Task { @MainActor in
                 if let registry = state.commandRegistry {
                     // 提取命令名（不含 / 前缀，不含参数）
                     let withoutSlash = String(trimmed.dropFirst())
                     let cmdName = withoutSlash.split(separator: " ").first.map(String.init) ?? withoutSlash
-                    // 如果输入只有 / 或命令名后有空格（已输入完命令名），不显示建议
-                    if !cmdName.isEmpty && !withoutSlash.contains(" ") {
-                        let matches = await registry.searchCommands(prefix: cmdName)
-                        commandSuggestions = matches.map { $0.name }
+                    // P1-#20 fix (round 2): 输入只有 / 时显示所有可用命令
+                    // 之前 cmdName.isEmpty 时不显示建议，导致输入 / 无反应
+                    if !withoutSlash.contains(" ") {
+                        if cmdName.isEmpty {
+                            // 输入只有 / — 显示所有命令
+                            let matches = await registry.searchCommands(prefix: "")
+                            commandSuggestions = matches.map { $0.name }
+                        } else {
+                            // 输入 / + 部分命令名 — 显示匹配的命令
+                            let matches = await registry.searchCommands(prefix: cmdName)
+                            commandSuggestions = matches.map { $0.name }
+                        }
+                    } else {
+                        // 命令名后有空格（已输入完命令名）— 不显示建议
+                        commandSuggestions = []
                     }
                 }
             }
@@ -269,6 +283,11 @@ struct AutoResizingTextEditor: UIViewRepresentable {
                 textView.textColor = .label
             }
         }
+
+        // B14 fix (round 2): 确保文本容器宽度在视图更新时同步
+        // 之前只在 makeUIView 中设置 textContainer.size，但此时 textView.bounds.width 为 0
+        // 导致文本水平延伸而不换行
+        textView.textContainer.size = CGSize(width: textView.bounds.width, height: .greatestFiniteMagnitude)
 
         // 焦点管理
         if isFocused && !textView.isFirstResponder && isEditable {

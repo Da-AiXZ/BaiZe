@@ -57,7 +57,8 @@ struct WebSearchTool: Tool {
             }.joined(separator: "\n\n")
 
             // P2-#21 fix: 添加搜索结果使用提示，提醒 AI 基于实际搜索结果回答而非臆测
-            let qualityHint = "\n\n⚠️ 请基于以上搜索结果的实际内容回答用户问题。不要编造或臆测搜索结果中未提及的信息。如果搜索结果不足以回答问题，请如实告知用户。"
+            // P2 fix (round 2): 添加时间提示，让 AI 关注最新信息
+            let qualityHint = "\n\n⚠️ 请基于以上搜索结果的实际内容回答用户问题。不要编造或臆测搜索结果中未提及的信息。如果搜索结果不足以回答问题，请如实告知用户。注意关注结果的发布时间，优先使用最新的信息。"
 
             return ToolResult.success(
                 output: "搜索「\(query)」找到 \(results.count) 条结果（来源: \(provider.displayName)）:\n\n\(formattedResults)\(qualityHint)",

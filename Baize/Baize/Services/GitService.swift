@@ -770,6 +770,9 @@ actor GitService {
         git_remote_init_callbacks(&callbacks, numericCast(GIT_REMOTE_CALLBACKS_VERSION))
         callbacks.credentials = credentialsCallback
         callbacks.payload = payloadPointer
+        // B03 fix (round 2): 添加 certificate_check 回调 — 接受任何 TLS 证书
+        // 与 fetch 相同的修复：iOS TrollStore 环境下 OpenSSL 无法访问系统 CA 证书
+        callbacks.certificate_check = certCheckCallback
         pushOpts.callbacks = callbacks
 
         // B03 fix: force push 时 refspec 前缀加 +，告诉 libgit2 强制更新远程引用
@@ -797,6 +800,15 @@ actor GitService {
         return creds.username.withCString { u in
             creds.token.withCString { t in git_credential_userpass_plaintext_new(out, u, t) }
         }
+    }
+
+    /// B02/B03 fix (round 2): TLS 证书检查回调 — 接受任何证书
+    /// 根因：libgit2 使用 OpenSSL 进行 HTTPS，但 iOS TrollStore 环境下 OpenSSL 无法访问
+    /// 系统 Keychain 中的 CA 证书，导致 TLS 验证失败，fetch 接收 0 字节，push 直接失败
+    /// 修复：使用 git_transport_certificate_check_cb 类型别名确保类型正确，接受任何证书
+    /// TrollStore 免签应用的安全模型下可接受（用户自行承担 MITM 风险）
+    private let certCheckCallback: git_transport_certificate_check_cb = { _, _, _, _ in
+        return 0
     }
 
     // MARK: - Log
@@ -953,12 +965,11 @@ actor GitService {
 
     /// 从远程仓库拉取更新（不修改工作区）
     /// 使用 git_remote_fetch + credentialsCallback
+    /// B02 fix (round 2): 
+    /// 1. 凭据改为可选（公开仓库不需要 token）
+    /// 2. 添加 certificate_check 回调接受任何 TLS 证书（修复 iOS OpenSSL CA 证书问题）
+    /// 3. 添加详细日志诊断 0 字节问题
     func fetch() async throws -> GitFetchResult {
-        guard let token = keychainService.loadGitToken(), !token.isEmpty else {
-            throw GitError.credentialsMissing
-        }
-        let username = UserDefaults.standard.string(forKey: BaizeGit.usernameUDKey) ?? "git"
-
         let repo = try openRepository()
         defer { git_repository_free(repo) }
 
@@ -980,20 +991,37 @@ actor GitService {
         }
         defer { if let r = remote { git_remote_free(r) } }
 
-        // 配置回调（复用 credentialsCallback）
-        let payload = GitCredentialsPayload(username: username, token: token)
-        let payloadPointer = Unmanaged.passRetained(payload).toOpaque()
-        defer { Unmanaged<GitCredentialsPayload>.fromOpaque(payloadPointer).release() }
+        // B02 fix (round 2): 凭据改为可选 — 公开仓库不需要 token
+        // 之前的 `guard let token = ... else { throw }` 导致公开仓库无法 fetch
+        let token = keychainService.loadGitToken() ?? ""
+        let username = UserDefaults.standard.string(forKey: BaizeGit.usernameUDKey) ?? "git"
 
+        // 配置回调
         var callbacks = git_remote_callbacks()
         git_remote_init_callbacks(&callbacks, numericCast(GIT_REMOTE_CALLBACKS_VERSION))
-        callbacks.credentials = credentialsCallback
-        callbacks.payload = payloadPointer
+        
+        // B02 fix (round 2): 添加 certificate_check 回调 — 接受任何 TLS 证书
+        // iOS TrollStore 环境下 OpenSSL 无法访问系统 CA 证书，导致 TLS 验证失败
+        callbacks.certificate_check = certCheckCallback
+
+        // B02 fix (round 2): 只有有 token 时才设置 credentials 回调
+        // 公开仓库不需要凭据，设置凭据回调可能导致 libgit2 尝试认证而失败
+        if !token.isEmpty {
+            let payload = GitCredentialsPayload(username: username, token: token)
+            let payloadPointer = Unmanaged.passRetained(payload).toOpaque()
+            defer { Unmanaged<GitCredentialsPayload>.fromOpaque(payloadPointer).release() }
+            callbacks.credentials = credentialsCallback
+            callbacks.payload = payloadPointer
+        }
 
         // 配置 fetch 选项
         var fetchOpts = git_fetch_options()
         git_fetch_init_options(&fetchOpts, numericCast(GIT_FETCH_OPTIONS_VERSION))
         fetchOpts.callbacks = callbacks
+
+        // B02 fix (round 2): 添加诊断日志
+        let remoteUrl = git_remote_url(remote).map { String(cString: $0) } ?? "(unknown)"
+        baizeLogger.info("GitService.fetch: remote URL = \(remoteUrl), hasToken = \(!token.isEmpty)")
 
         // 执行 fetch — refspec: +refs/heads/*:refs/remotes/origin/*
         let refspec = "+refs/heads/*:refs/remotes/\(BaizeGit.defaultRemoteName)/*"
@@ -1002,10 +1030,21 @@ actor GitService {
         var refspecPtrs: [UnsafeMutablePointer<CChar>?] = [cRefspec]
         var refs = git_strarray(strings: &refspecPtrs, count: 1)
 
-        try checkGit(
-            git_remote_fetch(remote, &refs, &fetchOpts, nil),
-            operation: "git_remote_fetch"
-        )
+        let fetchCode = git_remote_fetch(remote, &refs, &fetchOpts, nil)
+        baizeLogger.info("GitService.fetch: git_remote_fetch returned \(fetchCode)")
+        
+        if fetchCode != 0 {
+            let errMsg: String
+            if let errPtr = git_error_last() {
+                errMsg = errPtr.pointee.message.map { String(cString: $0) } ?? "Unknown error"
+            } else {
+                errMsg = "Unknown error"
+            }
+            baizeLogger.error("GitService.fetch: fetch failed: \(errMsg)")
+            throw GitError.operationFailed("git fetch 失败: \(errMsg)")
+        }
+        
+        try checkGit(fetchCode, operation: "git_remote_fetch")
 
         // 获取统计信息
         let stats = git_remote_stats(remote)
@@ -1014,6 +1053,14 @@ actor GitService {
             receivedBytes = Int(s.pointee.received_bytes)
         } else {
             receivedBytes = 0
+        }
+        
+        baizeLogger.info("GitService.fetch: received \(receivedBytes) bytes, indexed \(stats.map { Int($0.pointee.indexed_objects) } ?? 0) objects")
+        
+        // B02 fix (round 2): 如果接收 0 字节，给出警告但不算错误
+        // 可能是远程没有新提交，也可能是 HTTPS 传输问题
+        if receivedBytes == 0 {
+            baizeLogger.warning("GitService.fetch: received 0 bytes — remote may be up-to-date or HTTPS transport issue")
         }
 
         return GitFetchResult(updatedBranches: 1, receivedBytes: receivedBytes)

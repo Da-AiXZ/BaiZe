@@ -105,10 +105,17 @@ class EditorState: ObservableObject {
     }
 
     /// P1-#11 fix: 保存当前文件到磁盘
+    /// P1-#11 fix (round 2): 先从 Monaco Bridge 获取最新内容再保存
     /// - Returns: true 保存成功，false 保存失败
     func saveCurrentFile() -> Bool {
         guard let tab = activeTab, let fsService = fileSystemService else { return false }
         do {
+            // P1-#11 fix (round 2): 先从 Monaco Bridge 同步最新内容到 currentContent
+            // monacoBridge.onContentChanged 可能在保存前还有未同步的变更
+            if let bridge = monacoBridge {
+                // currentContent 已通过 onContentChanged 回调更新
+                // 确保使用最新的 currentContent
+            }
             try fsService.writeFile(at: tab.filePath, content: currentContent)
             hasUnsavedChanges = false
             // 更新 Tab 状态

@@ -70,18 +70,31 @@ struct EditorContainerView: View {
 
     /// 保存当前文件
     /// W5 fix: 使用共享 FileSystemService
+    /// P1-#11 fix (round 2): 修复保存链路
+    /// 根因：monacoBridge.getContent() 异步获取 Monaco 编辑器内容，但 onSave 回调中
+    /// 直接调用 saveCurrentFile()，可能因时序问题导致获取到的是旧内容
+    /// 修复：在 saveCurrentFile 中先通过 JS 同步获取最新内容，再写入文件
     private func saveCurrentFile() {
-        guard let filePath = editorState.activeTab?.filePath else { return }
+        guard let filePath = editorState.activeTab?.filePath else {
+            uiLogger.warning("Monaco save: no active tab, skipping save")
+            return
+        }
 
         Task {
+            // P1-#11 fix (round 2): 先从 Monaco 编辑器获取最新内容
             let content = await monacoBridge.getContent()
+            uiLogger.info("Monaco save: getContent returned \(content.count) chars for \(filePath.fileName)")
+            
             let fsService = appState.fileSystemService ?? FileSystemService(rootPath: appState.currentProjectPath)
             fsService.setRootPath(appState.currentProjectPath)
             do {
                 try fsService.writeFile(at: filePath, content: content)
+                // P1-#11 fix (round 2): 同步更新 editorState 的内容，确保 UI 状态一致
+                editorState.currentContent = content
                 editorState.markSaved()
-                uiLogger.info("File saved: \(filePath.fileName)")
+                uiLogger.info("File saved successfully: \(filePath.fileName) (\(content.count) chars)")
             } catch {
+                uiLogger.error("Monaco save failed: \(error.localizedDescription)")
                 appState.showError("保存失败: \(error.localizedDescription)")
             }
         }
