@@ -193,6 +193,9 @@ class ToolExecutionContext: @unchecked Sendable {
     /// R2 新增：共享 ToolRegistry — 供 AgentTool 创建子 agent 时传递
     let toolRegistry: ToolRegistry?
 
+    /// R3 新增：GitService — 供 ExecuteCommandTool 拦截 git 命令转给 libgit2
+    let gitService: GitService?
+
     /// 工作目录（可区别于 projectPath，多子项目场景使用）
     /// A7 决策：当前 projectPath 即工作目录，此属性预留扩展
     let workingDirectory: String?
@@ -214,7 +217,8 @@ class ToolExecutionContext: @unchecked Sendable {
         workingDirectory: String? = nil,
         teamCoordinator: TeamCoordinator? = nil,
         mcpManager: MCPManager? = nil,
-        toolRegistry: ToolRegistry? = nil
+        toolRegistry: ToolRegistry? = nil,
+        gitService: GitService? = nil
     ) {
         self.projectPath = projectPath
         self.fileSystemService = fileSystemService
@@ -231,6 +235,7 @@ class ToolExecutionContext: @unchecked Sendable {
         self.teamCoordinator = teamCoordinator
         self.mcpManager = mcpManager
         self.toolRegistry = toolRegistry
+        self.gitService = gitService
     }
 
     // MARK: - Convenience Paths

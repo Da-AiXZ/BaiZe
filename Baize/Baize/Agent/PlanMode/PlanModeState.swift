@@ -86,6 +86,7 @@ actor PlanModeState {
 
     /// 用户批准计划
     /// 从 awaitingApproval 转为 approved，恢复 continuation
+    /// P0-3 fix: 审批完成后自动回到 idle，允许再次进入计划模式
     func approve() {
         guard phase == .awaitingApproval else {
             planModeLogger.warning("PlanModeState: cannot approve from phase \(String(describing: self.phase), privacy: .public)")
@@ -95,11 +96,16 @@ actor PlanModeState {
         planModeLogger.info("PlanModeState: plan approved")
         approvalContinuation?.resume(returning: true)
         approvalContinuation = nil
+        // P0-3 fix: 审批完成后自动回到 idle，允许再次 enter()
+        phase = .idle
+        plan = nil
+        rejectionReason = nil
     }
 
     /// 用户拒绝计划
     /// 从 awaitingApproval 转为 rejected，恢复 continuation
     /// - Parameter reason: 拒绝原因
+    /// P0-3 fix: 拒绝后自动回到 idle，允许再次进入计划模式
     func reject(reason: String) {
         guard phase == .awaitingApproval else {
             planModeLogger.warning("PlanModeState: cannot reject from phase \(String(describing: self.phase), privacy: .public)")
@@ -110,6 +116,10 @@ actor PlanModeState {
         planModeLogger.info("PlanModeState: plan rejected — \(reason)")
         approvalContinuation?.resume(returning: false)
         approvalContinuation = nil
+        // P0-3 fix: 拒绝后自动回到 idle，允许再次 enter()
+        phase = .idle
+        plan = nil
+        rejectionReason = nil
     }
 
     /// 重置到 idle 状态（审批完成后调用）

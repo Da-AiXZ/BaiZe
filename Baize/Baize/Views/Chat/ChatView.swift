@@ -278,6 +278,7 @@ struct ChatView: View {
                 taskList: appState.taskList,
                 teamCoordinator: appState.teamCoordinator,
                 mcpManager: appState.mcpManager,
+                gitService: appState.gitService,
                 session: session
             )
             self.agentLoop = loop
@@ -372,10 +373,12 @@ struct ChatView: View {
             ))
 
         case .toolExecuting(let toolCall):
-            updateToolCallStatus(id: toolCall.id, status: .executing)
+            // P0-5 fix: 传入完整 toolCall（含完整参数），更新 UI 中之前为空的参数
+            updateToolCallStatus(id: toolCall.id, status: .executing, toolCall: toolCall)
 
         case .toolResult(let toolCall, let result):
-            updateToolCallStatus(id: toolCall.id, status: .completed, result: result)
+            // P0-5 fix: 传入完整 toolCall（含完整参数），更新 UI 中之前为空的参数
+            updateToolCallStatus(id: toolCall.id, status: .completed, result: result, toolCall: toolCall)
             // Agent 工具执行后刷新编辑器（如果修改了文件）
             if toolCall.name == "write_file" || toolCall.name == "edit_file" {
                 let path = toolCall.argumentString(for: "path") ?? ""
@@ -386,7 +389,8 @@ struct ChatView: View {
             }
 
         case .denied(let toolCall, let reason):
-            updateToolCallStatus(id: toolCall.id, status: .denied, denialReason: reason)
+            // P0-5 fix: 传入完整 toolCall（含完整参数）
+            updateToolCallStatus(id: toolCall.id, status: .denied, denialReason: reason, toolCall: toolCall)
 
         case .askConfirmation(let toolCall, let reason):
             pendingConfirmation = PendingConfirmation(toolCall: toolCall, reason: reason)
@@ -589,13 +593,20 @@ struct ChatView: View {
         id: String,
         status: ToolCallView.ToolCallStatus,
         result: ToolResult? = nil,
-        denialReason: String? = nil
+        denialReason: String? = nil,
+        toolCall: ToolCall? = nil
     ) {
         for index in displayMessages.indices {
             if displayMessages[index].toolCall?.id == id {
                 displayMessages[index].toolStatus = status
                 displayMessages[index].toolResult = result
                 displayMessages[index].denialReason = denialReason
+                // P0-5 fix: 更新 toolCall 以获取完整参数
+                // 初始 .toolCall 事件携带的 ToolCall 参数为空（arguments 尚未流式接收完成）
+                // .toolExecuting / .toolResult 事件携带的 ToolCall 参数完整
+                if let tc = toolCall {
+                    displayMessages[index].toolCall = tc
+                }
             }
         }
     }
@@ -691,10 +702,11 @@ struct ChatView: View {
             planModeState: appState.planModeState,
             webSearchProvider: appState.webSearchProvider,
             taskList: appState.taskList,
-            teamCoordinator: appState.teamCoordinator,
-            mcpManager: appState.mcpManager,
-            session: restored
-        )
+                teamCoordinator: appState.teamCoordinator,
+                mcpManager: appState.mcpManager,
+                gitService: appState.gitService,
+                session: restored
+            )
         let window = resolveContextWindow()
         await loop.updateContextWindow(window)
 
@@ -769,6 +781,7 @@ struct ChatView: View {
                 taskList: appState.taskList,
                 teamCoordinator: appState.teamCoordinator,
                 mcpManager: appState.mcpManager,
+                gitService: appState.gitService,
                 session: session
             )
             await loop.updateContextWindow(resolveContextWindow())

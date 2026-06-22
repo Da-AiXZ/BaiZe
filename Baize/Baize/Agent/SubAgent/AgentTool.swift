@@ -42,8 +42,11 @@ struct AgentTool: Tool {
             return ToolResult.error(message: "API 网关或工具注册表未初始化")
         }
 
-        // 创建子 agent 的 PermissionEngine（.plan 模式 — 仅只读工具）
-        let subPermissionEngine = PermissionEngine(mode: .plan)
+        // 创建子 agent 的 PermissionEngine
+        // P0-4 fix: 使用 .default 模式而非 .plan 模式
+        // .plan 模式只允许只读工具，导致子 agent 的 AgentTool/SendMessage/TaskCreate 等写操作被拒
+        // 子 agent 应继承父 agent 的权限策略，使用 .default 模式
+        let subPermissionEngine = PermissionEngine(mode: .default)
 
         // 创建子 agent 的 ConversationSession
         let subSession = ConversationSession(projectPath: context.projectPath)

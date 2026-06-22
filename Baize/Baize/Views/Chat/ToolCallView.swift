@@ -29,7 +29,8 @@ struct ToolCallView: View {
             }
 
             // 参数详情
-            ArgumentsPreview(arguments: toolCall.parsedArguments())
+            // P0-5 fix: 传入原始参数字符串作为回退，parsedArguments 为空时显示原始 JSON
+            ArgumentsPreview(arguments: toolCall.parsedArguments(), rawArguments: toolCall.arguments)
 
             // 执行结果（展开显示）
             if let result = result {
@@ -163,8 +164,10 @@ struct ToolCallView: View {
 // MARK: - Arguments Preview
 
 /// 工具参数预览
+/// P0-5 fix: 当 parsedArguments 为空时（参数尚未解析完成），显示原始 JSON 字符串
 private struct ArgumentsPreview: View {
     let arguments: [String: Any]
+    let rawArguments: String
 
     var body: some View {
         if !arguments.isEmpty {
@@ -174,11 +177,22 @@ private struct ArgumentsPreview: View {
                         Text(key + ":")
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundColor(.secondary)
-                        Text(String(describing: arguments[key]!).truncated(to: 80))
+                        Text(String(describing: arguments[key]!).truncated(to: 200))
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundColor(.primary.opacity(0.7))
                     }
                 }
+            }
+            .padding(.horizontal, 4)
+        } else if !rawArguments.isEmpty && rawArguments != "{}" {
+            // P0-5 fix: parsedArguments 为空时显示原始 JSON 参数
+            VStack(alignment: .leading, spacing: 3) {
+                Text("参数:")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.secondary)
+                Text(rawArguments.truncated(to: 200))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.primary.opacity(0.7))
             }
             .padding(.horizontal, 4)
         }
@@ -188,6 +202,7 @@ private struct ArgumentsPreview: View {
 // MARK: - Result Preview
 
 /// 工具执行结果预览
+/// P0-5 fix: 增大截断阈值（300→2000），添加 ScrollView 支持完整内容查看
 private struct ResultPreview: View {
     let result: ToolResult
 
@@ -198,10 +213,14 @@ private struct ResultPreview: View {
             Text(result.isError ? "⚠️ 错误输出:" : "✅ 输出:")
                 .font(.system(size: 12, weight: .medium))
 
-            Text(result.output.truncated(to: 300))
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(.primary.opacity(0.7))
-                .lineLimit(8)
+            // P0-5 fix: 使用 ScrollView 显示更多内容（最多 2000 字符），避免截断太激进
+            ScrollView(.vertical, showsIndicators: true) {
+                Text(result.output.truncated(to: 2000))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.primary.opacity(0.7))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 200)
         }
     }
 }

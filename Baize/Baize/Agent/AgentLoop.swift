@@ -31,6 +31,9 @@ actor AgentLoop {
     private let teamCoordinator: TeamCoordinator?
     private let mcpManager: MCPManager?
 
+    /// R3 新增：GitService — 供 ExecuteCommandTool 拦截 git 命令转给 libgit2
+    private let gitService: GitService?
+
     // MARK: - State
 
     /// 当前对话会话
@@ -66,6 +69,7 @@ actor AgentLoop {
         taskList: TaskList? = nil,
         teamCoordinator: TeamCoordinator? = nil,
         mcpManager: MCPManager? = nil,
+        gitService: GitService? = nil,
         session: ConversationSession = ConversationSession()
     ) {
         self.apiGateway = apiGateway
@@ -83,6 +87,7 @@ actor AgentLoop {
         self.taskList = taskList
         self.teamCoordinator = teamCoordinator
         self.mcpManager = mcpManager
+        self.gitService = gitService
         self.session = session
     }
 
@@ -339,7 +344,8 @@ actor AgentLoop {
                         commandRegistry: commandRegistry,
                         teamCoordinator: teamCoordinator,
                         mcpManager: mcpManager,
-                        toolRegistry: toolRegistry
+                        toolRegistry: toolRegistry,
+                        gitService: gitService
                     )
 
                     // W4 fix: PermissionEngine 改为 actor，evaluate 需要 await
@@ -351,9 +357,11 @@ actor AgentLoop {
                     switch decision.effect {
                     case .allow:
                         // R1: PlanMode 拦截写操作 — 计划模式下禁止非只读工具
+                        // P0-4 fix: bypass 模式跳过 PlanMode 拦截
                         if let planMode = planModeState {
+                            let currentMode = await permissionEngine.getMode()
                             let isInPlan = await planMode.isInPlanMode()
-                            if isInPlan && !isToolReadOnly(name: name) {
+                            if isInPlan && currentMode != .bypass && !isToolReadOnly(name: name) {
                                 let deniedResult = ToolResult.denied(reason: "计划模式下禁止写操作: \(name)")
                                 continuation.yield(.denied(toolCall, "计划模式下禁止写操作"))
                                 session.messages.append(.toolResult(id: id, content: deniedResult.toToolResultContent()))
@@ -361,6 +369,13 @@ actor AgentLoop {
                                 userDeniedTool = true
                                 break
                             }
+                        }
+
+                        // P0-3 fix: 在执行 exit_plan_mode 工具之前，先发射 .planApprovalRequested 事件
+                        // 这样 UI 能收到事件弹出 PlanApprovalView sheet，用户审批后 continuation 恢复
+                        if name == "exit_plan_mode" {
+                            let plan = toolCall.argumentString(for: "plan") ?? ""
+                            continuation.yield(.planApprovalRequested(plan: plan))
                         }
 
                         // 执行工具
@@ -418,6 +433,12 @@ actor AgentLoop {
                         }
                         if allowed {
                             // 用户允许 — 执行工具（与 .allow 路径一致）
+                            // P0-3 fix: 在执行 exit_plan_mode 工具之前，先发射 .planApprovalRequested 事件
+                            if name == "exit_plan_mode" {
+                                let plan = toolCall.argumentString(for: "plan") ?? ""
+                                continuation.yield(.planApprovalRequested(plan: plan))
+                            }
+
                             continuation.yield(.toolExecuting(toolCall))
 
                             // 终端事件：execute_command 命令开始执行

@@ -162,10 +162,79 @@ extension URL {
 
 extension FileManager {
     /// 确保目录存在，不存在则创建
+    /// P0-1 fix: TrollStore 环境下 FileManager.createDirectory 可能因沙盒残留限制失败
+    /// 先尝试 FileManager 创建，失败后回退到 posix_spawn 执行 mkdir -p
     func ensureDirectoryExists(atPath path: String) throws {
         if !fileExists(atPath: path) {
-            try createDirectory(atPath: path, withIntermediateDirectories: true)
+            // 尝试 FileManager 创建
+            do {
+                try createDirectory(atPath: path, withIntermediateDirectories: true)
+            } catch {
+                // P0-1 fix: FileManager 失败时回退到 posix_spawn 执行 mkdir -p
+                baizeLogger.warning("FileManager.createDirectory failed for \(path): \(error.localizedDescription), trying posix_spawn fallback")
+                try createDirectoryWithPosixSpawn(atPath: path)
+            }
         }
+    }
+
+    /// P0-1 fix: 使用 posix_spawn 执行 mkdir -p 创建目录（TrollStore 回退方案）
+    /// TrollStore + no-sandbox 环境下，posix_spawn 创建的子进程可能绕过 FileManager 的沙盒限制
+    private func createDirectoryWithPosixSpawn(atPath path: String) throws {
+        // 尝试多个 mkdir 路径（iOS 上可能在 /bin/ 或 /usr/bin/）
+        let mkdirPaths = ["/bin/mkdir", "/usr/bin/mkdir"]
+
+        var spawnSuccess = false
+        var lastError: String = ""
+
+        for mkdirPath in mkdirPaths {
+            guard fileExists(atPath: mkdirPath) else { continue }
+
+            let argv: [UnsafeMutablePointer<CChar>?] = [
+                strdup("mkdir"),
+                strdup("-p"),
+                strdup(path),
+                nil
+            ]
+            defer {
+                for ptr in argv { if let p = ptr { free(p) } }
+            }
+
+            var pid: pid_t = 0
+            let spawnResult = posix_spawn(&pid, mkdirPath, nil, nil, argv, nil)
+
+            if spawnResult != 0 {
+                lastError = "posix_spawn failed (errno=\(spawnResult))"
+                continue
+            }
+
+            // 等待子进程完成
+            var status: Int32 = 0
+            waitpid(pid, &status, 0)
+
+            if status == 0 {
+                spawnSuccess = true
+                break
+            } else {
+                lastError = "mkdir -p exited with status \(status)"
+                continue
+            }
+        }
+
+        if !spawnSuccess {
+            // posix_spawn 也失败了 — 如果没有找到 mkdir 二进制，尝试 ios_system
+            // 作为最后的手段，直接抛出包含诊断信息的错误
+            throw BaizeError.fileSystemError(
+                "无法创建目录 \(path): \(lastError)。" +
+                "TrollStore 环境下可能需要手动创建目录或检查 entitlements 配置。"
+            )
+        }
+
+        // 验证目录是否创建成功
+        if !fileExists(atPath: path) {
+            throw BaizeError.fileSystemError("mkdir -p 执行成功但目录仍不存在: \(path)")
+        }
+
+        baizeLogger.info("Directory created via posix_spawn: \(path)")
     }
 
     /// 获取文件大小（字节）
