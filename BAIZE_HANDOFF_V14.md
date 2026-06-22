@@ -105,8 +105,12 @@
 
 > **⚠️ 每修完一个 Bug，立即更新此表 + commit + push，防止积分耗尽中断**
 
-### 已修（0/25）
-*暂无*
+### 已修（5/25）— commit 5d63d75, CI #127 ✅
+- ✅ P0-1 Bug #7 创建项目权限：ensureDirectoryExists 添加 posix_spawn mkdir -p 回退
+- ✅ P0-2 Bug #5-6 Git沙箱：ExecuteCommandTool 拦截 git 命令转给 GitService(libgit2)
+- ✅ P0-3 Bug #15-17 PlanMode：执行 exit_plan_mode 前发射 .planApprovalRequested + approve/reject 后 reset idle
+- ✅ P0-4 Bug #24 子agent权限：AgentTool .plan→.default + bypass 跳过 PlanMode 拦截
+- ✅ P0-5 Bug #3 工具参数显示：updateToolCallStatus 更新 toolCall + 原始 JSON 回退 + 截断 300→2000
 
 ### 正在修
 *暂无（刚写完交接文档，准备开始 P0）*
