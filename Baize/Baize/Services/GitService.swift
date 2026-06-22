@@ -1921,7 +1921,7 @@ actor GitService {
         defer { git_repository_free(repo) }
 
         // 解析目标 commit
-        let targetOid: git_oid
+        var targetOid: git_oid
         if let oid = oid, !oid.isEmpty, oid != "HEAD" {
             targetOid = git_oid()
             try checkGit(
@@ -1999,12 +1999,15 @@ actor GitService {
                 )
             }
         } else {
-            // 初始 commit — diff empty tree vs commit tree
-            var diffOpts = git_diff_options()
-            git_diff_init_options(&diffOpts, numericCast(GIT_DIFF_OPTIONS_VERSION))
-            try checkGit(
-                git_diff_tree_to_tree(&diff, repo, nil, treeHandle, &diffOpts),
-                operation: "git_diff_tree_to_tree (initial commit show)"
+            // 初始 commit — 无 parent tree，无法用 git_diff_tree_to_tree(diff vs nil)
+            // 返回 commit 信息但不包含 diff patch
+            return GitShowResult(
+                oid: oidHex,
+                author: authorName,
+                email: authorEmail,
+                date: Date(timeIntervalSince1970: TimeInterval(commitTime)),
+                message: message,
+                patch: "(初始提交，无父提交可对比)"
             )
         }
 

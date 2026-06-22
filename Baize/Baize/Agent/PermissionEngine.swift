@@ -68,7 +68,8 @@ actor PermissionEngine {
     func grantSessionApproval(forTool toolName: String, operation: String? = nil) {
         let key = sessionApprovalKey(toolName: toolName, operation: operation)
         sessionApprovals.insert(key)
-        baizeLogger.info("Session approval granted for: \(key) (total: \(sessionApprovals.count))")
+        let totalCount = sessionApprovals.count
+        baizeLogger.info("Session approval granted for: \(key) (total: \(totalCount))")
     }
 
     /// 检查是否有会话级授权
