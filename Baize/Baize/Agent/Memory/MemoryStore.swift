@@ -3,9 +3,9 @@ import Foundation
 /// 记忆存储 — 会话记忆的持久化和检索
 ///
 /// 存储格式：JSONL（每行一条 JSON），按 scope 分文件存储
-/// - user scope → BaizePath.userMemoryDir/memories.jsonl
-/// - project scope → BaizePath.projectMemoryDir/memories.jsonl
-/// - team scope → BaizePath.teamMemoryDir/memories.jsonl
+/// - user scope → {baseDir}/user/memories.jsonl
+/// - project scope → {baseDir}/project/memories.jsonl
+/// - team scope → {baseDir}/team/memories.jsonl
 ///
 /// T05 改造：
 /// - 所有写操作通过 PlatformFileSystem 执行，失败时抛错（不再静默吞掉）
@@ -187,14 +187,11 @@ actor MemoryStore {
     }
 
     /// 获取指定 scope 的记忆文件路径
+    /// 路径基于初始化时传入的 `baseDir`，不再硬编码 `BaizePath.memoryDir`，
+    /// 以便单元测试使用临时目录隔离。
     private func memoryFilePath(scope: MemoryScope) -> String {
-        let dir: String
-        switch scope {
-        case .user: dir = BaizePath.userMemoryDir
-        case .project: dir = BaizePath.projectMemoryDir
-        case .team: dir = BaizePath.teamMemoryDir
-        }
-        return (dir as NSString).appendingPathComponent("memories.jsonl")
+        let scopeDir = (baseDir as NSString).appendingPathComponent(scope.rawValue)
+        return (scopeDir as NSString).appendingPathComponent("memories.jsonl")
     }
 
     /// 编码 Memory 为 JSON 字符串
@@ -216,8 +213,8 @@ actor MemoryStore {
 
     /// 确保记忆目录存在
     private func ensureDirectoriesExist() {
-        let dirs = [baseDir, BaizePath.userMemoryDir, BaizePath.projectMemoryDir, BaizePath.teamMemoryDir]
-        for dir in dirs {
+        for scope in [MemoryScope.user, .project, .team] {
+            let dir = (baseDir as NSString).appendingPathComponent(scope.rawValue)
             try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         }
     }
