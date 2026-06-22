@@ -411,3 +411,34 @@ enum GitResetMode: String, CaseIterable {
         }
     }
 }
+
+// MARK: - Git Remote Info (B10)
+
+/// Git 远程仓库信息 — git remote -v 输出
+struct GitRemoteInfo: Identifiable, Hashable {
+    let id = UUID()
+    /// 远程名称（如 origin）
+    let name: String
+    /// 远程 URL（fetch/push 共用）
+    let url: String
+    /// URL 类型（fetch/push）
+    let type: String
+}
+
+// MARK: - Git Show Result (B15)
+
+/// Git Show 结果 — git show <commit> 输出
+struct GitShowResult: Hashable {
+    /// commit OID
+    let oid: String
+    /// 作者名
+    let author: String
+    /// 作者邮箱
+    let email: String
+    /// 提交时间
+    let date: Date
+    /// 提交消息
+    let message: String
+    /// diff patch 文本
+    let patch: String
+}

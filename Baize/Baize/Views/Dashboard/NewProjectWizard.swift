@@ -60,6 +60,8 @@ struct NewProjectWizard: View {
     @State private var errorMessage: String?
     @State private var creationStatus: String = ""
     @State private var existingProjectNames: Set<String> = []
+    // B01 fix: 允许用户自定义项目根目录路径（之前写死 BaizePath.projectRoot）
+    @State private var customRootPath: String = BaizePath.projectRoot
 
     var body: some View {
         NavigationStack {
@@ -94,6 +96,7 @@ struct NewProjectWizard: View {
                         projectName: $projectName,
                         selectedTemplate: $selectedTemplate,
                         gitURL: $gitURL,
+                        customRootPath: $customRootPath,
                         errorMessage: $errorMessage,
                         existingNames: existingProjectNames,
                         onBack: {
@@ -152,7 +155,7 @@ struct NewProjectWizard: View {
             currentPage = .creating
         }
 
-        let projectPath = (BaizePath.projectRoot as NSString).appendingPathComponent(projectName)
+        let projectPath = (customRootPath as NSString).appendingPathComponent(projectName)
 
         do {
             switch method {
@@ -196,8 +199,8 @@ struct NewProjectWizard: View {
     private func createEmptyProject(path: String, name: String) async throws {
         await updateStatus("正在创建项目目录...")
         let fm = FileManager.default
-        // Bug 5 fix: 确保父目录（BaizePath.projectRoot）存在，否则在不存在父目录下创建子目录会失败
-        try fm.ensureDirectoryExists(atPath: BaizePath.projectRoot)
+        // B01 fix: 使用自定义路径创建父目录
+        try fm.ensureDirectoryExists(atPath: customRootPath)
         try fm.ensureDirectoryExists(atPath: path)
 
         await updateStatus("正在生成 BAIZE.md...")
@@ -214,8 +217,8 @@ struct NewProjectWizard: View {
     private func createTemplateProject(path: String, name: String, template: ProjectTemplate) async throws {
         await updateStatus("正在创建项目目录...")
         let fm = FileManager.default
-        // Bug 5 fix: 确保父目录存在
-        try fm.ensureDirectoryExists(atPath: BaizePath.projectRoot)
+        // B01 fix: 使用自定义路径创建父目录
+        try fm.ensureDirectoryExists(atPath: customRootPath)
         try fm.ensureDirectoryExists(atPath: path)
 
         await updateStatus("正在复制模板文件...")
@@ -259,8 +262,7 @@ struct NewProjectWizard: View {
         }
 
         // 创建 GitService 并 clone
-        // 注意：clone 方法在 T02 实现，此处调用 stub（T02 完成后替换为真实实现）
-        let gitService = GitService(repositoryPath: BaizePath.projectRoot, keychainService: keychain)
+        let gitService = GitService(repositoryPath: customRootPath, keychainService: keychain)
 
         do {
             try await gitService.clone(
@@ -471,6 +473,7 @@ private struct ConfigurationPage: View {
     @Binding var projectName: String
     @Binding var selectedTemplate: ProjectTemplate?
     @Binding var gitURL: String
+    @Binding var customRootPath: String
     @Binding var errorMessage: String?
     let existingNames: Set<String>
     let onBack: () -> Void
@@ -478,6 +481,22 @@ private struct ConfigurationPage: View {
 
     var body: some View {
         VStack(spacing: 20) {
+            // B01 fix: 项目根目录路径输入（可自定义）
+            VStack(alignment: .leading, spacing: 8) {
+                Label("项目根目录", systemImage: "folder")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.secondary)
+
+                TextField("/var/mobile/Documents/Baize/", text: $customRootPath)
+                    .textFieldStyle(.roundedBorder)
+                    .autocapitalization(.none)
+                    .disableAutocorrection(true)
+
+                Text("项目将创建在: \(customRootPath.hasSuffix("/") ? customRootPath : customRootPath + "/")\(projectName)/")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+
             // 根据创建方式显示不同配置
             switch method {
             case .empty:
@@ -554,10 +573,6 @@ private struct EmptyProjectConfig: View {
                 .textFieldStyle(.roundedBorder)
                 .autocapitalization(.none)
                 .disableAutocorrection(true)
-
-            Text("项目将创建在: \(BaizePath.projectRoot)\(projectName)/")
-                .font(.system(size: 12))
-                .foregroundColor(.secondary)
         }
     }
 }
@@ -681,10 +696,6 @@ private struct GitCloneConfig: View {
                     .autocapitalization(.none)
                     .disableAutocorrection(true)
             }
-
-            Text("项目将克隆到: \(BaizePath.projectRoot)\(projectName)/")
-                .font(.system(size: 12))
-                .foregroundColor(.secondary)
         }
     }
 

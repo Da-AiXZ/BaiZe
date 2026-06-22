@@ -137,14 +137,25 @@ struct ExecuteCommandTool: Tool {
 
             case "branch":
                 if remainingArgs == "" || remainingArgs == "-l" || remainingArgs == "--list" {
+                    // 列出本地分支
                     let branches = try await gitService.listBranches()
                     let output = branches.map { b in
                         "\(b.isCurrent ? "* " : "  ")\(b.name)"
                     }.joined(separator: "\n")
                     return ToolResult.success(output: output, metadata: ["command": command])
+                } else if remainingArgs == "-a" || remainingArgs == "--all" || remainingArgs == "-av" || remainingArgs == "-va" {
+                    // B11 fix: 列出所有分支（本地 + 远程）
+                    let branches = try await gitService.listAllBranches()
+                    var lines: [String] = []
+                    for b in branches {
+                        let prefix = b.isCurrent ? "* " : "  "
+                        let remoteTag = b.isRemote ? "remotes/" : ""
+                        lines.append("\(prefix)\(remoteTag)\(b.name)")
+                    }
+                    return ToolResult.success(output: lines.joined(separator: "\n"), metadata: ["command": command])
                 } else {
                     return ToolResult.error(
-                        message: "git branch 子命令 '\(remainingArgs)' 暂不支持。可用: git branch (列出分支)",
+                        message: "git branch 子命令 '\(remainingArgs)' 暂不支持。可用: git branch (列出本地分支), git branch -a (列出所有分支)",
                         metadata: ["command": command]
                     )
                 }
@@ -188,8 +199,13 @@ struct ExecuteCommandTool: Tool {
                 return ToolResult.success(output: "提交成功: \(message)", metadata: ["command": command])
 
             case "push":
-                try await gitService.push()
-                return ToolResult.success(output: "推送成功", metadata: ["command": command])
+                // B03 fix: 解析 --force / --force-with-lease 参数
+                let isForce = remainingArgs.contains("--force") || remainingArgs.contains("--force-with-lease") || remainingArgs.contains("-f")
+                try await gitService.push(force: isForce)
+                return ToolResult.success(
+                    output: isForce ? "强制推送成功" : "推送成功",
+                    metadata: ["command": command]
+                )
 
             case "pull":
                 let mergeResult = try await gitService.pull()
@@ -206,6 +222,53 @@ struct ExecuteCommandTool: Tool {
                     return ToolResult.error(message: conflictMsg, metadata: ["command": command])
                 }
 
+            // B02 fix: git fetch 支持
+            case "fetch":
+                let fetchResult = try await gitService.fetch()
+                return ToolResult.success(
+                    output: "Fetch 完成。接收 \(fetchResult.receivedBytes) 字节，更新远程跟踪分支。",
+                    metadata: ["command": command, "receivedBytes": "\(fetchResult.receivedBytes)"]
+                )
+
+            // B10 fix: git remote -v 支持
+            case "remote":
+                if remainingArgs == "-v" || remainingArgs == "--verbose" {
+                    let remotes = try await gitService.listRemotes()
+                    if remotes.isEmpty {
+                        return ToolResult.success(output: "(无远程仓库配置)", metadata: ["command": command])
+                    }
+                    let output = remotes.map { r in
+                        "\(r.name)\t\(r.url) (\(r.type))"
+                    }.joined(separator: "\n")
+                    return ToolResult.success(output: output, metadata: ["command": command])
+                } else {
+                    // git remote（无参数）— 列出远程名称
+                    let remotes = try await gitService.listRemotes()
+                    let output = remotes.map { $0.name }.joined(separator: "\n")
+                    return ToolResult.success(output: output, metadata: ["command": command])
+                }
+
+            // B15 fix: git show 支持
+            case "show":
+                // 解析参数：git show [oid]
+                let showOid: String?
+                if remainingArgs.isEmpty || remainingArgs == "HEAD" {
+                    showOid = nil // 使用 HEAD
+                } else {
+                    showOid = String(remainingArgs.split(separator: " ").first ?? "")
+                }
+                let showResult = try await gitService.show(oid: showOid)
+                var output = "commit \(showResult.oid)\n"
+                output += "Author: \(showResult.author) <\(showResult.email)>\n"
+                output += "Date:   \(showResult.date.formatted(.dateTime.year().month().day().hour().minute()))\n"
+                output += "\n"
+                for msgLine in showResult.message.split(separator: "\n", omittingEmptySubsequences: false) {
+                    output += "    \(msgLine)\n"
+                }
+                output += "\n"
+                output += showResult.patch.isEmpty ? "(无差异)" : showResult.patch
+                return ToolResult.success(output: output, metadata: ["command": command])
+
             case "init":
                 try await gitService.initRepository()
                 return ToolResult.success(output: "Git 仓库已初始化", metadata: ["command": command])
@@ -220,7 +283,7 @@ struct ExecuteCommandTool: Tool {
                 }
 
             // ── 不支持的操作 ──
-            case "stash", "rebase", "reset", "tag", "merge", "fetch", "clone", "remote", "config":
+            case "stash", "rebase", "reset", "tag", "merge", "clone", "config":
                 return ToolResult.error(
                     message: "git \(subcommand) 暂不支持通过命令行执行。请使用 Git 面板的对应功能。",
                     metadata: ["command": command]
@@ -228,7 +291,7 @@ struct ExecuteCommandTool: Tool {
 
             default:
                 return ToolResult.error(
-                    message: "不支持的 git 子命令: \(subcommand)。\n支持的命令: status, log, diff, add, commit, push, pull, init, branch, checkout",
+                    message: "不支持的 git 子命令: \(subcommand)。\n支持的命令: status, log, diff, add, commit, push, pull, fetch, init, branch, checkout, remote, show",
                     metadata: ["command": command]
                 )
             }

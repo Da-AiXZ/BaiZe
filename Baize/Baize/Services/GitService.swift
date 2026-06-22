@@ -607,7 +607,7 @@ actor GitService {
         }
     }
 
-    func push() async throws {
+    func push(force: Bool = false) async throws {
         guard let token = keychainService.loadGitToken(), !token.isEmpty else { throw GitError.credentialsMissing }
         let username = UserDefaults.standard.string(forKey: BaizeGit.usernameUDKey) ?? "git"
 
@@ -649,108 +649,112 @@ actor GitService {
         }
         defer { if let r = remote { git_remote_free(r) } }
 
-        // Bug fix (P0, round 7): 推送前检查是否有可推送的 commit。
-        // 空仓库（unborn HEAD，无任何提交）时，refs/heads/<branch> 不存在，
-        // push "refs/heads/master:refs/heads/master" 会报错：
-        // "src refspec 'refs/heads/master' does not match any existing object"
-        // 此检查给用户清晰的引导，而非底层 libgit2 错误。
-        var headCommitExists = false
-        var headRef: OpaquePointer? = nil
-        let headCode = git_repository_head(&headRef, repo)
-        if headCode == 0, let hr = headRef {
-            defer { git_reference_free(hr) }
-            // HEAD 存在 —— 检查是否能 peel 到 commit 对象
-            var peeledObj: OpaquePointer? = nil
-            let peelCode = git_reference_peel(&peeledObj, hr, GIT_OBJECT_COMMIT)
-            if peelCode == 0, let obj = peeledObj {
-                git_object_free(obj)
-                headCommitExists = true
-            }
-        }
-        // headCode == -9 (GIT_EUNBORNBRANCH): 空仓库，HEAD 指向 unborn branch
-        // headCode == -3 (GIT_ENOTFOUND): HEAD 不存在
-        // 这两种情况都意味着没有可推送的 commit
-
-        guard headCommitExists else {
-            throw GitError.pushFailed(
-                "没有可推送的提交。\n\n请按以下步骤操作：\n"
-                + "1. 在「改动」Tab 点击 ➕ 暂存文件\n"
-                + "2. 输入提交消息后点「提交」\n"
-                + "3. 提交成功后再点 ↑ 推送\n\n"
-                + "（推送需要至少一个 commit 才能创建远程分支）"
-            )
-        }
-
-        // Bug 4 fix: 推送前检查是否有已暂存但未提交的更改
-        // 用户常见误操作：stage 后直接 push，跳过了 commit 步骤
-        // 此时 push 会推送旧的 HEAD commit，远程看不到新改动
-        do {
-            let headTree = try getHeadTree(repo: repo)
-            defer { git_tree_free(headTree) }
-
-            var index: OpaquePointer? = nil
-            try checkGit(git_repository_index(&index, repo), operation: "git_repository_index")
-            defer { git_index_free(index) }
-
-            var stagedDiff: OpaquePointer? = nil
-            let diffCode = git_diff_tree_to_index(&stagedDiff, repo, headTree, index, nil)
-            if diffCode == 0, let d = stagedDiff {
-                let stagedCount = git_diff_num_deltas(d)
-                git_diff_free(d)
-                if stagedCount > 0 {
-                    throw GitError.pushFailed(
-                        "检测到 \(stagedCount) 个已暂存但未提交的更改。\n\n"
-                        + "请先提交更改后再推送：\n"
-                        + "1. 输入提交消息\n"
-                        + "2. 点击「提交」按钮\n"
-                        + "3. 提交成功后再点 ↑ 推送\n\n"
-                        + "（push 只推送已 commit 的更改，暂存区的更改不会被推送）"
-                    )
+        // B03 fix: force push 时跳过所有预检查（headCommitExists, stagedDiff, remoteRef 比对）
+        // force push 的语义是强制覆盖远程，不需要检查是否有新提交或是否已同步
+        if !force {
+            // Bug fix (P0, round 7): 推送前检查是否有可推送的 commit。
+            // 空仓库（unborn HEAD，无任何提交）时，refs/heads/<branch> 不存在，
+            // push "refs/heads/master:refs/heads/master" 会报错：
+            // "src refspec 'refs/heads/master' does not match any existing object"
+            // 此检查给用户清晰的引导，而非底层 libgit2 错误。
+            var headCommitExists = false
+            var headRef: OpaquePointer? = nil
+            let headCode = git_repository_head(&headRef, repo)
+            if headCode == 0, let hr = headRef {
+                defer { git_reference_free(hr) }
+                // HEAD 存在 —— 检查是否能 peel 到 commit 对象
+                var peeledObj: OpaquePointer? = nil
+                let peelCode = git_reference_peel(&peeledObj, hr, GIT_OBJECT_COMMIT)
+                if peelCode == 0, let obj = peeledObj {
+                    git_object_free(obj)
+                    headCommitExists = true
                 }
             }
-        } catch GitError.emptyRepository {
-            // 空仓库已被 headCommitExists 检查拦截，不会到达此处
-        }
+            // headCode == -9 (GIT_EUNBORNBRANCH): 空仓库，HEAD 指向 unborn branch
+            // headCode == -3 (GIT_ENOTFOUND): HEAD 不存在
+            // 这两种情况都意味着没有可推送的 commit
 
-        // Bug 4 fix: 检查本地 HEAD 是否与远程跟踪分支一致（没有新提交可推送）
-        // 如果一致，说明用户没有新 commit，push 是 no-op
-        let remoteTrackingRefName = "refs/remotes/\(BaizeGit.defaultRemoteName)/\(branchName)"
-        var remoteRef: OpaquePointer? = nil
-        let refLookupCode = git_reference_lookup(&remoteRef, repo, remoteTrackingRefName)
-        if refLookupCode == 0, let rr = remoteRef {
-            defer { git_reference_free(rr) }
+            guard headCommitExists else {
+                throw GitError.pushFailed(
+                    "没有可推送的提交。\n\n请按以下步骤操作：\n"
+                    + "1. 在「改动」Tab 点击 ➕ 暂存文件\n"
+                    + "2. 输入提交消息后点「提交」\n"
+                    + "3. 提交成功后再点 ↑ 推送\n\n"
+                    + "（推送需要至少一个 commit 才能创建远程分支）"
+                )
+            }
 
-            // 获取远程跟踪分支指向的 commit OID
-            if let remoteOidPtr = git_reference_target(rr) {
+            // Bug 4 fix: 推送前检查是否有已暂存但未提交的更改
+            // 用户常见误操作：stage 后直接 push，跳过了 commit 步骤
+            // 此时 push 会推送旧的 HEAD commit，远程看不到新改动
+            do {
+                let headTree = try getHeadTree(repo: repo)
+                defer { git_tree_free(headTree) }
 
-                // 获取本地 HEAD commit OID
-                var headRef2: OpaquePointer? = nil
-                let headCode2 = git_repository_head(&headRef2, repo)
-                if headCode2 == 0, let hr2 = headRef2 {
-                    defer { git_reference_free(hr2) }
-                    var headObj2: OpaquePointer? = nil
-                    let peelCode2 = git_reference_peel(&headObj2, hr2, GIT_OBJECT_COMMIT)
-                    if peelCode2 == 0, let ho2 = headObj2 {
-                        defer { git_object_free(ho2) }
-                        // 比较两个 OID — 如果相等，说明没有新提交可推送
-                        if let localOidPtr = git_object_id(ho2),
-                           git_oid_equal(remoteOidPtr, localOidPtr) != 0 {
-                            throw GitError.pushFailed(
-                                "本地与远程已同步，没有需要推送的新提交。\n\n"
-                                + "请先提交更改后再推送：\n"
-                                + "1. 暂存文件改动\n"
-                                + "2. 输入提交消息并提交\n"
-                                + "3. 提交成功后再推送\n\n"
-                                + "（当前本地 HEAD 与远程跟踪分支指向同一个 commit）"
-                            )
+                var index: OpaquePointer? = nil
+                try checkGit(git_repository_index(&index, repo), operation: "git_repository_index")
+                defer { git_index_free(index) }
+
+                var stagedDiff: OpaquePointer? = nil
+                let diffCode = git_diff_tree_to_index(&stagedDiff, repo, headTree, index, nil)
+                if diffCode == 0, let d = stagedDiff {
+                    let stagedCount = git_diff_num_deltas(d)
+                    git_diff_free(d)
+                    if stagedCount > 0 {
+                        throw GitError.pushFailed(
+                            "检测到 \(stagedCount) 个已暂存但未提交的更改。\n\n"
+                            + "请先提交更改后再推送：\n"
+                            + "1. 输入提交消息\n"
+                            + "2. 点击「提交」按钮\n"
+                            + "3. 提交成功后再点 ↑ 推送\n\n"
+                            + "（push 只推送已 commit 的更改，暂存区的更改不会被推送）"
+                        )
+                    }
+                }
+            } catch GitError.emptyRepository {
+                // 空仓库已被 headCommitExists 检查拦截，不会到达此处
+            }
+
+            // Bug 4 fix: 检查本地 HEAD 是否与远程跟踪分支一致（没有新提交可推送）
+            // 如果一致，说明用户没有新 commit，push 是 no-op
+            let remoteTrackingRefName = "refs/remotes/\(BaizeGit.defaultRemoteName)/\(branchName)"
+            var remoteRef: OpaquePointer? = nil
+            let refLookupCode = git_reference_lookup(&remoteRef, repo, remoteTrackingRefName)
+            if refLookupCode == 0, let rr = remoteRef {
+                defer { git_reference_free(rr) }
+
+                // 获取远程跟踪分支指向的 commit OID
+                if let remoteOidPtr = git_reference_target(rr) {
+
+                    // 获取本地 HEAD commit OID
+                    var headRef2: OpaquePointer? = nil
+                    let headCode2 = git_repository_head(&headRef2, repo)
+                    if headCode2 == 0, let hr2 = headRef2 {
+                        defer { git_reference_free(hr2) }
+                        var headObj2: OpaquePointer? = nil
+                        let peelCode2 = git_reference_peel(&headObj2, hr2, GIT_OBJECT_COMMIT)
+                        if peelCode2 == 0, let ho2 = headObj2 {
+                            defer { git_object_free(ho2) }
+                            // 比较两个 OID — 如果相等，说明没有新提交可推送
+                            if let localOidPtr = git_object_id(ho2),
+                               git_oid_equal(remoteOidPtr, localOidPtr) != 0 {
+                                throw GitError.pushFailed(
+                                    "本地与远程已同步，没有需要推送的新提交。\n\n"
+                                    + "请先提交更改后再推送：\n"
+                                    + "1. 暂存文件改动\n"
+                                    + "2. 输入提交消息并提交\n"
+                                    + "3. 提交成功后再推送\n\n"
+                                    + "（当前本地 HEAD 与远程跟踪分支指向同一个 commit）"
+                                )
+                            }
                         }
                     }
                 }
+            } else {
+                if let r = remoteRef { git_reference_free(r) }
+                // 远程跟踪分支不存在 — 首次推送，继续执行
             }
-        } else {
-            if let r = remoteRef { git_reference_free(r) }
-            // 远程跟踪分支不存在 — 首次推送，继续执行
-        }
+        } // end if !force
 
         var pushOpts = git_push_options()
         git_push_init_options(&pushOpts, numericCast(GIT_PUSH_OPTIONS_VERSION))
@@ -765,7 +769,10 @@ actor GitService {
         callbacks.payload = payloadPointer
         pushOpts.callbacks = callbacks
 
-        let refspec = "refs/heads/\(branchName):refs/heads/\(branchName)"
+        // B03 fix: force push 时 refspec 前缀加 +，告诉 libgit2 强制更新远程引用
+        let refspec = force
+            ? "+refs/heads/\(branchName):refs/heads/\(branchName)"
+            : "refs/heads/\(branchName):refs/heads/\(branchName)"
         let cRefspec = strdup(refspec)
         defer { free(cRefspec) }
         var refspecPtrs: [UnsafeMutablePointer<CChar>?] = [cRefspec]
@@ -1827,10 +1834,224 @@ actor GitService {
         try await checkoutBranch(localName)
     }
 
+    // MARK: - B10: List Remotes
+
+    /// 列出所有远程仓库及其 URL（git remote -v）
+    func listRemotes() async throws -> [GitRemoteInfo] {
+        let repo = try openRepository()
+        defer { git_repository_free(repo) }
+
+        var remotes: git_strarray = git_strarray()
+        try checkGit(git_remote_list(&remotes, repo), operation: "git_remote_list")
+        defer { git_strarray_free(&remotes) }
+
+        var result: [GitRemoteInfo] = []
+        let count = Int(remotes.count)
+        for i in 0..<count {
+            guard let namePtr = remotes.strings?[i] else { continue }
+            let name = String(cString: namePtr)
+
+            var remote: OpaquePointer? = nil
+            let lookupCode = git_remote_lookup(&remote, repo, name)
+            if lookupCode == 0, let r = remote {
+                defer { git_remote_free(r) }
+                let urlPtr = git_remote_url(r)
+                let url = urlPtr.map { String(cString: $0) } ?? ""
+                result.append(GitRemoteInfo(name: name, url: url, type: "fetch/push"))
+            }
+        }
+        return result
+    }
+
+    // MARK: - B11: List All Branches (local + remote)
+
+    /// 列出所有分支（本地 + 远程），不执行 fetch
+    func listAllBranches() async throws -> [GitBranch] {
+        let repo = try openRepository()
+        defer { git_repository_free(repo) }
+        let currentName = try getCurrentBranchName(repo: repo)
+
+        var branches: [GitBranch] = []
+
+        // 本地分支
+        var localIter: OpaquePointer? = nil
+        try checkGit(
+            git_branch_iterator_new(&localIter, repo, GIT_BRANCH_LOCAL),
+            operation: "git_branch_iterator_new (local)"
+        )
+        defer { git_branch_iterator_free(localIter) }
+
+        var ref: OpaquePointer? = nil
+        var bt = git_branch_t(GIT_BRANCH_LOCAL.rawValue)
+        while git_branch_next(&ref, &bt, localIter) == 0 {
+            defer { git_reference_free(ref) }
+            if let shorthand = git_reference_shorthand(ref) {
+                let name = String(cString: shorthand)
+                branches.append(GitBranch(name: name, isCurrent: name == currentName, isRemote: false))
+            }
+        }
+
+        // 远程分支（不 fetch，直接读已有的 refs/remotes/origin/*）
+        var remoteIter: OpaquePointer? = nil
+        let remoteIterCode = git_branch_iterator_new(&remoteIter, repo, GIT_BRANCH_REMOTE)
+        if remoteIterCode == 0 {
+            defer { git_branch_iterator_free(remoteIter) }
+            var bt2 = git_branch_t(GIT_BRANCH_REMOTE.rawValue)
+            while git_branch_next(&ref, &bt2, remoteIter) == 0 {
+                defer { git_reference_free(ref) }
+                if let shorthand = git_reference_shorthand(ref) {
+                    let name = String(cString: shorthand)
+                    branches.append(GitBranch(name: name, isCurrent: false, isRemote: true))
+                }
+            }
+        }
+
+        return branches
+    }
+
+    // MARK: - B15: Show Commit
+
+    /// 显示指定 commit 的详情（git show <oid>）
+    /// - Parameter oid: commit OID 字符串（nil 或 "HEAD" 时显示最新 commit）
+    func show(oid: String? = nil) async throws -> GitShowResult {
+        let repo = try openRepository()
+        defer { git_repository_free(repo) }
+
+        // 解析目标 commit
+        let targetOid: git_oid
+        if let oid = oid, !oid.isEmpty, oid != "HEAD" {
+            targetOid = git_oid()
+            try checkGit(
+                oid.withCString { git_oid_fromstr(&targetOid, $0) },
+                operation: "git_oid_fromstr (show)"
+            )
+        } else {
+            // 使用 HEAD
+            let headCommit = try getHeadCommitHandle(repo: repo)
+            defer { git_commit_free(headCommit) }
+            let headOidPtr = git_commit_id(headCommit)
+            guard let ho = headOidPtr else { throw GitError.emptyRepository }
+            targetOid = ho.pointee
+        }
+
+        // 查找 commit
+        var commit: OpaquePointer? = nil
+        try checkGit(
+            git_commit_lookup(&commit, repo, &targetOid),
+            operation: "git_commit_lookup (show)"
+        )
+        defer { git_commit_free(commit) }
+        guard let commitHandle = commit else {
+            throw GitError.operationFailed("Commit not found")
+        }
+
+        // 提取 commit 信息
+        let author = git_commit_author(commitHandle)
+        let authorName = author != nil ? String(cString: author!.pointee.name) : "Unknown"
+        let authorEmail = author != nil ? String(cString: author!.pointee.email) : ""
+        let commitTime = author != nil ? author!.pointee.when.time : 0
+        let messagePtr = git_commit_message(commitHandle)
+        let message = messagePtr != nil ? String(cString: messagePtr!) : ""
+
+        let oidHex = withUnsafePointer(to: &targetOid) { ptr -> String in
+            guard let hex = git_oid_tostr_s(ptr) else { return "" }
+            return String(cString: hex)
+        }
+
+        // 生成 diff（commit vs 其 parent）
+        var patch = ""
+        let treeOid = git_commit_tree_id(commitHandle)
+        var tree: OpaquePointer? = nil
+        try checkGit(git_tree_lookup(&tree, repo, treeOid), operation: "git_tree_lookup (show)")
+        defer { git_tree_free(tree) }
+        guard let treeHandle = tree else {
+            return GitShowResult(oid: oidHex, author: authorName, email: authorEmail,
+                                 date: Date(timeIntervalSince1970: TimeInterval(commitTime)),
+                                 message: message, patch: "")
+        }
+
+        let parentCount = git_commit_parentcount(commitHandle)
+        var diff: OpaquePointer? = nil
+
+        if parentCount > 0 {
+            // 有 parent — diff parent tree vs commit tree
+            let parent = git_commit_parent(commitHandle, 0)
+            defer { git_commit_free(parent) }
+            if let parentHandle = parent {
+                let parentTreeOid = git_commit_tree_id(parentHandle)
+                var parentTree: OpaquePointer? = nil
+                try checkGit(git_tree_lookup(&parentTree, repo, parentTreeOid), operation: "git_tree_lookup (parent)")
+                defer { git_tree_free(parentTree) }
+                guard let parentTreeHandle = parentTree else {
+                    return GitShowResult(oid: oidHex, author: authorName, email: authorEmail,
+                                         date: Date(timeIntervalSince1970: TimeInterval(commitTime)),
+                                         message: message, patch: "")
+                }
+
+                var diffOpts = git_diff_options()
+                git_diff_init_options(&diffOpts, numericCast(GIT_DIFF_OPTIONS_VERSION))
+                try checkGit(
+                    git_diff_tree_to_tree(&diff, repo, parentTreeHandle, treeHandle, &diffOpts),
+                    operation: "git_diff_tree_to_tree (show)"
+                )
+            }
+        } else {
+            // 初始 commit — diff empty tree vs commit tree
+            var diffOpts = git_diff_options()
+            git_diff_init_options(&diffOpts, numericCast(GIT_DIFF_OPTIONS_VERSION))
+            try checkGit(
+                git_diff_tree_to_tree(&diff, repo, nil, treeHandle, &diffOpts),
+                operation: "git_diff_tree_to_tree (initial commit show)"
+            )
+        }
+
+        defer { git_diff_free(diff) }
+
+        if let diffHandle = diff {
+            // 收集 diff patch
+            let collector = GitDiffCollector()
+            let payload = Unmanaged.passUnretained(collector).toOpaque()
+
+            let fileCb: git_diff_file_cb = { delta, _, payload in
+                guard let payload = payload, let delta = delta else { return 0 }
+                Unmanaged<GitDiffCollector>.fromOpaque(payload).takeUnretainedValue().onFile(delta: delta)
+                return 0
+            }
+            let hunkCb: git_diff_hunk_cb = { _, hunk, payload in
+                guard let payload = payload, let hunk = hunk else { return 0 }
+                Unmanaged<GitDiffCollector>.fromOpaque(payload).takeUnretainedValue().onHunk(hunk: hunk)
+                return 0
+            }
+            let lineCb: git_diff_line_cb = { _, _, line, payload in
+                guard let payload = payload, let line = line else { return 0 }
+                Unmanaged<GitDiffCollector>.fromOpaque(payload).takeUnretainedValue().onLine(line: line)
+                return 0
+            }
+
+            _ = git_diff_foreach(diffHandle, fileCb, nil, hunkCb, lineCb, payload)
+
+            // 构建完整 patch
+            for hunk in collector.hunks {
+                patch += "@@ -\(hunk.oldStart),\(hunk.oldLines) +\(hunk.newStart),\(hunk.newLines) @@\n"
+                for line in hunk.lines {
+                    patch += "\(line.type.prefix)\(line.content)\n"
+                }
+            }
+        }
+
+        return GitShowResult(
+            oid: oidHex,
+            author: authorName,
+            email: authorEmail,
+            date: Date(timeIntervalSince1970: TimeInterval(commitTime)),
+            message: message,
+            patch: patch
+        )
+    }
+
     // MARK: - Conflict Detection Helper
 
     /// 检查 merge/rebase 冲突并返回冲突文件列表
-    /// 返回空数组表示无冲突
     private func checkMergeConflicts(repo: OpaquePointer) throws -> [String] {
         var index: OpaquePointer? = nil
         try checkGit(git_repository_index(&index, repo), operation: "git_repository_index")

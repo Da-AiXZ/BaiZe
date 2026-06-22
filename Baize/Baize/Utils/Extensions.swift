@@ -162,17 +162,46 @@ extension URL {
 
 extension FileManager {
     /// 确保目录存在，不存在则创建
-    /// P0-1 fix: TrollStore 环境下 FileManager.createDirectory 可能因沙盒残留限制失败
-    /// 先尝试 FileManager 创建，失败后回退到 posix_spawn 执行 mkdir -p
+    /// B01 fix: 改进目录创建逻辑，三级回退策略
+    /// 1. FileManager.createDirectory(withIntermediateDirectories: true) — 标准方式
+    /// 2. 逐级创建每个路径组件 — 避免一次性创建多级目录的权限问题
+    /// 3. posix_spawn mkdir -p — TrollStore no-sandbox 环境回退
     func ensureDirectoryExists(atPath path: String) throws {
         if !fileExists(atPath: path) {
-            // 尝试 FileManager 创建
+            // 尝试 FileManager 创建（标准方式）
             do {
                 try createDirectory(atPath: path, withIntermediateDirectories: true)
             } catch {
-                // P0-1 fix: FileManager 失败时回退到 posix_spawn 执行 mkdir -p
-                baizeLogger.warning("FileManager.createDirectory failed for \(path): \(error.localizedDescription), trying posix_spawn fallback")
+                // B01 fix: 回退 1 — 逐级创建路径组件
+                baizeLogger.warning("FileManager.createDirectory failed for \(path): \(error.localizedDescription), trying component-by-component creation")
+                do {
+                    try createDirectoryComponents(atPath: path)
+                    if fileExists(atPath: path) {
+                        baizeLogger.info("Directory created via component-by-component: \(path)")
+                        return
+                    }
+                } catch {
+                    baizeLogger.warning("Component-by-component creation also failed: \(error.localizedDescription), trying posix_spawn fallback")
+                }
+
+                // B01 fix: 回退 2 — posix_spawn 执行 mkdir -p
                 try createDirectoryWithPosixSpawn(atPath: path)
+            }
+        }
+    }
+
+    /// B01 fix: 逐级创建路径组件
+    /// 将路径拆分为各组件，逐个创建，避免 withIntermediateDirectories 在某些环境下失败
+    private func createDirectoryComponents(atPath path: String) throws {
+        // 标准化路径 — 去掉末尾的 /
+        let normalizedPath = path.hasSuffix("/") ? String(path.dropLast()) : path
+        let components = normalizedPath.split(separator: "/").map(String.init)
+
+        var currentPath = ""
+        for component in components {
+            currentPath += "/" + component
+            if !fileExists(atPath: currentPath) {
+                try createDirectory(atPath: currentPath, withIntermediateDirectories: false)
             }
         }
     }

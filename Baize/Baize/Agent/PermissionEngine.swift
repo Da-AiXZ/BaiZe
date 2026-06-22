@@ -26,6 +26,11 @@ actor PermissionEngine {
     /// 无循环引用：ToolRegistry 不持有 PermissionEngine 引用
     private var toolRegistry: ToolRegistry?
 
+    /// B07 fix: 会话级授权集合 — "本次会话不再询问"存储的工具+操作 key
+    /// key 格式: "toolName" 或 "toolName:operation"
+    /// 用户在权限对话框勾选"本次会话不再询问"时添加，会话结束时清除
+    private var sessionApprovals: Set<String> = []
+
     // MARK: - Initialization
 
     init(mode: PermissionMode = BaizePermission.defaultMode) {
@@ -52,6 +57,43 @@ actor PermissionEngine {
     /// 获取当前权限模式
     func getMode() -> PermissionMode {
         mode
+    }
+
+    // MARK: - B07 fix: Session Approval API
+
+    /// 添加会话级授权（"本次会话不再询问"时调用）
+    /// - Parameters:
+    ///   - toolName: 工具名称
+    ///   - operation: 操作描述（可选，如 "write_file:/path/to/file"）
+    func grantSessionApproval(forTool toolName: String, operation: String? = nil) {
+        let key = sessionApprovalKey(toolName: toolName, operation: operation)
+        sessionApprovals.insert(key)
+        baizeLogger.info("Session approval granted for: \(key) (total: \(sessionApprovals.count))")
+    }
+
+    /// 检查是否有会话级授权
+    func hasSessionApproval(forTool toolName: String, operation: String? = nil) -> Bool {
+        let key = sessionApprovalKey(toolName: toolName, operation: operation)
+        if sessionApprovals.contains(key) { return true }
+        // 也检查只有 toolName 的通配授权
+        return sessionApprovals.contains(toolName)
+    }
+
+    /// 清除所有会话级授权
+    func clearSessionApprovals() {
+        let count = sessionApprovals.count
+        sessionApprovals.removeAll()
+        if count > 0 {
+            baizeLogger.info("Cleared \(count) session approvals")
+        }
+    }
+
+    /// 构建会话授权 key
+    private func sessionApprovalKey(toolName: String, operation: String?) -> String {
+        if let op = operation, !op.isEmpty {
+            return "\(toolName):\(op)"
+        }
+        return toolName
     }
 
     /// 评估工具调用的权限决策
@@ -142,10 +184,20 @@ actor PermissionEngine {
             }
         }
 
+        // B07 fix: 检查会话级授权 — "本次会话不再询问"的工具直接放行
+        // 在 needsPermission 检查之前，将 .ask 转为 .allow
+        if decision.effect == .ask {
+            let operationKey = buildOperationKey(toolCall: toolCall)
+            if hasSessionApproval(forTool: toolName, operation: operationKey) {
+                return PermissionDecision(effect: .allow, reason: "会话级授权：本次会话不再询问")
+            }
+        }
+
         // Step 3: R1 新增 — 运行时 needsPermission() 检查
         // 在现有决策基础上，调用工具自身的 needsPermission() 做运行时权限判断
         // 只有当现有决策为 .allow 时才检查（.ask 和 .deny 已经足够严格）
-        if decision.effect == .allow, let registry = toolRegistry {
+        // B06 fix: bypass 模式跳过 needsPermission 检查，确保 bypass 真正绕过所有权限
+        if decision.effect == .allow, mode != .bypass, let registry = toolRegistry {
             let tool = await registry.getTool(name: toolName)
             let toolPermission = tool?.needsPermission(input: arguments, context: context)
 
@@ -238,6 +290,25 @@ actor PermissionEngine {
     /// 判断是否为文件编辑类工具
     private func isFileEditTool(toolName: String) -> Bool {
         ["write_file", "edit_file"].contains(toolName)
+    }
+
+    /// B07 fix: 构建操作级 key — 用于会话级授权的精细匹配
+    /// 不同操作有不同的 key，如 write_file 的 key 包含文件路径
+    private func buildOperationKey(toolCall: ToolCall) -> String {
+        let args = toolCall.parsedArguments()
+        switch toolCall.name {
+        case "write_file", "edit_file", "delete_file":
+            let path = args["path"] as? String ?? ""
+            return path
+        case "execute_command":
+            let command = args["command"] as? String ?? ""
+            // 取命令的第一个词作为 key（如 "rm" 而非 "rm -rf /tmp"）
+            return command.split(separator: " ").first.map(String.init) ?? command
+        case "run_node", "run_python":
+            return "" // 进程工具不区分操作
+        default:
+            return ""
+        }
     }
 
     /// 查找工具信息（R1 扩展：优先使用 ToolRegistry 动态查询，回退到硬编码列表）

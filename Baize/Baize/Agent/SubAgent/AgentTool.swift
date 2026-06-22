@@ -60,6 +60,7 @@ struct AgentTool: Tool {
         )
 
         // 创建子 AgentLoop（共享 ToolRegistry，独立 session + 独立 PermissionEngine）
+        // B08 fix: 传递 gitService 到子 agent，确保子 agent 的 execute_command 能拦截 git 命令
         let subLoop = await teamCoordinator.spawnTeammate(
             name: agentName,
             subagentType: subagentType,
@@ -77,6 +78,7 @@ struct AgentTool: Tool {
                     commandRegistry: nil,
                     planModeState: context.planModeState,
                     webSearchProvider: context.webSearchProvider,
+                    gitService: context.gitService,
                     session: subSession
                 )
             }
@@ -95,6 +97,14 @@ struct AgentTool: Tool {
                     break
                 case .error(let error):
                     return ToolResult.error(message: "子 agent 执行错误: \(error.localizedDescription)")
+                case .askConfirmation(let toolCall, let reason):
+                    // B08 fix: 子 agent 无法与用户交互，自动确认所有权限请求
+                    // 根因：子 agent 的 PermissionEngine 在 .default 模式下，进程工具（execute_command/run_node/run_python）
+                    // 返回 .ask 需要用户确认。但 AgentTool 之前忽略了 .askConfirmation 事件，
+                    // 导致子 agent 永久挂起等待 confirmToolCall() → 死锁
+                    // 修复：收到 .askConfirmation 后自动调用 confirmToolCall(allowed: true)
+                    agentLogger.info("SubAgent auto-confirming tool: \(toolCall.name) — \(reason)")
+                    await subLoop.confirmToolCall(toolCall: toolCall, allowed: true)
                 default:
                     break
                 }

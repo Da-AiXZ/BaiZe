@@ -7,7 +7,7 @@ import SwiftUI
 struct PermissionDialog: View {
     let toolCall: ToolCall
     let reason: String
-    let onAllow: () -> Void
+    let onAllow: (Bool) -> Void
     let onDeny: () -> Void
 
     @State private var skipForSession = false
@@ -57,12 +57,10 @@ struct PermissionDialog: View {
                 ArgumentsDetail(arguments: toolCall.parsedArguments())
             }
 
-            // "本次会话不再询问"选项
-            if toolCall.name != "execute_command" {
-                Toggle("本次会话不再询问此操作", isOn: $skipForSession)
-                    .font(.system(size: 13))
-                    .toggleStyle(.switch)
-            }
+            // "本次会话不再询问"选项 — B07 fix: 所有工具都支持（之前排除了 execute_command）
+            Toggle("本次会话不再询问此操作", isOn: $skipForSession)
+                .font(.system(size: 13))
+                .toggleStyle(.switch)
 
             // 操作按钮
             HStack(spacing: 12) {
@@ -74,8 +72,8 @@ struct PermissionDialog: View {
                 .buttonStyle(.bordered)
                 .tint(.red)
 
-                // Allow 按钮
-                Button(action: onAllow) {
+                // Allow 按钮 — B07 fix: 传递 skipForSession 状态
+                Button(action: { onAllow(skipForSession) }) {
                     Label("允许", systemImage: "checkmark.circle")
                         .frame(maxWidth: .infinity)
                 }

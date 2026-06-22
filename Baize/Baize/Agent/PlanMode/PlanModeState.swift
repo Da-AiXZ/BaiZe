@@ -105,7 +105,8 @@ actor PlanModeState {
     /// 用户拒绝计划
     /// 从 awaitingApproval 转为 rejected，恢复 continuation
     /// - Parameter reason: 拒绝原因
-    /// P0-3 fix: 拒绝后自动回到 idle，允许再次进入计划模式
+    /// B04 fix: 拒绝后回到 .planning 状态（而非 .idle），允许 AI 直接提交修改后的计划
+    /// 之前设为 .idle 导致 AI 再次调用 exit_plan_mode 时 guard phase == .planning 失败 → 返回 false（被当作拒绝）
     func reject(reason: String) {
         guard phase == .awaitingApproval else {
             planModeLogger.warning("PlanModeState: cannot reject from phase \(String(describing: self.phase), privacy: .public)")
@@ -116,8 +117,9 @@ actor PlanModeState {
         planModeLogger.info("PlanModeState: plan rejected — \(reason)")
         approvalContinuation?.resume(returning: false)
         approvalContinuation = nil
-        // P0-3 fix: 拒绝后自动回到 idle，允许再次 enter()
-        phase = .idle
+        // B04 fix: 拒绝后回到 planning 状态，允许 AI 直接提交修改后的计划
+        // 不需要重新调用 enter_plan_mode，AI 可以直接修改计划后再次调用 exit_plan_mode
+        phase = .planning
         plan = nil
         rejectionReason = nil
     }

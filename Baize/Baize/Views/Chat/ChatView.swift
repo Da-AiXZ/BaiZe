@@ -76,8 +76,8 @@ struct ChatView: View {
                 PermissionDialog(
                     toolCall: confirmation.toolCall,
                     reason: confirmation.reason,
-                    onAllow: { handleConfirmation(allowed: true) },
-                    onDeny: { handleConfirmation(allowed: false) }
+                    onAllow: { skipSession in handleConfirmation(allowed: true, skipForSession: skipSession) },
+                    onDeny: { handleConfirmation(allowed: false, skipForSession: false) }
                 )
             }
 
@@ -612,11 +612,29 @@ struct ChatView: View {
     }
 
     /// 处理权限确认结果
-    private func handleConfirmation(allowed: Bool) {
+    /// B07 fix: 支持 skipForSession — 用户勾选"本次会话不再询问"时添加会话级授权
+    private func handleConfirmation(allowed: Bool, skipForSession: Bool = false) {
         guard let confirmation = pendingConfirmation else { return }
         guard let loop = agentLoop else { return }
         pendingConfirmation = nil
         Task {
+            // B07 fix: 用户勾选"本次会话不再询问"时，添加会话级授权
+            if allowed && skipForSession {
+                if let engine = appState.permissionEngine {
+                    let args = confirmation.toolCall.parsedArguments()
+                    let operation: String
+                    switch confirmation.toolCall.name {
+                    case "write_file", "edit_file", "delete_file":
+                        operation = args["path"] as? String ?? ""
+                    case "execute_command":
+                        let cmd = args["command"] as? String ?? ""
+                        operation = cmd.split(separator: " ").first.map(String.init) ?? cmd
+                    default:
+                        operation = ""
+                    }
+                    await engine.grantSessionApproval(forTool: confirmation.toolCall.name, operation: operation)
+                }
+            }
             await loop.confirmToolCall(toolCall: confirmation.toolCall, allowed: allowed)
         }
     }

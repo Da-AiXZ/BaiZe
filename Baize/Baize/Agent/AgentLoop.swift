@@ -432,6 +432,21 @@ actor AgentLoop {
                             Task { await self.cancelPendingConfirmation() }
                         }
                         if allowed {
+                            // B05 fix: PlanMode 拦截写操作 — 计划模式下即使用户同意也不执行写操作
+                            // 之前只在 .allow 路径有此检查，.ask 路径缺失导致用户同意后可绕过计划模式只读限制
+                            if let planMode = planModeState {
+                                let currentMode = await permissionEngine.getMode()
+                                let isInPlan = await planMode.isInPlanMode()
+                                if isInPlan && currentMode != .bypass && !isToolReadOnly(name: name) {
+                                    let deniedResult = ToolResult.denied(reason: "计划模式下禁止写操作: \(name)")
+                                    continuation.yield(.denied(toolCall, "计划模式下禁止写操作"))
+                                    session.messages.append(.toolResult(id: id, content: deniedResult.toToolResultContent()))
+                                    consecutiveFailures += 1
+                                    userDeniedTool = true
+                                    break
+                                }
+                            }
+
                             // 用户允许 — 执行工具（与 .allow 路径一致）
                             // P0-3 fix: 在执行 exit_plan_mode 工具之前，先发射 .planApprovalRequested 事件
                             if name == "exit_plan_mode" {
