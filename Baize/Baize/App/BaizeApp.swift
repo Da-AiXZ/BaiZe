@@ -89,8 +89,11 @@ struct BaizeApp: App {
         let pythonEngine = PythonRuntimeEngine()
         let pythonStrategy = PythonEmbeddingStrategy(engine: pythonEngine)
 
-        // Git Service — 封装 libgit2，传入工作目录和 Keychain 服务
-        let gitSvc = GitService(repositoryPath: workingRoot, keychainService: keychain)
+        // T03: Git Shell Service — 使用 bundle 内 git 二进制执行远程操作
+        let gitShellService = GitShellService(repositoryPath: workingRoot, keychainService: keychain)
+
+        // Git Service — 封装 libgit2，传入工作目录、Keychain 服务和 GitShellService
+        let gitSvc = GitService(repositoryPath: workingRoot, keychainService: keychain, gitShellService: gitShellService)
 
         let runtime = RuntimeExecutor(nodeStrategy: nodeStrategy, pythonStrategy: pythonStrategy)
         let permission = PermissionEngine(mode: BaizePermission.defaultMode)

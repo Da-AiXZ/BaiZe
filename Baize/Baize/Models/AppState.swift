@@ -399,14 +399,15 @@ class AppState: ObservableObject {
             await projectCtx.updateRootPath(projectPath)
         }
 
-        // Step 6: 重建 GitService 实例（repositoryPath 是 let，必须新建）
+        // Step 6: 重建 GitService + GitShellService 实例（repositoryPath 是 let，必须新建）
         if let keychain = keychainService {
-            let newGitService = GitService(repositoryPath: projectPath, keychainService: keychain)
+            let newGitShellService = GitShellService(repositoryPath: projectPath, keychainService: keychain)
+            let newGitService = GitService(repositoryPath: projectPath, keychainService: keychain, gitShellService: newGitShellService)
             // Step 7: 重建 GitViewModel（持有新 GitService）
             let newGitVM = GitViewModel(gitService: newGitService)
             gitService = newGitService
             gitViewModel = newGitVM
-            baizeLogger.info("switchProject: GitService + GitViewModel rebuilt for '\(projectPath)'")
+            baizeLogger.info("switchProject: GitService + GitShellService + GitViewModel rebuilt for '\(projectPath)'")
         }
 
         // Step 8: 更新 TerminalViewModel 工作目录

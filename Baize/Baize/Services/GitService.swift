@@ -129,20 +129,29 @@ final class GitCloneProgressPayload {
 /// Git 核心服务 — actor 封装 libgit2 C API
 actor GitService {
 
-    private let repositoryPath: String
-    private let keychainService: KeychainService
+    /// T03: git 二进制 shell 服务 — 用于 fetch / push / pull / clone 等网络操作
+    private let gitShellService: GitShellService
 
     /// libgit2 初始化返回值（>= 1 成功，< 0 失败）
     /// 必须在任何 libgit2 API 调用前完成初始化
     private let libgit2InitResult: Int32
 
-    init(repositoryPath: String, keychainService: KeychainService) {
+    init(repositoryPath: String, keychainService: KeychainService, gitShellService: GitShellService? = nil) {
         self.repositoryPath = repositoryPath
         self.keychainService = keychainService
+        self.gitShellService = gitShellService ?? GitShellService(
+            repositoryPath: repositoryPath,
+            keychainService: keychainService
+        )
 
         // CRITICAL: 必须在任何 libgit2 调用前初始化库
         // git_libgit2_init() 返回引用计数（>= 1 成功，< 0 失败），线程安全可多次调用
         self.libgit2InitResult = git_libgit2_init()
+    }
+
+    /// T03: 暴露 GitShellService 引用，供 ExecuteCommandTool 路由 git 命令
+    func gitShellService() -> GitShellService {
+        gitShellService
     }
 
     // MARK: - Helpers
@@ -759,38 +768,11 @@ actor GitService {
             }
         } // end if !force
 
-        var pushOpts = git_push_options()
-        git_push_init_options(&pushOpts, numericCast(GIT_PUSH_OPTIONS_VERSION))
-
-        let payload = GitCredentialsPayload(username: username, token: token)
-        let payloadPointer = Unmanaged.passRetained(payload).toOpaque()
-        defer { Unmanaged<GitCredentialsPayload>.fromOpaque(payloadPointer).release() }
-
-        var callbacks = git_remote_callbacks()
-        git_remote_init_callbacks(&callbacks, numericCast(GIT_REMOTE_CALLBACKS_VERSION))
-        callbacks.credentials = credentialsCallback
-        callbacks.payload = payloadPointer
-        // B03 fix (round 2): 添加 certificate_check 回调 — 接受任何 TLS 证书
-        // 与 fetch 相同的修复：iOS TrollStore 环境下 OpenSSL 无法访问系统 CA 证书
-        callbacks.certificate_check = certCheckCallback
-        pushOpts.callbacks = callbacks
-
-        // B03 fix: force push 时 refspec 前缀加 +，告诉 libgit2 强制更新远程引用
-        let refspec = force
-            ? "+refs/heads/\(branchName):refs/heads/\(branchName)"
-            : "refs/heads/\(branchName):refs/heads/\(branchName)"
-        let cRefspec = strdup(refspec)
-        defer { free(cRefspec) }
-        var refspecPtrs: [UnsafeMutablePointer<CChar>?] = [cRefspec]
-        var refs = git_strarray(strings: &refspecPtrs, count: 1)
-
-        let pushCode = git_remote_push(remote, &refs, &pushOpts)
-        if pushCode != 0 {
-            let errMsg: String
-            if let errPtr = git_error_last() {
-                errMsg = errPtr.pointee.message.map { String(cString: $0) } ?? "Unknown error"
-            } else { errMsg = "Unknown error" }
-            throw GitError.pushFailed(errMsg)
+        // T03: 实际网络推送交给 GitShellService（bundle 内 git 二进制 + 正确 CA 证书）
+        do {
+            try await gitShellService.push(force: force)
+        } catch {
+            throw GitError.pushFailed(error.localizedDescription)
         }
     }
 
@@ -800,15 +782,6 @@ actor GitService {
         return creds.username.withCString { u in
             creds.token.withCString { t in git_credential_userpass_plaintext_new(out, u, t) }
         }
-    }
-
-    /// B02/B03 fix (round 2): TLS 证书检查回调 — 接受任何证书
-    /// 根因：libgit2 使用 OpenSSL 进行 HTTPS，但 iOS TrollStore 环境下 OpenSSL 无法访问
-    /// 系统 Keychain 中的 CA 证书，导致 TLS 验证失败，fetch 接收 0 字节，push 直接失败
-    /// 修复：使用 git_transport_certificate_check_cb 类型别名确保类型正确，接受任何证书
-    /// TrollStore 免签应用的安全模型下可接受（用户自行承担 MITM 风险）
-    private let certCheckCallback: git_transport_certificate_check_cb = { _, _, _, _ in
-        return 0
     }
 
     // MARK: - Log
@@ -991,159 +964,17 @@ actor GitService {
         }
         defer { if let r = remote { git_remote_free(r) } }
 
-        // B02 fix (round 2): 凭据改为可选 — 公开仓库不需要 token
-        // 之前的 `guard let token = ... else { throw }` 导致公开仓库无法 fetch
-        let token = keychainService.loadGitToken() ?? ""
-        let username = UserDefaults.standard.string(forKey: BaizeGit.usernameUDKey) ?? "git"
-
-        // 配置回调
-        var callbacks = git_remote_callbacks()
-        git_remote_init_callbacks(&callbacks, numericCast(GIT_REMOTE_CALLBACKS_VERSION))
-        
-        // B02 fix (round 2): 添加 certificate_check 回调 — 接受任何 TLS 证书
-        // iOS TrollStore 环境下 OpenSSL 无法访问系统 CA 证书，导致 TLS 验证失败
-        callbacks.certificate_check = certCheckCallback
-
-        // B02 fix (round 2): 只有有 token 时才设置 credentials 回调
-        // 公开仓库不需要凭据，设置凭据回调可能导致 libgit2 尝试认证而失败
-        // 注意：payload 必须在 git_remote_fetch 之后才能释放，所以 defer 在函数级别
-        var payloadPointer: UnsafeMutableRawPointer? = nil
-        if !token.isEmpty {
-            let payload = GitCredentialsPayload(username: username, token: token)
-            payloadPointer = Unmanaged.passRetained(payload).toOpaque()
-            callbacks.credentials = credentialsCallback
-            callbacks.payload = payloadPointer
-        }
-        defer {
-            if let ptr = payloadPointer {
-                Unmanaged<GitCredentialsPayload>.fromOpaque(ptr).release()
-            }
-        }
-
-        // 配置 fetch 选项
-        var fetchOpts = git_fetch_options()
-        git_fetch_init_options(&fetchOpts, numericCast(GIT_FETCH_OPTIONS_VERSION))
-        fetchOpts.callbacks = callbacks
-
-        // B02 fix (round 2): 添加诊断日志
-        let remoteUrl = git_remote_url(remote).map { String(cString: $0) } ?? "(unknown)"
-        baizeLogger.info("GitService.fetch: remote URL = \(remoteUrl), hasToken = \(!token.isEmpty)")
-
-        // 执行 fetch — refspec: +refs/heads/*:refs/remotes/origin/*
-        let refspec = "+refs/heads/*:refs/remotes/\(BaizeGit.defaultRemoteName)/*"
-        let cRefspec = strdup(refspec)
-        defer { free(cRefspec) }
-        var refspecPtrs: [UnsafeMutablePointer<CChar>?] = [cRefspec]
-        var refs = git_strarray(strings: &refspecPtrs, count: 1)
-
-        let fetchCode = git_remote_fetch(remote, &refs, &fetchOpts, nil)
-        baizeLogger.info("GitService.fetch: git_remote_fetch returned \(fetchCode)")
-        
-        if fetchCode != 0 {
-            let errMsg: String
-            if let errPtr = git_error_last() {
-                errMsg = errPtr.pointee.message.map { String(cString: $0) } ?? "Unknown error"
-            } else {
-                errMsg = "Unknown error"
-            }
-            baizeLogger.error("GitService.fetch: fetch failed: \(errMsg)")
-            throw GitError.operationFailed("git fetch 失败: \(errMsg)")
-        }
-        
-        try checkGit(fetchCode, operation: "git_remote_fetch")
-
-        // 获取统计信息
-        let stats = git_remote_stats(remote)
-        let receivedBytes: Int
-        if let s = stats {
-            receivedBytes = Int(s.pointee.received_bytes)
-        } else {
-            receivedBytes = 0
-        }
-        
-        baizeLogger.info("GitService.fetch: received \(receivedBytes) bytes, indexed \(stats.map { Int($0.pointee.indexed_objects) } ?? 0) objects")
-        
-        // B02 fix (round 2): 如果接收 0 字节，给出警告但不算错误
-        // 可能是远程没有新提交，也可能是 HTTPS 传输问题
-        if receivedBytes == 0 {
-            baizeLogger.warning("GitService.fetch: received 0 bytes — remote may be up-to-date or HTTPS transport issue")
-        }
-
-        return GitFetchResult(updatedBranches: 1, receivedBytes: receivedBytes)
+        // T03: 实际网络 fetch 交给 GitShellService（bundle 内 git 二进制 + 正确 CA 证书）
+        return try await gitShellService.fetch()
     }
 
     // MARK: - Pull (T02 #1)
 
     /// 拉取并合并远程更新到当前分支（fetch + merge）
-    /// fast-forward 优先；冲突时返回冲突文件列表
+    /// T03: 使用 GitShellService（git 二进制）执行 pull，避免 iOS libgit2 + OpenSSL 的 TLS 问题
+    /// 冲突时返回冲突文件列表
     func pull() async throws -> GitMergeResult {
-        // 先执行 fetch
-        _ = try await fetch()
-
-        let repo = try openRepository()
-        defer { git_repository_free(repo) }
-
-        let branchName = try getCurrentBranchName(repo: repo)
-        let remoteTrackingRefName = "refs/remotes/\(BaizeGit.defaultRemoteName)/\(branchName)"
-
-        // 查找远程跟踪分支引用
-        var remoteRef: OpaquePointer? = nil
-        let refLookupCode = git_reference_lookup(&remoteRef, repo, remoteTrackingRefName)
-        if refLookupCode != 0 {
-            throw GitError.operationFailed("远程跟踪分支不存在: \(remoteTrackingRefName)")
-        }
-        defer { git_reference_free(remoteRef) }
-
-        // 从引用创建 annotated commit
-        var annotated: OpaquePointer? = nil
-        try checkGit(
-            git_annotated_commit_from_ref(&annotated, repo, remoteRef),
-            operation: "git_annotated_commit_from_ref"
-        )
-        defer { git_annotated_commit_free(annotated) }
-
-        // 检查是否已经是最新的（HEAD == 远程跟踪分支）
-        var headCommit = try getHeadCommitHandle(repo: repo)
-        defer { git_commit_free(headCommit) }
-        let headOid = git_commit_id(headCommit)
-        let remoteOid = git_annotated_commit_id(annotated)
-
-        let isUpToDate = headOid != nil && remoteOid != nil &&
-            git_oid_equal(headOid, remoteOid) != 0
-        if isUpToDate {
-            return GitMergeResult(success: true, conflictFiles: [], isFastForward: true)
-        }
-
-        // 执行 merge
-        var mergeOpts = git_merge_options()
-        git_merge_options_init(&mergeOpts, numericCast(GIT_MERGE_OPTIONS_VERSION))
-
-        var checkoutOpts = git_checkout_options()
-        git_checkout_init_options(&checkoutOpts, numericCast(GIT_CHECKOUT_OPTIONS_VERSION))
-        checkoutOpts.checkout_strategy = numericCast(GIT_CHECKOUT_SAFE.rawValue)
-
-        var theirHeads: [OpaquePointer?] = [annotated]
-        let mergeCode = git_merge(repo, &theirHeads, 1, &mergeOpts, &checkoutOpts)
-
-        if mergeCode < 0 {
-            let conflicts = try checkMergeConflicts(repo: repo)
-            if !conflicts.isEmpty {
-                return GitMergeResult(success: false, conflictFiles: conflicts, isFastForward: false)
-            }
-            try checkGit(mergeCode, operation: "git_merge")
-        }
-
-        // 检查冲突
-        let conflicts = try checkMergeConflicts(repo: repo)
-        if !conflicts.isEmpty {
-            return GitMergeResult(success: false, conflictFiles: conflicts, isFastForward: false)
-        }
-
-        // 检查是否为 fast-forward（repository state 应为 NONE）
-        let state = git_repository_state(repo)
-        let isFF = state == 0 // GIT_REPOSITORY_STATE_NONE
-
-        return GitMergeResult(success: true, conflictFiles: [], isFastForward: isFF)
+        return try await gitShellService.pull()
     }
 
     // MARK: - Merge (T02 #2)
@@ -1652,72 +1483,15 @@ actor GitService {
     // MARK: - Clone (T02 #7)
 
     /// 克隆远程仓库到指定路径
+    /// T03: 使用 GitShellService（git 二进制）执行 clone，避免 iOS libgit2 + OpenSSL 的 TLS 问题
     /// - Parameters:
     ///   - remoteURL: 远程仓库 URL（HTTPS 或 SSH）
     ///   - toPath: 本地目标路径
-    ///   - progressHandler: 可选进度回调（0.0–1.0 + 状态文本）
+    ///   - progressHandler: 可选进度回调（当前由 GitShellService 内部日志替代）
     func clone(remoteURL: String, toPath: String,
                progressHandler: ((Double, String) -> Void)?) async throws {
-        guard let token = keychainService.loadGitToken(), !token.isEmpty else {
-            throw GitError.credentialsMissing
-        }
-        let username = UserDefaults.standard.string(forKey: BaizeGit.usernameUDKey) ?? "git"
-
-        // 检查目标目录是否已存在且非空
-        let fileManager = FileManager.default
-        if fileManager.fileExists(atPath: toPath) {
-            let contents = (try? fileManager.contentsOfDirectory(atPath: toPath)) ?? []
-            if !contents.isEmpty {
-                throw GitError.directoryExists(toPath)
-            }
-        } else {
-            // 创建目标目录
-            try fileManager.createDirectory(atPath: toPath, withIntermediateDirectories: true)
-        }
-
-        // 通知开始
         progressHandler?(0.0, "正在克隆 \(remoteURL)...")
-
-        // 配置 clone 选项
-        var cloneOpts = git_clone_options()
-        git_clone_options_init(&cloneOpts, numericCast(GIT_CLONE_OPTIONS_VERSION))
-
-        // 配置回调（复用 credentialsCallback）
-        let payload = GitCloneProgressPayload(username: username, token: token)
-        let payloadPointer = Unmanaged.passRetained(payload).toOpaque()
-        defer { Unmanaged<GitCloneProgressPayload>.fromOpaque(payloadPointer).release() }
-
-        var callbacks = git_remote_callbacks()
-        git_remote_init_callbacks(&callbacks, numericCast(GIT_REMOTE_CALLBACKS_VERSION))
-        callbacks.credentials = credentialsCallback
-        callbacks.payload = payloadPointer
-
-        cloneOpts.fetch_opts.callbacks = callbacks
-
-        // 执行 clone
-        var clonedRepo: OpaquePointer? = nil
-        let cloneCode = remoteURL.withCString { urlPtr in
-            toPath.withCString { pathPtr in
-                git_clone(&clonedRepo, urlPtr, pathPtr, &cloneOpts)
-            }
-        }
-
-        if cloneCode < 0 {
-            let errMsg: String
-            if let errPtr = git_error_last() {
-                errMsg = errPtr.pointee.message.map { String(cString: $0) } ?? "Unknown error"
-            } else {
-                errMsg = "Unknown error"
-            }
-            throw GitError.cloneFailed(errMsg)
-        }
-
-        // 释放 clone 返回的 repository 对象
-        if let repo = clonedRepo {
-            git_repository_free(repo)
-        }
-
-        // 通知完成
+        try await gitShellService.clone(url: remoteURL, toPath: toPath)
         progressHandler?(1.0, "克隆完成")
     }
 
