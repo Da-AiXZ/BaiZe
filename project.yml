@@ -42,6 +42,10 @@ targets:
       - path: Baize/Baize/Resources/skills
         type: folder
         buildPhase: resources
+      # T01: 平台二进制资源占位（git / CA 证书 / mkdir），T03 替换为真实二进制
+      - path: Baize/Baize/Resources/binaries
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: ios_system
         product: ios_system
@@ -269,3 +273,22 @@ targets:
 
           echo "=== Sub-framework embedding complete ==="
         basedOnDependencyAnalysis: false
+
+  BaizeTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget:
+      iOS: "16.0"
+    sources:
+      - Baize/BaizeTests
+    dependencies:
+      - target: Baize
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.baize.app.tests
+        PRODUCT_NAME: BaizeTests
+        TARGETED_DEVICE_FAMILY: "2"
+        ARCHS: arm64
+        SWIFT_VERSION: "5.9"
+        GENERATE_INFOPLIST_FILE: YES
+        SUPPORTS_MACCATALYST: NO

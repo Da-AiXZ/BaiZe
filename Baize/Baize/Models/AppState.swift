@@ -159,6 +159,9 @@ class AppState: ObservableObject {
     /// File System Service
     var fileSystemService: FileSystemService?
 
+    /// T01: Platform File System（actor，T02 将替换 FileSystemService）
+    var platformFileSystem: PlatformFileSystem?
+
     /// Runtime Executor
     var runtimeExecutor: RuntimeExecutor?
 

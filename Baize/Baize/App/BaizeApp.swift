@@ -34,6 +34,9 @@ struct BaizeApp: App {
     /// File System Service
     private let fileSystemService: FileSystemService
 
+    /// T01: Platform File System（actor）— 在其他服务之前创建，T02 替换 FileSystemService
+    private let platformFileSystem: PlatformFileSystem
+
     /// Runtime Executor
     private let runtimeExecutor: RuntimeExecutor
 
@@ -62,6 +65,10 @@ struct BaizeApp: App {
 
         // 检测可用的工作目录：优先 TrollStore no-sandbox 路径，失败则用沙箱 Documents
         let workingRoot = BaizeApp.resolveWorkingDirectory()
+
+        // T01: PlatformFileSystem 必须在其他服务之前创建
+        // 读操作保留 FileManager，写操作通过可插拔 FileSystemStrategy 执行
+        let platformFS = PlatformFileSystem(rootPath: workingRoot)
 
         let fsService = FileSystemService(rootPath: workingRoot)
         let nodeEngine = NodeRuntimeEngine()
@@ -101,6 +108,7 @@ struct BaizeApp: App {
         self.contextManager = contextMgr
         self.conversationStore = conversation
         self.fileSystemService = fsService
+        self.platformFileSystem = platformFS
         self.runtimeExecutor = runtime
         self.nodeRuntimeEngine = nodeEngine
         self.pythonRuntimeEngine = pythonEngine
@@ -130,6 +138,7 @@ struct BaizeApp: App {
             state.contextManager = contextMgr
             state.conversationStore = conversation
             state.fileSystemService = fsService
+            state.platformFileSystem = platformFS
             state.runtimeExecutor = runtime
             state.pythonRuntimeEngine = pythonEngine
             state.currentProjectPath = workingRoot
@@ -185,6 +194,10 @@ struct BaizeApp: App {
         let restoredModel = appState.activeModel
 
         Task {
+            // T01: 探测平台文件系统能力
+            let capabilities = await platformFS.probe()
+            baizeLogger.info("PlatformFileSystem capabilities: \(capabilities)")
+
             // R1: 加载内置技能和用户技能
             await skillReg.loadBundledSkills()
             await skillReg.loadUserSkills()

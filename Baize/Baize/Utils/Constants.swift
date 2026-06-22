@@ -624,3 +624,30 @@ enum BaizeGit {
     /// 用于 App 重启后恢复上次的项目路径，确保终端历史等按项目隔离的数据能正确加载
     static let lastProjectPathUDKey = "com.baize.last-project-path"
 }
+
+// MARK: - T01: Platform Binary Paths
+
+/// App Bundle 内平台二进制路径占位（T03 替换为真实二进制）
+enum BaizeBinary {
+    /// App Bundle 内 Git 二进制路径
+    static let gitBinaryPath: String = Bundle.main.path(forResource: "git", ofType: nil, inDirectory: "binaries") ?? "binaries/git"
+
+    /// App Bundle 内 CA 证书包路径
+    static let caBundlePath: String = Bundle.main.path(forResource: "cacert", ofType: "pem", inDirectory: "binaries") ?? "binaries/cacert.pem"
+
+    /// App Bundle 内 mkdir 二进制路径
+    static let mkdirBinaryPath: String = Bundle.main.path(forResource: "mkdir", ofType: nil, inDirectory: "binaries") ?? "binaries/mkdir"
+}
+
+// MARK: - T01: File System Strategy
+
+/// 文件系统写操作策略类型
+/// 实际策略协议名为 `FileSystemStrategy`，本枚举用于在 PlatformFileSystem 中选择策略
+enum FileSystemStrategyType: String, Sendable, CaseIterable, Codable {
+    /// 使用 FileManager 执行写操作（默认，始终可用）
+    case fileManager
+    /// 使用 POSIX spawn 执行写操作（T01 stub，T02 填满）
+    case posixSpawn
+    /// 使用 ios_system 执行写操作（T01 stub，T02 填满）
+    case iosSystem
+}
