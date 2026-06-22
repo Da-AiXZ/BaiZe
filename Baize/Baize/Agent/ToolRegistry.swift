@@ -148,4 +148,41 @@ actor ToolRegistry {
         tools.values.filter { $0.isAvailable(context: context) }
     }
 
+    // MARK: - Phase 1: 硬拦截层
+
+    /// 检查工具在指定权限模式下是否启用
+    /// Phase 1: 当 mode == .plan 且工具不是 readOnly 时，返回 false
+    /// 这样 PlanMode 下 LLM 根本看不到写操作工具
+    /// - Parameters:
+    ///   - toolName: 工具名称
+    ///   - mode: 当前权限模式
+    /// - Returns: 工具是否对 LLM 可见
+    func isEnabled(toolName: String, mode: PermissionMode) -> Bool {
+        guard mode == .plan else { return true }
+        guard let tool = tools[toolName] else { return false }
+        return tool.isReadOnly
+    }
+
+    /// 获取指定权限模式下启用的工具定义列表
+    /// Phase 1: 在 plan 模式下只返回 readOnly 工具的定义
+    /// - Parameter mode: 当前权限模式
+    /// - Returns: 启用的工具定义列表
+    func getToolDefinitions(mode: PermissionMode) -> [ToolDefinition] {
+        tools.values
+            .filter { isEnabled(toolName: $0.name, mode: mode) }
+            .map { $0.toDefinition() }
+    }
+
+    /// 获取指定权限模式且上下文可用的工具定义列表
+    /// Phase 1: 在 plan 模式下只返回 readOnly 工具，并额外过滤 isAvailable
+    /// - Parameters:
+    ///   - mode: 当前权限模式
+    ///   - context: 工具执行上下文
+    /// - Returns: 启用的工具定义列表
+    func getToolDefinitions(mode: PermissionMode, context: ToolExecutionContext) -> [ToolDefinition] {
+        tools.values
+            .filter { isEnabled(toolName: $0.name, mode: mode) && $0.isAvailable(context: context) }
+            .map { $0.toDefinition() }
+    }
+
 }

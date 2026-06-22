@@ -511,6 +511,7 @@ extension PermissionMode {
         case .acceptEdits: return "E"
         case .plan: return "P"
         case .bypass: return "B"
+        case .dontAsk: return "N"
         }
     }
 
@@ -521,6 +522,7 @@ extension PermissionMode {
         case .acceptEdits: return Color.baizeSuccess
         case .plan: return Color.baizeAccent
         case .bypass: return Color.baizeError
+        case .dontAsk: return Color.gray
         }
     }
 }

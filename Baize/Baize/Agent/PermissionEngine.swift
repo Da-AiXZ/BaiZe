@@ -5,7 +5,7 @@ import Foundation
 ///   readOnly 工具 → allow（自动允许）
 ///   destructive 工具 → ask（需要确认）
 ///   删除关键文件 → deny（直接拒绝）
-/// 支持 4 种权限模式切换（default/acceptEdits/plan/bypass）
+/// 支持 5 种权限模式切换（default/acceptEdits/plan/bypass/dontAsk）
 /// W4 fix: 改为 actor 确保状态共享 + 线程安全
 /// 权限模式变更通过 actor isolation 保证即时传播且无数据竞争
 actor PermissionEngine {
@@ -98,17 +98,16 @@ actor PermissionEngine {
     }
 
     /// 评估工具调用的权限决策
-    /// R1 扩展：改为 async 以支持调用 ToolRegistry 动态查询 + tool.needsPermission() 运行时判断
-    /// 不破坏现有 .allow/.ask/.deny 逻辑：在现有逻辑基础上新增 needsPermission 调用
+    /// Phase 1: 统一为单一决策点，PlanModeState 硬拦截内置于此
     /// - Parameters:
     ///   - toolCall: 待评估的工具调用
-    ///   - context: 工具执行上下文
+    ///   - context: 工具执行上下文（包含 planModeState）
     /// - Returns: PermissionDecision（effect + reason）
     func evaluate(toolCall: ToolCall, context: ToolExecutionContext) async -> PermissionDecision {
         let toolName = toolCall.name
         let arguments = toolCall.parsedArguments()
 
-        // Step 1: 终极安全检查 — 某些操作始终拒绝
+        // Step 1: 终极安全检查 — 某些操作始终拒绝（不可通过任何模式绕过）
         if isAlwaysDenied(toolCall: toolCall) {
             return PermissionDecision(
                 effect: .deny,
@@ -116,17 +115,31 @@ actor PermissionEngine {
             )
         }
 
-        // Step 2: 根据权限模式决策（现有逻辑不变）
+        // 统一查询工具属性，后续所有判断都基于此
+        let toolInfo = await findTool(name: toolName)
+
+        // Step 2: PlanMode 硬拦截 — 独立安全层，不受 bypass 影响
+        // 当用户通过 enter_plan_mode 进入规划阶段后，任何非只读工具均直接拒绝
+        if let planModeState = context.planModeState {
+            let isInPlanMode = await planModeState.isInPlanMode()
+            if isInPlanMode, let info = toolInfo, !info.isReadOnly {
+                return PermissionDecision(
+                    effect: .deny,
+                    reason: "计划模式下禁止写操作: \(toolName)"
+                )
+            }
+        }
+
+        // Step 3: 根据权限模式决策
         let decision: PermissionDecision
         switch mode {
         case .bypass:
-            // 绕过模式：所有操作自动允许（但仍检查终极安全）
+            // 绕过模式：所有操作自动允许（终极安全检查已通过）
             decision = PermissionDecision(effect: .allow, reason: "绕过模式：自动允许")
 
         case .plan:
             // 只读规划模式：只允许 readOnly 工具
-            let toolInfo = await findTool(name: toolName)
-            if let toolInfo = toolInfo, toolInfo.isReadOnly {
+            if let info = toolInfo, info.isReadOnly {
                 decision = PermissionDecision(effect: .allow, reason: "只读规划：只读操作允许")
             } else {
                 decision = PermissionDecision(
@@ -136,15 +149,13 @@ actor PermissionEngine {
             }
 
         case .acceptEdits:
-            // 接受编辑模式：自动接受文件编辑，执行命令仍需确认
-            let toolInfo = await findTool(name: toolName)
-            if let toolInfo = toolInfo {
-                if toolInfo.isReadOnly {
+            // 接受编辑模式：自动接受文件编辑，执行命令和删除仍需确认
+            if let info = toolInfo {
+                if info.isReadOnly {
                     decision = PermissionDecision(effect: .allow, reason: "接受编辑：只读操作自动允许")
-                } else if !toolInfo.isDestructive && isFileEditTool(toolName: toolName) {
+                } else if !info.isDestructive && isFileEditTool(toolName: toolName) {
                     decision = PermissionDecision(effect: .allow, reason: "接受编辑：文件编辑自动允许")
                 } else {
-                    // 执行命令和删除操作仍需确认
                     decision = PermissionDecision(
                         effect: .ask,
                         reason: buildAskReason(toolCall: toolCall)
@@ -154,13 +165,13 @@ actor PermissionEngine {
                 decision = PermissionDecision(effect: .ask, reason: "接受编辑：未知工具需确认")
             }
 
-        case .default:
-            // 默认模式：readOnly → allow, destructive → ask, 删除关键 → deny
-            let toolInfo = await findTool(name: toolName)
-            if let toolInfo = toolInfo {
-                if toolInfo.isReadOnly {
+        case .default, .dontAsk:
+            // 默认模式：readOnly → allow, destructive → ask/deny, 其他 → ask
+            // dontAsk 模式在后续步骤将 .ask 转为 .deny
+            if let info = toolInfo {
+                if info.isReadOnly {
                     decision = PermissionDecision(effect: .allow, reason: "只读操作自动允许")
-                } else if toolInfo.isDestructive {
+                } else if info.isDestructive {
                     // 检查是否删除关键文件
                     if isCriticalFileDeletion(toolCall: toolCall) {
                         decision = PermissionDecision(
@@ -185,8 +196,7 @@ actor PermissionEngine {
             }
         }
 
-        // B07 fix: 检查会话级授权 — "本次会话不再询问"的工具直接放行
-        // 在 needsPermission 检查之前，将 .ask 转为 .allow
+        // Step 4: 检查会话级授权 — "本次会话不再询问"的工具直接放行
         if decision.effect == .ask {
             let operationKey = buildOperationKey(toolCall: toolCall)
             if hasSessionApproval(forTool: toolName, operation: operationKey) {
@@ -194,28 +204,38 @@ actor PermissionEngine {
             }
         }
 
-        // Step 3: R1 新增 — 运行时 needsPermission() 检查
+        // Step 5: R1 运行时 needsPermission() 检查
         // 在现有决策基础上，调用工具自身的 needsPermission() 做运行时权限判断
         // 只有当现有决策为 .allow 时才检查（.ask 和 .deny 已经足够严格）
-        // B06 fix: bypass 模式跳过 needsPermission 检查，确保 bypass 真正绕过所有权限
-        if decision.effect == .allow, mode != .bypass, let registry = toolRegistry {
+        // bypass 模式跳过 needsPermission 检查，确保 bypass 真正绕过所有权限
+        var finalDecision = decision
+        if finalDecision.effect == .allow, mode != .bypass, let registry = toolRegistry {
             let tool = await registry.getTool(name: toolName)
             let toolPermission = tool?.needsPermission(input: arguments, context: context)
 
             switch toolPermission {
             case .deny(let reason):
                 // 工具自身拒绝 — 覆盖为 ask（不直接 deny，给用户确认机会）
-                return PermissionDecision(effect: .ask, reason: reason)
+                finalDecision = PermissionDecision(effect: .ask, reason: reason)
             case .ask(let reason):
                 // 工具自身要求确认 — 覆盖为 ask
-                return PermissionDecision(effect: .ask, reason: reason)
+                finalDecision = PermissionDecision(effect: .ask, reason: reason)
             case .allow, .none:
                 // 工具自身允许或无工具实现 — 保持现有决策
-                return decision
+                break
             }
         }
 
-        return decision
+        // Step 6: dontAsk 模式 — 最终把仍需要确认的 .ask 转为 .deny
+        // 已经 allow 或 deny 的决策不受影响；会话授权过的 allow 也不受影响
+        if mode == .dontAsk && finalDecision.effect == .ask {
+            return PermissionDecision(
+                effect: .deny,
+                reason: "不询问模式：自动拒绝需要确认的操作"
+            )
+        }
+
+        return finalDecision
     }
 
     // MARK: - Private Helpers
@@ -312,39 +332,19 @@ actor PermissionEngine {
         }
     }
 
-    /// 查找工具信息（R1 扩展：优先使用 ToolRegistry 动态查询，回退到硬编码列表）
+    /// 查找工具信息（Phase 1：完全依赖 ToolRegistry 动态查询）
+    /// 删除硬编码回退列表，确保所有工具属性来自单一真实来源（ToolRegistry）
     /// - Parameter name: 工具名称
     /// - Returns: ToolInfo（工具名、是否只读、是否危险）
-    /// R1 变更：优先从 ToolRegistry 查询 Tool 实例，获取 isReadOnly/isDestructive 属性
-    /// 如果 ToolRegistry 不可用（nil）或工具未注册，回退到硬编码 ToolInfo 列表
-    /// 这保证了现有 10 个工具在 ToolRegistry 注入前后都能正常工作
     private func findTool(name: String) async -> ToolInfo? {
-        // 优先：从 ToolRegistry 动态查询
-        if let registry = toolRegistry {
-            let tool = await registry.getTool(name: name)
-            if let tool = tool {
-                return ToolInfo(
-                    name: tool.name,
-                    isReadOnly: tool.isReadOnly,
-                    isDestructive: tool.isDestructive
-                )
-            }
-        }
-
-        // 回退：硬编码工具属性信息（确保 ToolRegistry 未注入时仍可工作）
-        let toolInfos: [String: ToolInfo] = [
-            "read_file": ToolInfo(name: "read_file", isReadOnly: true, isDestructive: false),
-            "write_file": ToolInfo(name: "write_file", isReadOnly: false, isDestructive: true),
-            "edit_file": ToolInfo(name: "edit_file", isReadOnly: false, isDestructive: true),
-            "list_directory": ToolInfo(name: "list_directory", isReadOnly: true, isDestructive: false),
-            "search_files": ToolInfo(name: "search_files", isReadOnly: true, isDestructive: false),
-            "search_content": ToolInfo(name: "search_content", isReadOnly: true, isDestructive: false),
-            "delete_file": ToolInfo(name: "delete_file", isReadOnly: false, isDestructive: true),
-            "execute_command": ToolInfo(name: "execute_command", isReadOnly: false, isDestructive: true),
-            "run_node": ToolInfo(name: "run_node", isReadOnly: false, isDestructive: true),
-            "run_python": ToolInfo(name: "run_python", isReadOnly: false, isDestructive: true),
-        ]
-        return toolInfos[name]
+        guard let registry = toolRegistry else { return nil }
+        let tool = await registry.getTool(name: name)
+        guard let tool = tool else { return nil }
+        return ToolInfo(
+            name: tool.name,
+            isReadOnly: tool.isReadOnly,
+            isDestructive: tool.isDestructive
+        )
     }
 }
 

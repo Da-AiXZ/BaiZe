@@ -251,7 +251,14 @@ actor AgentLoop {
                 contextUsageEmitCount = 0
             }
 
-            let toolDefinitions = await toolRegistry.getToolDefinitions()
+            // Phase 1: 计算有效权限模式
+            // PlanMode 状态机（用户通过 enter_plan_mode 进入规划阶段）是独立安全层
+            // 当 PlanModeState 处于 planning/awaitingApproval 时，对 LLM 只暴露 readOnly 工具
+            let currentPermissionMode = await permissionEngine.getMode()
+            let isPlanModeActive = await planModeState?.isInPlanMode() ?? false
+            let effectiveMode = isPlanModeActive ? PermissionMode.plan : currentPermissionMode
+
+            let toolDefinitions = await toolRegistry.getToolDefinitions(mode: effectiveMode)
 
             // 2. 调用 LLM API（SSE 流式）
             // 修复 C3：使用 promptContext.messages（含 system prompt + BAIZE.md + 压缩历史）
@@ -356,20 +363,8 @@ actor AgentLoop {
 
                     switch decision.effect {
                     case .allow:
-                        // R1: PlanMode 拦截写操作 — 计划模式下禁止非只读工具
-                        // B05 fix (round 2): PlanMode 写操作拦截是独立的安全约束，任何权限模式（包括 bypass）都不能跳过
-                        // 之前的 `currentMode != .bypass` 条件导致 bypass 模式能绕过 PlanMode 只读限制，这是设计错误
-                        if let planMode = planModeState {
-                            let isInPlan = await planMode.isInPlanMode()
-                            if isInPlan && !isToolReadOnly(name: name) {
-                                let deniedResult = ToolResult.denied(reason: "计划模式下禁止写操作: \(name)")
-                                continuation.yield(.denied(toolCall, "计划模式下禁止写操作"))
-                                session.messages.append(.toolResult(id: id, content: deniedResult.toToolResultContent()))
-                                consecutiveFailures += 1
-                                userDeniedTool = true
-                                break
-                            }
-                        }
+                        // Phase 1: PlanMode 写操作拦截已统一移至 PermissionEngine.evaluate
+                        // AgentLoop 只根据 PermissionDecision 执行，不再做独立 PlanMode 判断
 
                         // P0-3 fix: 在执行 exit_plan_mode 工具之前，先发射 .planApprovalRequested 事件
                         // 这样 UI 能收到事件弹出 PlanApprovalView sheet，用户审批后 continuation 恢复
@@ -432,20 +427,8 @@ actor AgentLoop {
                             Task { await self.cancelPendingConfirmation() }
                         }
                         if allowed {
-                            // B05 fix: PlanMode 拦截写操作 — 计划模式下即使用户同意也不执行写操作
-                            // 之前只在 .allow 路径有此检查，.ask 路径缺失导致用户同意后可绕过计划模式只读限制
-                            // B05 fix (round 2): 移除 currentMode != .bypass 条件，PlanMode 拦截不应被任何模式跳过
-                            if let planMode = planModeState {
-                                let isInPlan = await planMode.isInPlanMode()
-                                if isInPlan && !isToolReadOnly(name: name) {
-                                    let deniedResult = ToolResult.denied(reason: "计划模式下禁止写操作: \(name)")
-                                    continuation.yield(.denied(toolCall, "计划模式下禁止写操作"))
-                                    session.messages.append(.toolResult(id: id, content: deniedResult.toToolResultContent()))
-                                    consecutiveFailures += 1
-                                    userDeniedTool = true
-                                    break
-                                }
-                            }
+                            // Phase 1: PlanMode 写操作拦截已统一移至 PermissionEngine.evaluate
+                            // PlanMode 下写工具会被直接 deny，不会进入 .ask 分支，因此无需二次判断
 
                             // 用户允许 — 执行工具（与 .allow 路径一致）
                             // P0-3 fix: 在执行 exit_plan_mode 工具之前，先发射 .planApprovalRequested 事件
@@ -685,20 +668,6 @@ actor AgentLoop {
             }
         }
         return items
-    }
-
-    // MARK: - R1 Helper: PlanMode Tool Read-Only Check
-
-    /// 检查工具是否为只读（用于 PlanMode 拦截）
-    /// 只读工具列表：read_file, list_directory, search_files, search_content, web_search, web_fetch,
-    /// todo_write, ask_user_question, enter_plan_mode, exit_plan_mode
-    private func isToolReadOnly(name: String) -> Bool {
-        let readOnlyTools: Set<String> = [
-            "read_file", "list_directory", "search_files", "search_content",
-            "web_search", "web_fetch", "todo_write", "ask_user_question",
-            "enter_plan_mode", "exit_plan_mode", "skill"
-        ]
-        return readOnlyTools.contains(name)
     }
 
     // MARK: - R1: Skill Matching
