@@ -53,9 +53,29 @@
 ### 阶段四：真机测试 + 25 个 Bug 反馈（09:00 - 12:46）
 
 - 用户下载 CI #126 IPA 安装测试
-- 反馈 25 个 Bug（见第 4 节）
+- 反馈 25 个 Bug（见第 2 节）
 - 用户要求：先写交接文档（防中断）→ 再按优先级修
-- **当前正在进行**：写本交接文档 + 准备修 P0 Bug
+
+### 阶段五：P0 Bug 修复（12:46 - 15:00）
+
+- 用户积分即将耗尽，要求先写交接文档再修 Bug
+- 写交接文档 v14（含 25 Bug 优先级排序 + 修复进度跟踪）
+- 核验 P0 根因（读 PermissionEngine/AgentLoop/PlanModeState/ExitPlanModeTool/ChatView 等代码）
+- 工程师寇豆码一次性修完 5 个 P0 Bug（8 文件，958 行改动）
+- commit `5d63d75` → CI #127 ✅ 成功
+- 用户积分耗尽，P0 未经真机验证，留给下一位 AI
+
+### ⚠️ 踩坑记录（本次会话新增）
+
+1. **GitHub secret scanning 拒绝 push**：交接文档里写了明文 token，push 被拒。解决方案：文档里不写明文 token，用 `<见 git remote>` 代替。已经踩过一次，下次注意。
+
+2. **iPad horizontalSizeClass 永远是 .regular**：架构师设计 R3 时以为 regular=横屏 compact=竖屏，但 iPad 两个方向都是 regular，导致 TabView 分支（含设置/首页/工作台）永不执行。修复：加右侧栏 + sheet。
+
+3. **PlanMode 的 .planApprovalRequested 事件发射时机**：ExitPlanModeTool.execute 调用 planModeState.exit() 会挂起等审批，但挂起前没发射事件 → UI 收不到 → sheet 不弹 → continuation 永久挂起。修复：在执行工具前先发射事件。
+
+4. **子 agent 不应该用 .plan 模式**：AgentTool 创建子 agent 时强制 .plan 模式，导致子 agent 只能读不能写。改为 .default。
+
+5. **bypass 模式不应该被 PlanMode 拦截**：即使 bypass 模式 PermissionEngine 返回 .allow，但 PlanMode 拦截在 .allow 分支内，只要 isInPlanMode==true 就拦截。修复：拦截前检查 currentMode != .bypass。
 
 ---
 
@@ -113,12 +133,49 @@
 - ✅ P0-5 Bug #3 工具参数显示：updateToolCallStatus 更新 toolCall + 原始 JSON 回退 + 截断 300→2000
 
 ### 正在修
-*暂无（刚写完交接文档，准备开始 P0）*
+*暂无（P0 已修完，用户积分耗尽，待下一位 AI 修 P1）*
 
-### 待修（25 个）
-- P0: #7 创建项目权限 / #5-6 Git沙箱 / #15-17 PlanMode / #24 子agent权限 / #3 工具参数显示
-- P1: #1 流式 / #9 sheet黑屏 / #13 Skills / #14 Memory / #18 AskUser / #20 Slash / #22 搜索引擎 / #11 Monaco / #4 终端历史
-- P2: #8 折叠 / #12 Diff / #21 搜索理解 / #23 搜索质量 / #2 大小写
+### 待修（20 个 — P0 已全部修完）
+- ~~P0: #7 创建项目权限 / #5-6 Git沙箱 / #15-17 PlanMode / #24 子agent权限 / #3 工具参数显示~~ ✅ 已修
+- P1（9 个，下一步修）: #1 流式 / #9 sheet黑屏 / #13 Skills / #14 Memory / #18 AskUser / #20 Slash / #22 搜索引擎 / #11 Monaco / #4 终端历史
+- P2（5 个）: #8 折叠 / #12 Diff / #21 搜索理解 / #23 搜索质量 / #2 大小写
+
+### ⚠️ P0 修复未经真机验证
+P0 的 5 个 Bug 已修完 + CI #127 编译通过，但**用户积分耗尽，未能下载新 IPA 真机测试**。
+下一位 AI 的首要任务：
+1. 让用户下载 CI #127 的 IPA 安装测试 5 个 P0 修复
+2. 收集 P0 测试反馈，如有问题走 BugFix 快捷路径
+3. P0 确认 OK 后再修 P1（9 个）
+
+### P0 修复技术细节（供下一位 AI 参考）
+
+**P0-1 Bug #7 创建项目权限**（`Utils/Extensions.swift`）
+- ensureDirectoryExists 先尝试 FileManager.createDirectory，失败回退 posix_spawn mkdir -p
+- 如果真机测试仍失败，检查 entitlements 的 no-sandbox 是否生效，可能需要直接用 posix_spawn
+
+**P0-2 Bug #5-6 Git沙箱**（`Tools/ExecuteCommandTool.swift` + `Agent/Tool.swift` + `Agent/AgentLoop.swift` + `Views/Chat/ChatView.swift`）
+- ToolExecutionContext 新增 `gitService: GitService?` 属性
+- AgentLoop 新增 gitService 参数，ChatView 3 处创建传 appState.gitService
+- ExecuteCommandTool.execute 开头拦截 `command.hasPrefix("git ")` → 转给 executeGitCommand
+- executeGitCommand 支持: status/log/diff/add/commit/push/pull/init/branch/checkout
+- 如果 GitService 缺某些操作，需补充 GitService 实现
+- ⚠️ 子 agent 的 AgentLoop 没传 gitService（设计合理，子 agent 不需要 git 命令拦截）
+
+**P0-3 Bug #15-17 PlanMode**（`Agent/AgentLoop.swift` + `Agent/PlanMode/PlanModeState.swift`）
+- AgentLoop .allow 分支执行 exit_plan_mode 前先发射 `.planApprovalRequested(plan:)` 事件
+- AgentLoop .ask 分支用户允许后也先发射 `.planApprovalRequested(plan:)` 事件
+- PlanModeState.approve()/reject() resume continuation 后自动 reset 到 .idle
+- 数据流: AI 调 exit_plan_mode → AgentLoop 发射 planApprovalRequested → ChatView 弹 PlanApprovalView → 用户 approve/reject → planModeState.approve/reject → ExitPlanModeTool 返回 → emitSpecialToolEvents 发射 planApproved/Rejected
+
+**P0-4 Bug #24 子agent权限**（`Agent/SubAgent/AgentTool.swift` + `Agent/AgentLoop.swift`）
+- AgentTool line 49: `PermissionEngine(mode: .plan)` → `.default`
+- AgentLoop line 362-364: PlanMode 拦截前先 `await permissionEngine.getMode()` 检查 `currentMode != .bypass`
+- PermissionEngine 需要暴露 `func getMode() -> PermissionMode`（如果还没加需要加）
+
+**P0-5 Bug #3 工具参数显示**（`Views/Chat/ToolCallView.swift` + `Views/Chat/ChatView.swift`）
+- ChatView.updateToolCallStatus 新增 toolCall 参数，.toolExecuting/.toolResult/.denied 事件更新 UI 的 toolCall
+- ToolCallView.ArgumentsPreview: parsedArguments 为空时显示原始 JSON 字符串
+- ToolCallView.ResultPreview: 截断 300→2000，改用 ScrollView(maxHeight: 200) 滚动
 
 ---
 
@@ -135,8 +192,8 @@
 | 分支 | main |
 | 本地路径 | `C:\Users\netease\WorkBuddy\2026-06-21-18-14-27\baize` |
 | GitHub Token | `<见 git remote 或问用户，不写明文>`（⚠️ 已暴露建议撤销） |
-| 最新 commit | `942c560` (2026-06-22) |
-| 最新 CI | #126 ✅ 成功 |
+| 最新 commit | `38aeca3` (2026-06-22) |
+| 最新 CI | #127 ✅ 成功 |
 
 ### Token 获取方式
 - 方式 1: `git -C "C:\Users\netease\WorkBuddy\2026-06-21-18-14-27\baize" remote -v` 输出里包含 token
@@ -311,6 +368,7 @@ done
 | #124 | a4212f8 | ✅ | 14 Bug 修复 |
 | #125 | 300886e | ✅ | 配置备份/恢复 |
 | #126 | 942c560 | ✅ | iPad 入口右侧栏 |
+| #127 | 5d63d75 | ✅ | 5 个 P0 Bug 修复 |
 
 ---
 
@@ -561,4 +619,69 @@ baize/
 
 ---
 
-*生成时间: 2026-06-22 12:50 | 项目: 白泽 Baize iOS 本地编程智能体 | 阶段: 真机测试完成，25 Bug 待修 | 版本: v14*
+*生成时间: 2026-06-22 12:50 | 最后更新: 2026-06-22 15:05 | 项目: 白泽 Baize iOS 本地编程智能体 | 阶段: P0 已修5/25，待真机验证，P1(9)+P2(5)待修 | 版本: v14*
+
+---
+
+## 18. 本次会话完整 commit 历史
+
+| 序号 | commit | 说明 |
+|------|--------|------|
+| 1 | 9b212c8 | feat: 白泽重构 R1+R2+R3 主体代码（73 文件） |
+| 2 | 1015435 | fix: 20 个 Swift 6 编译错误（11 文件） |
+| 3 | 9a83c04 | fix: ContentView Group 包裹 if-else |
+| 4 | 0eeba75 | fix: WorkbenchSidebar content 闭包加 @escaping（位置错） |
+| 5 | c48f59c | fix: WorkbenchSidebar @escaping 放类型标注上（ViewBuilder 位置错） |
+| 6 | ba1c730 | fix: WorkbenchSidebar 正确的 @ViewBuilder + @escaping 语法 ✅ CI #123 |
+| 7 | a4212f8 | fix: 全量代码审查修复 14 个 Bug ✅ CI #124 |
+| 8 | 300886e | feat: 配置备份/恢复功能 ConfigBackupService ✅ CI #125 |
+| 9 | 942c560 | fix: iPad 右侧栏入口 ✅ CI #126 |
+| 10 | 5d63d75 | fix: 5 个 P0 Bug ✅ CI #127 |
+| 11 | 38aeca3 | docs: 交接文档 v14 更新 P0 进度 |
+
+## 19. P1 修复指引（供下一位 AI 参考）
+
+### P1-1 Bug #1 流式输出不流畅（一下出现很多字）
+- 文件：`Infrastructure/SSEStream.swift` + `Views/Chat/StreamingTextBuffer.swift` + `Views/Chat/ChatView.swift`
+- 核验：SSE 解析是否正确按 chunk 分发；StreamingTextBuffer 是否逐字/逐词刷新；ChatView 是否批量刷新
+- 方向：可能是 SSE buffer 没及时 flush，或 UI 用了 debounce 导致批量刷新
+
+### P1-2 Bug #9 sheet 黑屏
+- 文件：`Views/Chat/ChatView.swift`（PlanApprovalView/AskUserQuestionView 的 sheet）
+- 核验：sheet 内容视图是否 @MainActor；sheet 是否在正确时机弹出；视图初始化是否失败
+- 方向：可能 sheet 弹出时数据还没准备好，或视图缺少 @MainActor
+
+### P1-3 Bug #13 Skills 不可用
+- 文件：`Agent/Skills/SkillRegistry.swift` + `Tools/SkillTool.swift` + `App/BaizeApp.swift`
+- 核验：BaizeApp 是否调用了 skillReg.loadBundledSkills()；SkillRegistry 三级目录扫描是否正确；SkillTool.execute 是否正确调用
+- 方向：loadBundledSkills 可能在 Task 块里异步执行，但 AI 调用时还没加载完；或 bundled skills 路径不对
+
+### P1-4 Bug #14 Memory 不自动提取
+- 文件：`Agent/Memory/MemoryExtractor.swift` + `Agent/Memory/MemoryStore.swift` + `Agent/AgentLoop.swift`
+- 核验：AgentLoop 的 .completed 分支是否调用 extractMemories；MemoryStore 的目录创建是否失败静默跳过
+- 方向：extractMemories 可能没被调用，或目录创建失败
+
+### P1-5 Bug #18 AskUserQuestion 异常
+- 文件：`Tools/AskUserQuestionTool.swift` + `Views/Dialogs/AskUserQuestionView.swift` + `Agent/AgentLoop.swift`
+- 核验：AskUserQuestionTool 是否正确发射 .askUserQuestion 事件；AskUserQuestionView 的用户回答是否正确回传；AgentLoop 是否正确接收用户回答
+- 方向：用户回答的回传 continuation 可能没正确 resume
+
+### P1-6 Bug #20 Slash 无补全
+- 文件：`Views/Chat/ChatInputView.swift` + `Agent/Commands/CommandRegistry.swift`
+- 核验：ChatInputView 的 / 检测逻辑；CommandRegistry.parse 的实现；命令补全 UI
+- 方向：可能 Task @MainActor in 改动后（之前修 CI 时改的）影响了 commandRegistry 访问
+
+### P1-7 Bug #22 搜索引擎切换不持久
+- 文件：`Views/Settings/SearchEngineSettingsView.swift` + `Agent/WebSearch/WebSearchProvider.swift`
+- 核验：搜索引擎选择的 UserDefaults key；WebSearchFactory.createBestAvailable 读取的 key 是否一致
+- 方向：保存的 key 和读取的 key 可能不一致，或 WebSearchFactory 缓存了旧 provider
+
+### P1-8 Bug #11 Monaco 编辑器问题
+- 文件：`Views/Editor/EditorContainerView.swift` + `Views/Editor/EditorTabBar.swift` + `Models/EditorState.swift`
+- 核验：文件切换/关闭/保存逻辑；Monaco Bridge 的内容更新通知
+- 方向：多个问题（不保存/不实时更新/关不掉/打开其他文件不切换），可能 EditorState 的文件管理整体需要重构
+
+### P1-9 Bug #4 终端历史重启清空
+- 文件：`Services/TerminalHistoryStore.swift`
+- 核验：TerminalHistoryStore 的持久化路径；save/load 逻辑
+- 方向：可能是路径不对，或 save 没被调用
