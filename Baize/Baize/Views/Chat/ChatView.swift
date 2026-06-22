@@ -160,15 +160,13 @@ struct ChatView: View {
                     onSubmit: { answers in
                         appState.showAskUserQuestionSheet = false
                         appState.pendingQuestions = nil
-                        // 将用户回答作为系统消息注入对话
+                        // P1-#18 fix: 将用户回答作为新消息发送给 Agent（而非仅添加到 displayMessages）
+                        // 之前只添加到 displayMessages 导致 AI 看不到用户回答
                         let answerText = questions.enumerated().map { (index, q) in
                             "Q: \(q.question)\nA: \(answers[index])"
                         }.joined(separator: "\n\n")
-                        displayMessages.append(DisplayMessage(
-                            role: .user,
-                            content: answerText,
-                            timestamp: Date()
-                        ))
+                        // 发送回答给 Agent 作为新用户消息
+                        sendMessage(answerText)
                     }
                 )
             } else {

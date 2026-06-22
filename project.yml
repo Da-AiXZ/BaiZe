@@ -39,6 +39,9 @@ targets:
       - path: Baize/Baize/Resources/python_scripts
         type: folder
         buildPhase: resources
+      - path: Baize/Baize/Resources/skills
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: ios_system
         product: ios_system
