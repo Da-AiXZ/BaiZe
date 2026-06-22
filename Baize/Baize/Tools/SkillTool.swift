@@ -44,26 +44,14 @@ struct SkillTool: Tool {
             )
         }
 
-        // 执行技能 — 返回工作流文本给 AI
-        // P1-#13 fix (round 2): 增强 skill 执行结果的指令清晰度
-        // 之前 skill 返回的 workflow 文本不够明确，AI 不知道应该按步骤执行
-        // 现在 skill 执行结果包含明确的执行指令，让 AI 知道这是一个需要逐步执行的工作流
-        let result = await skillRegistry.executeSkill(name: skillName, context: context)
-        
-        // P1-#13 fix (round 2): 如果 skill 执行成功，追加更明确的执行指令
-        if !result.isError {
-            let enhancedOutput = """
-            \(result.output)
-            
-            ---
-            ⚡ 以上是技能「\(skillName)」的预定义工作流。请严格按照上述步骤逐一执行，每步使用对应的工具完成。不要跳过任何步骤。
-            """
-            return ToolResult.success(
-                output: enhancedOutput,
-                metadata: result.metadata
+        // 执行技能 — T05: 使用 SkillExecutor 在子 Agent 中真正执行 workflow
+        guard let skill = await skillRegistry.getSkill(name: skillName) else {
+            return ToolResult.error(
+                message: "未找到技能: \(skillName)。可用技能: \(availableNames.isEmpty ? "（暂无已安装技能）" : availableNames)"
             )
         }
-        
+
+        let result = await SkillExecutor().execute(skill: skill, context: context)
         return result
     }
 }

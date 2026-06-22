@@ -73,7 +73,7 @@ actor GitShellService {
     func executeGitCommand(_ arguments: [String], workingDirectory: String? = nil) async throws -> GitShellResult {
         try ensureGitBinaryExists()
         let workDir = workingDirectory ?? repositoryPath
-        try ensureDirectoryExists(at: workDir)
+        try createDirectoryIfNeeded(at: workDir)
 
         // 准备 .netrc 凭据（写入项目目录，HOME 指向此处）
         try prepareNetrc()
@@ -84,10 +84,11 @@ actor GitShellService {
     }
 
     /// 执行任意 git 命令（字符串形式，供 ExecuteCommandTool 使用）
+    /// 已按 shell 规则解析引号与转义，避免空格被错误拆分。
     /// - Parameter command: 完整的 git 命令字符串（如 "git fetch origin"）
     /// - Returns: GitShellResult
     func executeGitCommand(_ command: String) async throws -> GitShellResult {
-        var parts = command.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        var parts = tokenizeCommand(command)
         guard parts.first == "git" else {
             throw GitError.operationFailed("命令必须以 'git' 开头: \(command)")
         }
@@ -138,7 +139,7 @@ actor GitShellService {
     ///   - url: 远程仓库 URL（HTTPS 或 SSH）
     ///   - toPath: 本地目标路径
     func clone(url: String, toPath: String) async throws {
-        try ensureDirectoryExists(at: (toPath as NSString).deletingLastPathComponent)
+        try createDirectoryIfNeeded(at: (toPath as NSString).deletingLastPathComponent)
 
         // 克隆 URL 注入凭据（token 作为密码）
         let cloneURL = injectCredentialsIfNeeded(into: url)
@@ -158,9 +159,52 @@ actor GitShellService {
     }
 
     /// 确保目录存在
-    private func ensureDirectoryExists(at path: String) throws {
+    /// 注意：T02 已删除 `FileManager.ensureDirectoryExists` 扩展，本方法独立命名以避免混淆。
+    private func createDirectoryIfNeeded(at path: String) throws {
         guard !path.isEmpty else { return }
         try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true, attributes: nil)
+    }
+
+    /// 按 shell 规则切分命令字符串，支持双引号、单引号与反斜杠转义
+    private func tokenizeCommand(_ command: String) -> [String] {
+        var tokens: [String] = []
+        var current = ""
+        var inDoubleQuotes = false
+        var inSingleQuotes = false
+        var escapeNext = false
+
+        for char in command {
+            if escapeNext {
+                current.append(char)
+                escapeNext = false
+                continue
+            }
+            if char == "\\" {
+                escapeNext = true
+                continue
+            }
+            if char == "\"" && !inSingleQuotes {
+                inDoubleQuotes.toggle()
+                continue
+            }
+            if char == "'" && !inDoubleQuotes {
+                inSingleQuotes.toggle()
+                continue
+            }
+            if char.isWhitespace && !inDoubleQuotes && !inSingleQuotes {
+                if !current.isEmpty {
+                    tokens.append(current)
+                    current = ""
+                }
+                continue
+            }
+            current.append(char)
+        }
+
+        if !current.isEmpty {
+            tokens.append(current)
+        }
+        return tokens
     }
 
     /// 准备环境变量

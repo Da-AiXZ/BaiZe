@@ -12,7 +12,8 @@ class FileSystemService: @unchecked Sendable {
     private var rootPath: String
 
     /// 平台文件系统统一入口（actor）
-    private let platformFileSystem: PlatformFileSystem
+    /// T05: 改为 internal，允许 SubAgentContext 继承父 Agent 的文件系统策略
+    let platformFileSystem: PlatformFileSystem
 
     // MARK: - Initialization
 

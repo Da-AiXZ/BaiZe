@@ -42,27 +42,17 @@ struct AgentTool: Tool {
             return ToolResult.error(message: "API 网关或工具注册表未初始化")
         }
 
-        // 创建子 agent 的 PermissionEngine
-        // P0-4 fix: 使用 .default 模式而非 .plan 模式
-        // B08 fix (round 2): 每次创建全新的独立实例，不共享主会话的 PermissionEngine
-        // 同时注入 toolRegistry 以支持动态工具查询（send_message 等工具需要正确识别）
-        let subPermissionEngine = PermissionEngine(mode: .default)
-        await subPermissionEngine.setToolRegistry(toolRegistry)
-
-        // 创建子 agent 的 ConversationSession
-        let subSession = ConversationSession(projectPath: context.projectPath)
-
-        // 创建子 agent 的 ContextManager（独立，但共享 ProjectContext 的根路径）
-        // 子 agent 不注入 memoryStore（避免记忆污染）
-        let subContextManager = ContextManager(
-            projectContext: ProjectContext(rootPath: context.projectPath, fileSystemService: context.fileSystemService),
-            apiGateway: apiGateway,
-            memoryStore: nil
+        // T05: 创建子 Agent 隔离上下文
+        // 拥有独立的 PlatformFileSystem / PermissionEngine / ConversationSession
+        let subContext = await SubAgentContext(
+            projectPath: context.projectPath,
+            parentPlatformFileSystem: context.fileSystemService.platformFileSystem,
+            toolRegistry: toolRegistry
         )
+        let subContextManager = subContext.makeContextManager(apiGateway: apiGateway)
 
-        // 创建子 AgentLoop（共享 ToolRegistry，独立 session + 独立 PermissionEngine）
+        // 创建子 AgentLoop（共享 ToolRegistry 和 RuntimeExecutor，独立 session + 独立 PermissionEngine + 独立 FileSystemService）
         // B08 fix (round 2): 传递 nil 给 planModeState，子 agent 不继承父 agent 的 PlanMode 状态
-        // 之前传递 context.planModeState 导致子 agent 受到父 agent PlanMode 拦截影响
         // B08 fix: 传递 gitService 到子 agent，确保子 agent 的 execute_command 能拦截 git 命令
         let subLoop = await teamCoordinator.spawnTeammate(
             name: agentName,
@@ -71,10 +61,10 @@ struct AgentTool: Tool {
                 AgentLoop(
                     apiGateway: apiGateway,
                     toolRegistry: toolRegistry,
-                    permissionEngine: subPermissionEngine,
+                    permissionEngine: subContext.permissionEngine,
                     contextManager: subContextManager,
                     conversationStore: ConversationStore(),
-                    fileSystemService: context.fileSystemService,
+                    fileSystemService: subContext.fileSystemService,
                     runtimeExecutor: context.runtimeExecutor,
                     skillRegistry: context.skillRegistry,
                     memoryStore: nil,
@@ -82,7 +72,7 @@ struct AgentTool: Tool {
                     planModeState: nil,
                     webSearchProvider: context.webSearchProvider,
                     gitService: context.gitService,
-                    session: subSession
+                    session: subContext.conversationSession
                 )
             }
         )
